@@ -1,0 +1,264 @@
+﻿<!DOCTYPE html>
+<html><head><title>ClearRecycleBinCommand.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(255);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management/commands/management/ClearRecycleBinCommand.cs" target="_top">commands\management\ClearRecycleBinCommand.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management" target="_top">src\Microsoft.PowerShell.Commands.Management\Microsoft.PowerShell.Commands.Management.csproj</a> (Microsoft.PowerShell.Commands.Management)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i">System</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Text</span>.<span class="i">RegularExpressions</span>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines the implementation of the &#39;Clear-RecycleBin&#39; cmdlet.</span>
+    <span class="c">///</span><span class="c"> This cmdlet clear all files in the RecycleBin for the given DriveLetter.</span>
+    <span class="c">///</span><span class="c"> If not DriveLetter is specified, then the RecycleBin for all drives are cleared.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<span class="i">VerbsCommon</span>.<span class="i">Clear</span>, <span class="s">&quot;RecycleBin&quot;</span>, <span class="i">SupportsShouldProcess</span> = <b>true</b>, <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=2109377&quot;</span>, <span class="i">ConfirmImpact</span> = <span class="i">ConfirmImpact</span>.<span class="i">High</span>)]
+    <b>public class</b> <a id="1b2aa030f5012dc9" href="../../R/../../0000000000.html" target="n" data-glyph="0,0" class="t t"><span id="236d624c71a256f2">ClearRecycleBinCommand</span></a> : <span class="i">PSCmdlet</span>
+    {
+        <b>private string</b>[] <a id="f08ce69d5c0108c5" href="../../R/f08ce69d5c0108c5.html" target="n" data-glyph="46,1" class="i field">_drivesList</a>;
+        <b>private</b> <span class="i">DriveInfo</span>[] <a id="895eaa35cec160c7" href="../../R/895eaa35cec160c7.html" target="n" data-glyph="46,1" class="i field">_availableDrives</a>;
+        <b>private bool</b> <a id="c0ee7bf860fdff97" href="../../R/c0ee7bf860fdff97.html" target="n" data-glyph="46,1" class="i field">_force</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Property that sets DriveLetter parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<span class="i">Position</span> = 0, <span class="i">ValueFromPipelineByPropertyName</span> = <b>true</b>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        <b>public string</b>[] <a id="c2a0cccb871935f4" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">DriveLetter</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#f08ce69d5c0108c5" class="i field">_drivesList</a>; }
+ 
+            <b>set</b> { <a href="#f08ce69d5c0108c5" class="i field">_drivesList</a> = <b>value</b>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Property that sets force parameter. This will allow to clear the recyclebin.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <span class="i">SwitchParameter</span> <a id="7440b46e392d4b31" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Force</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#c0ee7bf860fdff97" class="i field">_force</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#c0ee7bf860fdff97" class="i field">_force</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method implements the BeginProcessing method for Clear-RecycleBin command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="c7d51957e398b5bb" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">BeginProcessing</a>()
+        {
+            <a href="#895eaa35cec160c7" class="i field">_availableDrives</a> = <span class="i">DriveInfo</span>.<span class="i">GetDrives</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method implements the ProcessRecord method for Clear-RecycleBin command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="1b1a6de4fb5162b6" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <span class="c">// There are two scenarios:</span>
+            <span class="c">// 1) The user provides a list of drives.</span>
+            <b>if</b> (<a href="#f08ce69d5c0108c5" class="i field">_drivesList</a> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r0 rd" class="r0 r">drive</span> <b>in</b> <a href="#f08ce69d5c0108c5" class="i field">_drivesList</a>)
+                {
+                    <b>if</b> (!<a href="#471982b8e65a060d" class="i method">IsValidPattern</a>(<span class="r0 r">drive</span>))
+                    {
+                        <span class="i">WriteError</span>(<b>new</b> <span class="i">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(
+                                <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">ClearRecycleBinResources</span>.<span class="i">InvalidDriveNameFormat</span>, <span class="s">&quot;C&quot;</span>, <span class="s">&quot;C:&quot;</span>, <span class="s">&quot;C:\\&quot;</span>)),
+                                <span class="s">&quot;InvalidDriveNameFormat&quot;</span>,
+                                 <span class="i">ErrorCategory</span>.<span class="i">InvalidArgument</span>,
+                                 <span class="r0 r">drive</span>));
+                        <b>continue</b>;
+                    }
+ 
+                    <span class="c">// Get the full path for the drive.</span>
+                    <b>string</b> <span id="r1 rd" class="r1 r">drivePath</span> = <a href="#0098d82dfa832730" class="i method">GetDrivePath</a>(<span class="r0 r">drive</span>);
+                    <b>if</b> (<a href="#159a7f4ea312da44" class="i method">ValidDrivePath</a>(<span class="r1 r">drivePath</span>))
+                    {
+                        <a href="#601dc452037cd99a" class="i method">EmptyRecycleBin</a>(<span class="r1 r">drivePath</span>);
+                    }
+                }
+            }
+            <b>else</b>
+            {
+                <span class="c">// 2) No drivesList is provided by the user.</span>
+                <a href="#601dc452037cd99a" class="i method">EmptyRecycleBin</a>(<b>null</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns true if the given drive is &#39;fixed&#39; and its path exist; otherwise, return false.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">drivePath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="159a7f4ea312da44" href="../../R/159a7f4ea312da44.html" target="n" data-glyph="76,1" class="i method">ValidDrivePath</a>(<b>string</b> <span id="r2 rd" class="r2 r">drivePath</span>)
+        {
+            <span class="i">DriveInfo</span> <span id="r3 rd" class="r3 r">actualDrive</span> = <b>null</b>;
+            <b>if</b> (<a href="#895eaa35cec160c7" class="i field">_availableDrives</a> != <b>null</b>)
+            {
+                <b>foreach</b> (<span class="i">DriveInfo</span> <span id="r4 rd" class="r4 r">drive</span> <b>in</b> <a href="#895eaa35cec160c7" class="i field">_availableDrives</a>)
+                {
+                    <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r4 r">drive</span>.<span class="i">Name</span>, <span class="r2 r">drivePath</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    {
+                        <span class="r3 r">actualDrive</span> = <span class="r4 r">drive</span>;
+                        <b>break</b>;
+                    }
+                }
+            }
+ 
+            <span class="c">// The drive was not found.</span>
+            <b>if</b> (<span class="r3 r">actualDrive</span> == <b>null</b>)
+            {
+                <span class="i">WriteError</span>(<b>new</b> <span class="i">ErrorRecord</span>(
+                            <b>new</b> <span class="i">System</span>.<span class="i">IO</span>.<span class="i">DriveNotFoundException</span>(
+                                <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">ClearRecycleBinResources</span>.<span class="i">DriveNotFound</span>, <span class="r2 r">drivePath</span>, <span class="s">&quot;Get-Volume&quot;</span>)),
+                                <span class="s">&quot;DriveNotFound&quot;</span>,
+                                <span class="i">ErrorCategory</span>.<span class="i">InvalidArgument</span>,
+                                <span class="r2 r">drivePath</span>));
+            }
+            <b>else</b>
+            {
+                <b>if</b> (<span class="r3 r">actualDrive</span>.<span class="i">DriveType</span> == <span class="i">DriveType</span>.<span class="i">Fixed</span>)
+                {
+                    <span class="c">// The drive path exists, and the drive is &#39;fixed&#39;.</span>
+                    <b>return</b> <b>true</b>;
+                }
+ 
+                <span class="i">WriteError</span>(<b>new</b> <span class="i">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(
+                                <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">ClearRecycleBinResources</span>.<span class="i">InvalidDriveType</span>, <span class="r2 r">drivePath</span>, <span class="s">&quot;Get-Volume&quot;</span>)),
+                                <span class="s">&quot;InvalidDriveType&quot;</span>,
+                                <span class="i">ErrorCategory</span>.<span class="i">InvalidArgument</span>,
+                                <span class="r2 r">drivePath</span>));
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns true if the given input is of the form c, c:, c:\, C, C: or C:\</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="471982b8e65a060d" href="../../R/471982b8e65a060d.html" target="n" data-glyph="76,1" class="i method">IsValidPattern</a>(<b>string</b> <span id="r5 rd" class="r5 r">input</span>)
+        {
+            <b>return</b> <span class="i">Regex</span>.<span class="i">IsMatch</span>(<span class="r5 r">input</span>, <span class="s">@&quot;^[a-z]{1}$|^[a-z]{1}:$|^[a-z]{1}:\\$&quot;</span>, <span class="i">RegexOptions</span>.<span class="i">IgnoreCase</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns a drive path of the form C:\ for the given drive driveName.</span>
+        <span class="c">///</span><span class="c"> Supports the following inputs: C, C:, C:\</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">driveName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static string</b> <a id="0098d82dfa832730" href="../../R/0098d82dfa832730.html" target="n" data-glyph="76,1" class="i method">GetDrivePath</a>(<b>string</b> <span id="r6 rd" class="r6 r">driveName</span>)
+        {
+            <b>string</b> <span id="r7 rd" class="r7 r">drivePath</span>;
+            <b>if</b> (<span class="r6 r">driveName</span>.<span class="i">EndsWith</span>(<span class="s">&quot;:\\&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <span class="r7 r">drivePath</span> = <span class="r6 r">driveName</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r6 r">driveName</span>.<span class="i">EndsWith</span>(<span class="s">&#39;:&#39;</span>))
+            {
+                <span class="r7 r">drivePath</span> = <span class="r6 r">driveName</span> + <span class="s">&quot;\\&quot;</span>;
+            }
+            <b>else</b>
+            {
+                <span class="r7 r">drivePath</span> = <span class="r6 r">driveName</span> + <span class="s">&quot;:\\&quot;</span>;
+            }
+ 
+            <b>return</b> <span class="r7 r">drivePath</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clear the recyclebin for the given drive name.</span>
+        <span class="c">///</span><span class="c"> If no driveName is provided, it clears the recyclebin for all drives.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">drivePath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="601dc452037cd99a" href="../../R/601dc452037cd99a.html" target="n" data-glyph="76,1" class="i method">EmptyRecycleBin</a>(<b>string</b> <span id="r8 rd" class="r8 r">drivePath</span>)
+        {
+            <b>string</b> <span id="r9 rd" class="r9 r">clearRecycleBinShouldProcessTarget</span>;
+            <b>if</b> (<span class="r8 r">drivePath</span> == <b>null</b>)
+            {
+                <span class="r9 r">clearRecycleBinShouldProcessTarget</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                                                                   <span class="i">ClearRecycleBinResources</span>.<span class="i">ClearRecycleBinContent</span>);
+            }
+            <b>else</b>
+            {
+                <span class="r9 r">clearRecycleBinShouldProcessTarget</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                                                                   <span class="i">ClearRecycleBinResources</span>.<span class="i">ClearRecycleBinContentForDrive</span>,
+                                                                   <span class="r8 r">drivePath</span>);
+            }
+ 
+            <b>if</b> (<a href="#c0ee7bf860fdff97" class="i field">_force</a> || (<span class="i">ShouldProcess</span>(<span class="r9 r">clearRecycleBinShouldProcessTarget</span>, <span class="s">&quot;Clear-RecycleBin&quot;</span>)))
+            {
+                <span class="c">// If driveName is null, then clear the recyclebin for all drives; otherwise, just for the specified driveName.</span>
+ 
+                <b>string</b> <span id="r10 rd" class="r10 r">activity</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">ClearRecycleBinResources</span>.<span class="i">ClearRecycleBinProgressActivity</span>);
+                <b>string</b> <span id="r11 rd" class="r11 r">statusDescription</span>;
+ 
+                <b>if</b> (<span class="r8 r">drivePath</span> == <b>null</b>)
+                {
+                    <span class="r11 r">statusDescription</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">ClearRecycleBinResources</span>.<span class="i">ClearRecycleBinStatusDescriptionForAllDrives</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r11 r">statusDescription</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">ClearRecycleBinResources</span>.<span class="i">ClearRecycleBinStatusDescriptionByDrive</span>, <span class="r8 r">drivePath</span>);
+                }
+ 
+                <span class="i">ProgressRecord</span> <span id="r12 rd" class="r12 r">progress</span> = <b>new</b>(0, <span class="r10 r">activity</span>, <span class="r11 r">statusDescription</span>);
+                <span class="r12 r">progress</span>.<span class="i">PercentComplete</span> = 30;
+                <span class="r12 r">progress</span>.<span class="i">RecordType</span> = <span class="i">ProgressRecordType</span>.<span class="i">Processing</span>;
+                <span class="i">WriteProgress</span>(<span class="r12 r">progress</span>);
+ 
+                <span class="c">// no need to check result as a failure is returned only if recycle bin is already empty</span>
+                <b>uint</b> <span id="r13 rd" class="r13 r">result</span> = <a href="#804a82045e56208f" class="t t">NativeMethod</a>.<span class="i">SHEmptyRecycleBin</span>(<span class="i">IntPtr</span>.<span class="i">Zero</span>, <span class="r8 r">drivePath</span>,
+                                                            <a href="#804a82045e56208f" class="t t">NativeMethod</a>.<a href="#323eaa3fc98e8875" class="t t">RecycleFlags</a>.<a href="#9d1875f2186817b3" class="i field">SHERB_NOCONFIRMATION</a> |
+                                                            <a href="#804a82045e56208f" class="t t">NativeMethod</a>.<a href="#323eaa3fc98e8875" class="t t">RecycleFlags</a>.<a href="#2d213176606c4a38" class="i field">SHERB_NOPROGRESSUI</a> |
+                                                            <a href="#804a82045e56208f" class="t t">NativeMethod</a>.<a href="#323eaa3fc98e8875" class="t t">RecycleFlags</a>.<a href="#60d4d3f84c46c708" class="i field">SHERB_NOSOUND</a>);
+                <span class="r12 r">progress</span>.<span class="i">PercentComplete</span> = 100;
+                <span class="r12 r">progress</span>.<span class="i">RecordType</span> = <span class="i">ProgressRecordType</span>.<span class="i">Completed</span>;
+                <span class="i">WriteProgress</span>(<span class="r12 r">progress</span>);
+            }
+        }
+    }
+ 
+    <b>internal static class</b> <a id="804a82045e56208f" href="../../R/804a82045e56208f.html" target="n" data-glyph="2,0" class="t t">NativeMethod</a>
+    {
+        <span class="c">// Internal code to SHEmptyRecycleBin</span>
+        <b>internal enum</b> <a id="323eaa3fc98e8875" href="../../R/323eaa3fc98e8875.html" target="n" data-glyph="20,1" class="t t"><span id="24c6ddbf89a56065">RecycleFlags</span></a> : <b>uint</b>
+        {
+            <a id="9d1875f2186817b3" href="../../R/9d1875f2186817b3.html" target="n" data-glyph="24,2" class="i field">SHERB_NOCONFIRMATION</a> = 0x00000001,
+            <a id="2d213176606c4a38" href="../../R/2d213176606c4a38.html" target="n" data-glyph="24,2" class="i field">SHERB_NOPROGRESSUI</a> = 0x00000002,
+            <a id="60d4d3f84c46c708" href="../../R/60d4d3f84c46c708.html" target="n" data-glyph="24,2" class="i field">SHERB_NOSOUND</a> = 0x00000004
+        }
+ 
+        [<span class="i">DllImport</span>(<span class="s">&quot;Shell32.dll&quot;</span>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>)]
+        <b>internal static extern uint</b> <a id="5981100f33d19790" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">SHEmptyRecycleBin</a>(<span class="i">IntPtr</span> <span id="r14 rd" class="r14 r">hwnd</span>, <b>string</b> <span id="r15 rd" class="r15 r">pszRootPath</span>, <a href="#323eaa3fc98e8875" class="t t">RecycleFlags</a> <span id="r16 rd" class="r16 r">dwFlags</span>);
+    }
+}
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+</pre></td></tr></table></div></body></html>

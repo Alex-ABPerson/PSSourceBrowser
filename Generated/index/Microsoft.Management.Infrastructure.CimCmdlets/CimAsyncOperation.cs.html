@@ -1,0 +1,605 @@
+﻿<!DOCTYPE html>
+<html><head><title>CimAsyncOperation.cs</title><link rel="stylesheet" href="../styles.css"><script src="../scripts.js"></script></head>
+<body class="cB" onload="i(596);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.Management.Infrastructure.CimCmdlets/CimAsyncOperation.cs" target="_top">CimAsyncOperation.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.Management.Infrastructure.CimCmdlets" target="_top">src\Microsoft.Management.Infrastructure.CimCmdlets\Microsoft.Management.Infrastructure.CimCmdlets.csproj</a> (Microsoft.Management.Infrastructure.CimCmdlets)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">region</span> Using directives
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">Management</span>.<span class="i n">Infrastructure</span>.<span class="i n">CimCmdlets</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Async operation base class, it will issue async operation through</span>
+    <span class="c">///</span><span class="c"> 1...* CimSession object(s), processing the async results, extended</span>
+    <span class="c">///</span><span class="c"> pssemantics operations, and manage the lifecycle of created</span>
+    <span class="c">///</span><span class="c"> CimSession object(s).</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal abstract class</b> <a id="c0ecd00f7d90f163" href="R/c0ecd00f7d90f163.html" target="n" data-glyph="2,0" class="t t">CimAsyncOperation</a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#c0ecd00f7d90f163" class="t t">CimAsyncOperation</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected</b> <a id="b6a9bb91f10e5995" href="R/b6a9bb91f10e5995.html" target="n" data-glyph="75,1" class="t constructor">CimAsyncOperation</a>()
+        {
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a> = <b>new</b> <span class="i">ManualResetEventSlim</span>(<b>false</b>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#c25ac31653694326" class="i field">actionQueue</a> = <b>new</b> <span class="i">ConcurrentQueue</span>&lt;<a href="CimBaseAction.cs.html#0953d185c863ca27" class="t t">CimBaseAction</a>&gt;();
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#b1df6275703e1900" class="i field">_disposed</a> = 0;
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#5d842ea5c3b998ba" class="i field">operationCount</a> = 0;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Event handler
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handler used to handle new action event from</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">cimSession</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">CimSession</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object raised the event</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">actionArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Event argument.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="957e83e52642d224" href="R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">NewCmdletActionHandler</a>(<b>object</b> <span id="r0 rd" class="r0 r">cimSession</span>, <a href="CimSessionProxy.cs.html#f9a63e977fe06b4e" class="t t">CmdletActionEventArgs</a> <span id="r1 rd" class="r1 r">actionArgs</span>)
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#41e91352aaa16ae7" class="i method">WriteLogEx</a>(<span class="s">&quot;Disposed {0}, action type = {1}&quot;</span>, 0, <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e89f0ecdfc5d7f5c" class="i property">Disposed</a>, <span class="r1 r">actionArgs</span>.<a href="CimSessionProxy.cs.html#36809e757e44acff" class="i field">Action</a>);
+ 
+            <b>if</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e89f0ecdfc5d7f5c" class="i property">Disposed</a>)
+            {
+                <b>if</b> (<span class="r1 r">actionArgs</span>.<a href="CimSessionProxy.cs.html#36809e757e44acff" class="i field">Action</a> <b>is</b> <a href="CimBaseAction.cs.html#b5913d8a7cdefdde" class="t t">CimSyncAction</a>)
+                {
+                    <span class="c">// unblock the thread waiting for response</span>
+                    (<span class="r1 r">actionArgs</span>.<a href="CimSessionProxy.cs.html#36809e757e44acff" class="i field">Action</a> <b>as</b> <a href="CimBaseAction.cs.html#b5913d8a7cdefdde" class="t t">CimSyncAction</a>).<a href="CimBaseAction.cs.html#f8e9cfaab3ebad2b" class="i method">OnComplete</a>();
+                }
+ 
+                <b>return</b>;
+            }
+ 
+            <b>bool</b> <span id="r2 rd" class="r2 r">isEmpty</span> = <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#c25ac31653694326" class="i field">actionQueue</a>.<span class="i">IsEmpty</span>;
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#c25ac31653694326" class="i field">actionQueue</a>.<span class="i">Enqueue</span>(<span class="r1 r">actionArgs</span>.<a href="CimSessionProxy.cs.html#36809e757e44acff" class="i field">Action</a>);
+            <b>if</b> (<span class="r2 r">isEmpty</span>)
+            {
+                <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a>.<span class="i">Set</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handler used to handle new operation event from</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">cimSession</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">CimSession</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object raised the event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">actionArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Event argument.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="79779da6ffaa716e" href="R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">OperationCreatedHandler</a>(<b>object</b> <span id="r3 rd" class="r3 r">cimSession</span>, <a href="CimSessionProxy.cs.html#57e1a1cbcfd66ad9" class="t t">OperationEventArgs</a> <span id="r4 rd" class="r4 r">actionArgs</span>)
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#651773f290fcb6be" class="i method">WriteLogEx</a>();
+ 
+            <b>lock</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e8fe59ecef52a047" class="i field">a_lock</a>)
+            {
+                <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#5d842ea5c3b998ba" class="i field">operationCount</a>++;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handler used to handle operation deletion event from</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">cimSession</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">CimSession</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object raised the event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">actionArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Event argument.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="a09d3fb1ab17be32" href="R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">OperationDeletedHandler</a>(<b>object</b> <span id="r5 rd" class="r5 r">cimSession</span>, <a href="CimSessionProxy.cs.html#57e1a1cbcfd66ad9" class="t t">OperationEventArgs</a> <span id="r6 rd" class="r6 r">actionArgs</span>)
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#651773f290fcb6be" class="i method">WriteLogEx</a>();
+ 
+            <b>lock</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e8fe59ecef52a047" class="i field">a_lock</a>)
+            {
+                <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#5d842ea5c3b998ba" class="i field">operationCount</a>--;
+                <b>if</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#5d842ea5c3b998ba" class="i field">operationCount</a> == 0)
+                {
+                    <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a>.<span class="i">Set</span>();
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> process all actions in the action queue</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">cmdletOperation</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Wrapper of cmdlet, </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CmdletOperation.cs.html#813733b900a1bded" class="t t">CmdletOperationBase</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> for details.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="9c5c2ec9bf1978b2" href="R/9c5c2ec9bf1978b2.html" target="n" data-glyph="72,1" class="i method">ProcessActions</a>(<a href="CmdletOperation.cs.html#813733b900a1bded" class="t t">CmdletOperationBase</a> <span id="r7 rd" class="r7 r">cmdletOperation</span>)
+        {
+            <b>if</b> (!<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#c25ac31653694326" class="i field">actionQueue</a>.<span class="i">IsEmpty</span>)
+            {
+                <a href="CimBaseAction.cs.html#0953d185c863ca27" class="t t">CimBaseAction</a> <span id="r8 rd" class="r8 r">action</span>;
+                <b>while</b> (<a href="#69a36bb66e99682c" class="i method">GetActionAndRemove</a>(<b>out</b> <span class="r8 r">action</span>))
+                {
+                    <span class="r8 r">action</span>.<a href="CimBaseAction.cs.html#ddd2a93b72b94ed9" class="i method">Execute</a>(<span class="r7 r">cmdletOperation</span>);
+                    <b>if</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e89f0ecdfc5d7f5c" class="i property">Disposed</a>)
+                    {
+                        <b>break</b>;
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process remaining actions until all operations are completed or</span>
+        <span class="c">///</span><span class="c"> current cmdlet is terminated by user.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">cmdletOperation</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Wrapper of cmdlet, </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CmdletOperation.cs.html#813733b900a1bded" class="t t">CmdletOperationBase</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> for details.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="c5022962e409c649" href="R/c5022962e409c649.html" target="n" data-glyph="72,1" class="i method">ProcessRemainActions</a>(<a href="CmdletOperation.cs.html#813733b900a1bded" class="t t">CmdletOperationBase</a> <span id="r9 rd" class="r9 r">cmdletOperation</span>)
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#651773f290fcb6be" class="i method">WriteLogEx</a>();
+ 
+            <b>while</b> (<b>true</b>)
+            {
+                <a href="#9c5c2ec9bf1978b2" class="i method">ProcessActions</a>(<span class="r9 r">cmdletOperation</span>);
+                <b>if</b> (!<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#40d8f748a156d1ba" class="i method">IsActive</a>())
+                {
+                    <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#b52a9a49322f0296" class="i method">WriteLogEx</a>(<span class="s">&quot;Either disposed or all operations completed.&quot;</span>, 2);
+                    <b>break</b>;
+                }
+ 
+                <b>try</b>
+                {
+                    <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a>.<span class="i">Wait</span>();
+                    <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a>.<span class="i">Reset</span>();
+                }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span> <span id="r10 rd" class="r10 r">ex</span>)
+                {
+                    <span class="c">// This might happen if this object is being disposed,</span>
+                    <span class="c">// while another thread is processing the remaining actions</span>
+                    <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<span class="i">WriteLogEx</span>(<span class="s">&quot;moreActionEvent was disposed: {0}.&quot;</span>, 2, <span class="r10 r">ex</span>);
+                    <b>break</b>;
+                }
+            }
+ 
+            <a href="#9c5c2ec9bf1978b2" class="i method">ProcessActions</a>(<span class="r9 r">cmdletOperation</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> helper methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get action object from action queue.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">action</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Next action to execute.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True indicates there is an valid action, otherwise false.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected bool</b> <a id="69a36bb66e99682c" href="R/69a36bb66e99682c.html" target="n" data-glyph="75,1" class="i method">GetActionAndRemove</a>(<b>out</b> <a href="CimBaseAction.cs.html#0953d185c863ca27" class="t t">CimBaseAction</a> <span id="r11 rd" class="r11 r">action</span>)
+        {
+            <b>return</b> <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#c25ac31653694326" class="i field">actionQueue</a>.<span class="i">TryDequeue</span>(<b>out</b> <span class="r11 r">action</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add temporary </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object to cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">sessionproxy</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Cimsession wrapper object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="161b30898153b5d7" href="R/161b30898153b5d7.html" target="n" data-glyph="75,1" class="i method">AddCimSessionProxy</a>(<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r12 rd" class="r12 r">sessionproxy</span>)
+        {
+            <b>lock</b> (<a href="#400521b42f26d864" class="i field">cimSessionProxyCacheLock</a>)
+            {
+                <b>if</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a> == <b>null</b>)
+                {
+                    <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a> = <b>new</b> <span class="i">List</span>&lt;<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a>&gt;();
+                }
+ 
+                <b>if</b> (!<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a>.<span class="i">Contains</span>(<span class="r12 r">sessionproxy</span>))
+                {
+                    <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a>.<span class="i">Add</span>(<span class="r12 r">sessionproxy</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Are there active operations?</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True for having active operations, otherwise false.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected bool</b> <a id="40d8f748a156d1ba" href="R/40d8f748a156d1ba.html" target="n" data-glyph="75,1" class="i method">IsActive</a>()
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#41e91352aaa16ae7" class="i method">WriteLogEx</a>(<span class="s">&quot;Disposed {0}, Operation Count {1}&quot;</span>, 2, <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e89f0ecdfc5d7f5c" class="i property">Disposed</a>, <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#5d842ea5c3b998ba" class="i field">operationCount</a>);
+            <b>bool</b> <span id="r13 rd" class="r13 r">isActive</span> = (!<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#e89f0ecdfc5d7f5c" class="i property">Disposed</a>) &amp;&amp; (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#5d842ea5c3b998ba" class="i field">operationCount</a> &gt; 0);
+            <b>return</b> <span class="r13 r">isActive</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="i">session</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="8a6a8eecb53aa929" href="R/8a6a8eecb53aa929.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r14 rd" class="r14 r">originalProxy</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r15 rd" class="r15 r">proxy</span> = <b>new</b>(<span class="r14 r">originalProxy</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r15 r">proxy</span>);
+            <b>return</b> <span class="r15 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="i">session</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="909dc0a128ac5b57" href="R/909dc0a128ac5b57.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r16 rd" class="r16 r">originalProxy</span>, <b>bool</b> <span id="r17 rd" class="r17 r">passThru</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r18 rd" class="r18 r">proxy</span> = <b>new</b> <a href="CimSessionProxy.cs.html#b043fa68bedfd983" class="t constructor">CimSessionProxySetCimInstance</a>(<span class="r16 r">originalProxy</span>, <span class="r17 r">passThru</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r18 r">proxy</span>);
+            <b>return</b> <span class="r18 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">session</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="703bb2b6e0f3691d" href="R/703bb2b6e0f3691d.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<span class="i">CimSession</span> <span id="r19 rd" class="r19 r">session</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r20 rd" class="r20 r">proxy</span> = <b>new</b>(<span class="r19 r">session</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r20 r">proxy</span>);
+            <b>return</b> <span class="r20 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">session</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="073d0e087b1fefa1" href="R/073d0e087b1fefa1.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<span class="i">CimSession</span> <span id="r21 rd" class="r21 r">session</span>, <b>bool</b> <span id="r22 rd" class="r22 r">passThru</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r23 rd" class="r23 r">proxy</span> = <b>new</b> <a href="CimSessionProxy.cs.html#a9cc3580b244aa3c" class="t constructor">CimSessionProxySetCimInstance</a>(<span class="r21 r">session</span>, <span class="r22 r">passThru</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r23 r">proxy</span>);
+            <b>return</b> <span class="r23 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object, and</span>
+        <span class="c">///</span><span class="c"> add the proxy into cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">computerName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="4f68c7b030b8fa5e" href="R/4f68c7b030b8fa5e.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<b>string</b> <span id="r24 rd" class="r24 r">computerName</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r25 rd" class="r25 r">proxy</span> = <b>new</b>(<span class="r24 r">computerName</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r25 r">proxy</span>);
+            <b>return</b> <span class="r25 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object, and</span>
+        <span class="c">///</span><span class="c"> add the proxy into cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">computerName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">cimInstance</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="8063786a326c2e3d" href="R/8063786a326c2e3d.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<b>string</b> <span id="r26 rd" class="r26 r">computerName</span>, <span class="i">CimInstance</span> <span id="r27 rd" class="r27 r">cimInstance</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r28 rd" class="r28 r">proxy</span> = <b>new</b>(<span class="r26 r">computerName</span>, <span class="r27 r">cimInstance</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r28 r">proxy</span>);
+            <b>return</b> <span class="r28 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object, and</span>
+        <span class="c">///</span><span class="c"> add the proxy into cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">computerName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">cimInstance</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">passThru</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <a id="613753b97440239c" href="R/613753b97440239c.html" target="n" data-glyph="75,1" class="i method">CreateCimSessionProxy</a>(<b>string</b> <span id="r29 rd" class="r29 r">computerName</span>, <span class="i">CimInstance</span> <span id="r30 rd" class="r30 r">cimInstance</span>, <b>bool</b> <span id="r31 rd" class="r31 r">passThru</span>)
+        {
+            <a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r32 rd" class="r32 r">proxy</span> = <b>new</b> <a href="CimSessionProxy.cs.html#c6733eda715c9018" class="t constructor">CimSessionProxySetCimInstance</a>(<span class="r29 r">computerName</span>, <span class="r30 r">cimInstance</span>, <span class="r31 r">passThru</span>);
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#98d303e373785a08" class="i method">SubscribeEventAndAddProxytoCache</a>(<span class="r32 r">proxy</span>);
+            <b>return</b> <span class="r32 r">proxy</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Subscribe event from proxy and add proxy to cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">proxy</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="98d303e373785a08" href="R/98d303e373785a08.html" target="n" data-glyph="75,1" class="i method">SubscribeEventAndAddProxytoCache</a>(<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r33 rd" class="r33 r">proxy</span>)
+        {
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#161b30898153b5d7" class="i method">AddCimSessionProxy</a>(<span class="r33 r">proxy</span>);
+            <a href="#8cc71d5915f7ca58" class="i method">SubscribeToCimSessionProxyEvent</a>(<span class="r33 r">proxy</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Subscribe to the events issued by </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">proxy</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected virtual void</b> <a id="8cc71d5915f7ca58" href="R/8cc71d5915f7ca58.html" target="n" data-glyph="75,1" class="i method">SubscribeToCimSessionProxyEvent</a>(<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r34 rd" class="r34 r">proxy</span>)
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#651773f290fcb6be" class="i method">WriteLogEx</a>();
+ 
+            <span class="r34 r">proxy</span>.<a href="CimSessionProxy.cs.html#04abbccddbb40bcb" class="i">OnNewCmdletAction</a> += <a href="#c0ecd00f7d90f163" class="k">this</a>.<span class="i">NewCmdletActionHandler</span>;
+            <span class="r34 r">proxy</span>.<a href="CimSessionProxy.cs.html#4358670844ddc0c7" class="i">OnOperationCreated</a> += <a href="#c0ecd00f7d90f163" class="k">this</a>.<span class="i">OperationCreatedHandler</span>;
+            <span class="r34 r">proxy</span>.<a href="CimSessionProxy.cs.html#7aee8b0b9291b20b" class="i">OnOperationDeleted</a> += <a href="#c0ecd00f7d90f163" class="k">this</a>.<span class="i">OperationDeletedHandler</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Retrieve the base object out if wrapped in psobject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected object</b> <a id="d25d341296478b8d" href="R/d25d341296478b8d.html" target="n" data-glyph="75,1" class="i method">GetBaseObject</a>(<b>object</b> <span id="r35 rd" class="r35 r">value</span>)
+        {
+            <a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r36 rd" class="r36 r">psObject</span> = <span class="r35 r">value</span> <b>as</b> <a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>;
+            <b>if</b> (<span class="r36 r">psObject</span> == <b>null</b>)
+            {
+                <b>return</b> <span class="r35 r">value</span>;
+            }
+            <b>else</b>
+            {
+                <b>object</b> <span id="r37 rd" class="r37 r">baseObject</span> = <span class="r36 r">psObject</span>.<a href="/System.Management.Automation/A.html#d854d13536b70a12" class="i property">BaseObject</a>;
+                <b>var</b> <span id="r38 rd" class="r38 r">arrayObject</span> = <span class="r37 r">baseObject</span> <b>as object</b>[];
+                <b>if</b> (<span class="r38 r">arrayObject</span> == <b>null</b>)
+                {
+                    <b>return</b> <span class="r37 r">baseObject</span>;
+                }
+                <b>else</b>
+                {
+                    <b>object</b>[] <span id="r39 rd" class="r39 r">arraybaseObject</span> = <b>new</b> <b>object</b>[<span class="r38 r">arrayObject</span>.<span class="i">Length</span>];
+                    <b>for</b> (<b>int</b> <span id="r40 rd" class="r40 r">i</span> = 0; <span class="r40 r">i</span> &lt; <span class="r38 r">arrayObject</span>.<span class="i">Length</span>; <span class="r40 r">i</span>++)
+                    {
+                        <span class="r39 r">arraybaseObject</span>[<span class="r40 r">i</span>] = <a href="#d25d341296478b8d" class="i method">GetBaseObject</a>(<span class="r38 r">arrayObject</span>[<span class="r40 r">i</span>]);
+                    }
+ 
+                    <b>return</b> <span class="r39 r">arraybaseObject</span>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Retrieve the reference object or reference array object.</span>
+        <span class="c">///</span><span class="c"> The returned object has to be either CimInstance or CImInstance[] type,</span>
+        <span class="c">///</span><span class="c"> if not thrown exception.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">referenceType</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Output the cimtype of the value, either Reference or ReferenceArray.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The object.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected object</b> <a id="023a438d173dd249" href="R/023a438d173dd249.html" target="n" data-glyph="75,1" class="i method">GetReferenceOrReferenceArrayObject</a>(<b>object</b> <span id="r41 rd" class="r41 r">value</span>, <b>ref</b> <span class="i">CimType</span> <span id="r42 rd" class="r42 r">referenceType</span>)
+        {
+            <a href="/System.Management.Automation/A.html#7363a2660b89f253" class="t t">PSReference</a> <span id="r43 rd" class="r43 r">cimReference</span> = <span class="r41 r">value</span> <b>as</b> <a href="/System.Management.Automation/A.html#7363a2660b89f253" class="t t">PSReference</a>;
+            <b>if</b> (<span class="r43 r">cimReference</span> != <b>null</b>)
+            {
+                <b>object</b> <span id="r44 rd" class="r44 r">baseObject</span> = <a href="#d25d341296478b8d" class="i method">GetBaseObject</a>(<span class="r43 r">cimReference</span>.<a href="/System.Management.Automation/A.html#a5028a25660cef18" class="i property">Value</a>);
+                <b>if</b> (!(<span class="r44 r">baseObject</span> <b>is</b> <span class="i">CimInstance</span> <span id="r45 rd" class="r45 r">cimInstance</span>))
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <span class="r42 r">referenceType</span> = <span class="i">CimType</span>.<span class="i">Reference</span>;
+                <b>return</b> <span class="r45 r">cimInstance</span>;
+            }
+            <b>else</b>
+            {
+                <b>object</b>[] <span id="r46 rd" class="r46 r">cimReferenceArray</span> = <span class="r41 r">value</span> <b>as object</b>[];
+                <b>if</b> (<span class="r46 r">cimReferenceArray</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+                <b>else</b> <b>if</b> (<span class="r46 r">cimReferenceArray</span>[0] <b>is not</b> <a href="/System.Management.Automation/A.html#7363a2660b89f253" class="t t">PSReference</a>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <span class="i">CimInstance</span>[] <span id="r47 rd" class="r47 r">cimInstanceArray</span> = <b>new</b> <span class="i">CimInstance</span>[<span class="r46 r">cimReferenceArray</span>.<span class="i">Length</span>];
+                <b>for</b> (<b>int</b> <span id="r48 rd" class="r48 r">i</span> = 0; <span class="r48 r">i</span> &lt; <span class="r46 r">cimReferenceArray</span>.<span class="i">Length</span>; <span class="r48 r">i</span>++)
+                {
+                    <b>if</b> (!(<span class="r46 r">cimReferenceArray</span>[<span class="r48 r">i</span>] <b>is</b> <a href="/System.Management.Automation/A.html#7363a2660b89f253" class="t t">PSReference</a> <span id="r49 rd" class="r49 r">tempCimReference</span>))
+                    {
+                        <b>return</b> <b>null</b>;
+                    }
+ 
+                    <b>object</b> <span id="r50 rd" class="r50 r">baseObject</span> = <a href="#d25d341296478b8d" class="i method">GetBaseObject</a>(<span class="r49 r">tempCimReference</span>.<a href="/System.Management.Automation/A.html#a5028a25660cef18" class="i property">Value</a>);
+                    <span class="r47 r">cimInstanceArray</span>[<span class="r48 r">i</span>] = <span class="r50 r">baseObject</span> <b>as</b> <span class="i">CimInstance</span>;
+                    <b>if</b> (<span class="r47 r">cimInstanceArray</span>[<span class="r48 r">i</span>] == <b>null</b>)
+                    {
+                        <b>return</b> <b>null</b>;
+                    }
+                }
+ 
+                <span class="r42 r">referenceType</span> = <span class="i">CimType</span>.<span class="i">ReferenceArray</span>;
+                <b>return</b> <span class="r47 r">cimInstanceArray</span>;
+            }
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates whether this object was disposed or not</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected bool</b> <a id="e89f0ecdfc5d7f5c" href="R/e89f0ecdfc5d7f5c.html" target="n" data-glyph="105,1" class="i property">Disposed</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#b1df6275703e1900" class="i field">_disposed</a> == 1;
+            }
+        }
+ 
+        <b>private int</b> <a id="b1df6275703e1900" href="R/b1df6275703e1900.html" target="n" data-glyph="46,1" class="i field">_disposed</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose() calls Dispose(true).</span>
+        <span class="c">///</span><span class="c"> Implement IDisposable. Do not make this method virtual.</span>
+        <span class="c">///</span><span class="c"> A derived class should not be able to override this method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="e7e651e1ba619c2e" href="R/e7e651e1ba619c2e.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#eb5bf7911f6df28c" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="c">// This object will be cleaned up by the Dispose method.</span>
+            <span class="c">// Therefore, you should call GC.SuppressFinalize to</span>
+            <span class="c">// take this object off the finalization queue</span>
+            <span class="c">// and prevent finalization code for this object</span>
+            <span class="c">// from executing a second time.</span>
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#c0ecd00f7d90f163" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose(bool disposing) executes in two distinct scenarios.</span>
+        <span class="c">///</span><span class="c"> If disposing equals true, the method has been called directly</span>
+        <span class="c">///</span><span class="c"> or indirectly by a user&#39;s code. Managed and unmanaged resources</span>
+        <span class="c">///</span><span class="c"> can be disposed.</span>
+        <span class="c">///</span><span class="c"> If disposing equals false, the method has been called by the</span>
+        <span class="c">///</span><span class="c"> runtime from inside the finalizer and you should not reference</span>
+        <span class="c">///</span><span class="c"> other objects. Only unmanaged resources can be disposed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r51 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether it is directly called.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected virtual void</b> <a id="eb5bf7911f6df28c" href="R/eb5bf7911f6df28c.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r51 rd" class="r51 r">disposing</span>)
+        {
+            <b>if</b> (<span class="i">Interlocked</span>.<span class="i">CompareExchange</span>(<b>ref</b> <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#b1df6275703e1900" class="i field">_disposed</a>, 1, 0) == 0)
+            {
+                <b>if</b> (<span class="r51 r">disposing</span>)
+                {
+                    <span class="c">// free managed resources</span>
+                    <a href="#55ba5b5ab18ff43d" class="i method">Cleanup</a>();
+                }
+                <span class="c">// free native resources if there are any</span>
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clean up managed resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="55ba5b5ab18ff43d" href="R/55ba5b5ab18ff43d.html" target="n" data-glyph="76,1" class="i method">Cleanup</a>()
+        {
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#651773f290fcb6be" class="i method">WriteLogEx</a>();
+ 
+            <span class="c">// unblock thread that waiting for more actions</span>
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a>.<span class="i">Set</span>();
+            <a href="CimBaseAction.cs.html#0953d185c863ca27" class="t t">CimBaseAction</a> <span id="r52 rd" class="r52 r">action</span>;
+            <b>while</b> (<a href="#69a36bb66e99682c" class="i method">GetActionAndRemove</a>(<b>out</b> <span class="r52 r">action</span>))
+            {
+                <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#655521cf1d3bf942" class="i method">WriteLog</a>(<span class="s">&quot;Action {0}&quot;</span>, 2, <span class="r52 r">action</span>);
+ 
+                <b>if</b> (<span class="r52 r">action</span> <b>is</b> <a href="CimBaseAction.cs.html#b5913d8a7cdefdde" class="t t">CimSyncAction</a>)
+                {
+                    <span class="c">// unblock the thread waiting for response</span>
+                    (<span class="r52 r">action</span> <b>as</b> <a href="CimBaseAction.cs.html#b5913d8a7cdefdde" class="t t">CimSyncAction</a>).<a href="CimBaseAction.cs.html#f8e9cfaab3ebad2b" class="i method">OnComplete</a>();
+                }
+            }
+ 
+            <b>if</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a> != <b>null</b>)
+            {
+                <span class="i">List</span>&lt;<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a>&gt; <span id="r53 rd" class="r53 r">temporaryProxy</span>;
+                <b>lock</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a>)
+                {
+                    <span class="r53 r">temporaryProxy</span> = <b>new</b> <span class="i">List</span>&lt;<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a>&gt;(<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a>);
+                    <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#d4e5a1ef752e9af6" class="i field">cimSessionProxyCache</a>.<span class="i">Clear</span>();
+                }
+ 
+                <span class="c">// clean up all proxy objects</span>
+                <b>foreach</b> (<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a> <span id="r54 rd" class="r54 r">proxy</span> <b>in</b> <span class="r53 r">temporaryProxy</span>)
+                {
+                    <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#4021e88828f2c984" class="i method">WriteLog</a>(<span class="s">&quot;Dispose proxy &quot;</span>, 2);
+                    <span class="r54 r">proxy</span>.<a href="CimSessionProxy.cs.html#eb54fde44cdb1537" class="i method">Dispose</a>();
+                }
+            }
+ 
+            <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#057d4de3f10f178a" class="i field">moreActionEvent</a>.<span class="i">Dispose</span>();
+            <b>if</b> (<a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#9f1405b741d357bb" class="i field">ackedEvent</a> != <b>null</b>)
+            {
+                <a href="#c0ecd00f7d90f163" class="k">this</a>.<a href="#9f1405b741d357bb" class="i field">ackedEvent</a>.<span class="i">Dispose</span>();
+            }
+ 
+            <a href="Utils.cs.html#6b0644b87482dbb3" class="t t">DebugHelper</a>.<a href="Utils.cs.html#4021e88828f2c984" class="i method">WriteLog</a>(<span class="s">&quot;Cleanup complete.&quot;</span>, 2);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> private members
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lock object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly object</b> <a id="e8fe59ecef52a047" href="R/e8fe59ecef52a047.html" target="n" data-glyph="46,1" class="i field">a_lock</a> = <b>new</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Number of active operations.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private uint</b> <a id="5d842ea5c3b998ba" href="R/5d842ea5c3b998ba.html" target="n" data-glyph="46,1" class="i field">operationCount</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event to notify ps thread that more action is available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">ManualResetEventSlim</span> <a id="057d4de3f10f178a" href="R/057d4de3f10f178a.html" target="n" data-glyph="46,1" class="i field">moreActionEvent</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The following is the definition of action queue.</span>
+        <span class="c">///</span><span class="c"> The queue holding all actions to be executed in the context of either</span>
+        <span class="c">///</span><span class="c"> ProcessRecord or EndProcessing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">ConcurrentQueue</span>&lt;<a href="CimBaseAction.cs.html#0953d185c863ca27" class="t t">CimBaseAction</a>&gt; <a id="c25ac31653694326" href="R/c25ac31653694326.html" target="n" data-glyph="46,1" class="i field">actionQueue</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lock object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly object</b> <a id="400521b42f26d864" href="R/400521b42f26d864.html" target="n" data-glyph="46,1" class="i field">cimSessionProxyCacheLock</a> = <b>new</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Cache all </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> objects related to</span>
+        <span class="c">///</span><span class="c"> the current operation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">List</span>&lt;<a href="CimSessionProxy.cs.html#64da31a8ef7908ad" class="t t">CimSessionProxy</a>&gt; <a id="d4e5a1ef752e9af6" href="R/d4e5a1ef752e9af6.html" target="n" data-glyph="46,1" class="i field">cimSessionProxyCache</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> protected members
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event to notify ps thread that either a ACK message sent back</span>
+        <span class="c">///</span><span class="c"> or a error happened. Currently only used by</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="CimRegisterCimIndication.cs.html#390ec0ac9cdd39c7" class="t t">CimRegisterCimIndication</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected</b> <span class="i">ManualResetEventSlim</span> <a id="9f1405b741d357bb" href="R/9f1405b741d357bb.html" target="n" data-glyph="45,1" class="i field">ackedEvent</a>;
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> const strings
+        <b>internal const string</b> <a id="173a275b5beeabc6" href="R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ComputerNameArgument</a> = <span class="s">@&quot;ComputerName&quot;</span>;
+        <b>internal const string</b> <a id="9faa1c0fafafba4f" href="R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">CimSessionArgument</a> = <span class="s">@&quot;CimSession&quot;</span>;
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

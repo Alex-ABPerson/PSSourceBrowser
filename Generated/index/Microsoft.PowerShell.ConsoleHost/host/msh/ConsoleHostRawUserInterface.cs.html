@@ -1,0 +1,1714 @@
+﻿<!DOCTYPE html>
+<html><head><title>ConsoleHostRawUserInterface.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(1705);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost/host/msh/ConsoleHostRawUserInterface.cs" target="_top">host\msh\ConsoleHostRawUserInterface.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost" target="_top">src\Microsoft.PowerShell.ConsoleHost\Microsoft.PowerShell.ConsoleHost.csproj</a> (Microsoft.PowerShell.ConsoleHost)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">ComponentModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">RegularExpressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Tasks</span>;
+<b>using</b> <span class="i">ConsoleHandle</span> = <span class="i n">Microsoft</span>.<span class="i">Win32</span>.<span class="i">SafeHandles</span>.<span class="i">SafeFileHandle</span>;
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i">Diagnostics</span>;
+<b>using</b> <span class="i">WORD</span> = <span class="i n">System</span>.<span class="i">UInt16</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Implementation of RawConsole for powershell.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed
+    class</b> <a id="718850df43965d9a" href="../../R/718850df43965d9a.html" target="n" data-glyph="2,0" class="t t">ConsoleHostRawUserInterface</a> : <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>.<a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining the buffer&#39;s foreground and background color failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b>
+        <a id="9bcb5587b622c1b2" href="../../R/9bcb5587b622c1b2.html" target="n" data-glyph="74,1" class="t constructor">ConsoleHostRawUserInterface</a>(<a href="../../P/b737197b2d219638.html#b737197b2d219638" class="t t">ConsoleHostUserInterface</a> <span id="r0 rd" class="r0 r">mshConsole</span>) : <b>base</b>()
+        {
+            <a href="#2a19891ea93d42c6" class="i field">defaultForeground</a> = <a href="#cb76f2df6f492a7b" class="i property">ForegroundColor</a>;
+            <a href="#c53e39b6b4af5a77" class="i field">defaultBackground</a> = <a href="#c29fb935deae37d4" class="i property">BackgroundColor</a>;
+            <a href="#bc2d195ae1b5f992" class="i field">parent</a> = <span class="r0 r">mshConsole</span>;
+            <span class="c">// cacheKeyEvent is a value type and initialized automatically</span>
+ 
+            <span class="c">// add &quot;Administrator: &quot; prefix into the window title, but don&#39;t wait for it to finish</span>
+            <span class="c">//   (we may load resources which can take some time)</span>
+            <span class="i">Task</span>.<span class="i">Run</span>(() =&gt;
+            {
+                <span class="i">WindowsIdentity</span> <span id="r1 rd" class="r1 r">identity</span> = <span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>();
+                <span class="i">WindowsPrincipal</span> <span id="r2 rd" class="r2 r">principal</span> = <b>new</b> <span class="i">WindowsPrincipal</span>(<span class="r1 r">identity</span>);
+                <b>if</b> (<span class="r2 r">principal</span>.<span class="i">IsInRole</span>(<span class="i">WindowsBuiltInRole</span>.<span class="i">Administrator</span>))
+                {
+                    <b>string</b> <span id="r3 rd" class="r3 r">prefix</span> = <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowTitleElevatedPrefix</span>;
+ 
+                    <span class="c">// check using Regex if the window already has Administrator: prefix</span>
+                    <span class="c">// (i.e. from the parent console process)</span>
+                    <b>string</b> <span id="r4 rd" class="r4 r">titlePattern</span> = <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowTitleTemplate</span>;
+                    <span class="r4 r">titlePattern</span> = <span class="i">Regex</span>.<span class="i">Escape</span>(<span class="r4 r">titlePattern</span>)
+                        .<span class="i">Replace</span>(<span class="s">@&quot;\{1}&quot;</span>, <span class="s">&quot;.*&quot;</span>)
+                        .<span class="i">Replace</span>(<span class="s">@&quot;\{0}&quot;</span>, <span class="i">Regex</span>.<span class="i">Escape</span>(<span class="r3 r">prefix</span>));
+                    <b>if</b> (!<span class="i">Regex</span>.<span class="i">IsMatch</span>(<a href="#718850df43965d9a" class="k">this</a>.<a href="#11e4964dd1cddd95" class="i property">WindowTitle</a>, <span class="r4 r">titlePattern</span>))
+                    {
+                        <a href="#718850df43965d9a" class="k">this</a>.<a href="#11e4964dd1cddd95" class="i property">WindowTitle</a> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowTitleTemplate</span>,
+                            <span class="r3 r">prefix</span>,
+                            <a href="#718850df43965d9a" class="k">this</a>.<a href="#11e4964dd1cddd95" class="i property">WindowTitle</a>);
+                    }
+                }
+            });
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set to an invalid ConsoleColor</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleTextAttribute</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <span class="i">ConsoleColor</span>
+        <a id="cb76f2df6f492a7b" href="../../R/cb76f2df6f492a7b.html" target="n" data-glyph="102,1" class="i property">ForegroundColor</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r5 rd" class="r5 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r5 r">bufferInfo</span>);
+ 
+                <span class="i">ConsoleColor</span> <span id="r6 rd" class="r6 r">foreground</span>;
+                <span class="i">ConsoleColor</span> <span id="r7 rd" class="r7 r">unused</span>;
+ 
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a92de6f8349ea0f7" class="i method">WORDToColor</a>(<span class="r5 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#0d610058fdf6684a" class="i field">Attributes</a>, <b>out</b> <span class="r6 r">foreground</span>, <b>out</b> <span class="r7 r">unused</span>);
+                <b>return</b> <span class="r6 r">foreground</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#3da2dd36d1d92e02" class="i method">IsConsoleColor</a>(<b>value</b>))
+                {
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r8 rd" class="r8 r">bufferInfo</span>;
+ 
+                    <span class="i">ConsoleHandle</span> <span id="r9 rd" class="r9 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r8 r">bufferInfo</span>);
+ 
+                    <span class="c">// mask in the foreground from the current color.</span>
+                    <b>short</b> <span id="r10 rd" class="r10 r">a</span> = (<b>short</b>)<span class="r8 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#0d610058fdf6684a" class="i field">Attributes</a>;
+ 
+                    <span class="r10 r">a</span> &amp;= (<b>short</b>)~0x0f;
+                    <span class="r10 r">a</span> = (<b>short</b>)((<b>ushort</b>)<span class="r10 r">a</span> | (<b>ushort</b>)<b>value</b>);
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#4aae2bd633440bef" class="i method">SetConsoleTextAttribute</a>(<span class="r9 r">handle</span>, (<span class="i">WORD</span>)<span class="r10 r">a</span>);
+                }
+                <b>else</b>
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<span class="s">&quot;value&quot;</span>, <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidConsoleColorError</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set to an invalid ConsoleColor</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleTextAttribute</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <span class="i">ConsoleColor</span>
+        <a id="c29fb935deae37d4" href="../../R/c29fb935deae37d4.html" target="n" data-glyph="102,1" class="i property">BackgroundColor</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r11 rd" class="r11 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r11 r">bufferInfo</span>);
+ 
+                <span class="i">ConsoleColor</span> <span id="r12 rd" class="r12 r">background</span>;
+                <span class="i">ConsoleColor</span> <span id="r13 rd" class="r13 r">unused</span>;
+ 
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a92de6f8349ea0f7" class="i method">WORDToColor</a>(<span class="r11 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#0d610058fdf6684a" class="i field">Attributes</a>, <b>out</b> <span class="r13 r">unused</span>, <b>out</b> <span class="r12 r">background</span>);
+                <b>return</b> <span class="r12 r">background</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#3da2dd36d1d92e02" class="i method">IsConsoleColor</a>(<b>value</b>))
+                {
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r14 rd" class="r14 r">bufferInfo</span>;
+ 
+                    <span class="i">ConsoleHandle</span> <span id="r15 rd" class="r15 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r14 r">bufferInfo</span>);
+ 
+                    <span class="c">// mask in the background from the current color.</span>
+                    <b>short</b> <span id="r16 rd" class="r16 r">a</span> = (<b>short</b>)<span class="r14 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#0d610058fdf6684a" class="i field">Attributes</a>;
+ 
+                    <span class="r16 r">a</span> &amp;= (<b>short</b>)~0xf0;
+                    <span class="r16 r">a</span> = (<b>short</b>)((<b>ushort</b>)<span class="r16 r">a</span> | (<b>ushort</b>)((<b>uint</b>)<b>value</b> &lt;&lt; 4));
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#4aae2bd633440bef" class="i method">SetConsoleTextAttribute</a>(<span class="r15 r">handle</span>, (<span class="i">WORD</span>)<span class="r16 r">a</span>);
+                }
+                <b>else</b>
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<span class="s">&quot;value&quot;</span>, <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidConsoleColorError</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set to outside of the buffer</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleCursorPosition failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a>
+        <a id="1ceb2774733b1ee1" href="../../R/1ceb2774733b1ee1.html" target="n" data-glyph="102,1" class="i property">CursorPosition</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r17 rd" class="r17 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r17 r">bufferInfo</span>);
+ 
+                <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r18 rd" class="r18 r">c</span> = <b>new</b> <span class="t">Coordinates</span>(<span class="r17 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#7cea348f0132a8d5" class="i field">CursorPosition</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>, <span class="r17 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#7cea348f0132a8d5" class="i field">CursorPosition</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>);
+                <b>return</b> <span class="r18 r">c</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>try</b>
+                {
+                    <span class="i">Console</span>.<span class="i">SetCursorPosition</span>(<b>value</b>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a>, <b>value</b>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>);
+                }
+                <b>catch</b> (<span class="i">ArgumentOutOfRangeException</span>)
+                {
+                    <span class="c">// if screen buffer has changed, we cannot set it anywhere reasonable as the screen buffer</span>
+                    <span class="c">// might change again, so we ignore this</span>
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Cursor size</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set to under 0 or over 100</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s GetConsoleCursorInfo failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleCursorInfo failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        int</b>
+        <a id="205bd5ddfbdfaffa" href="../../R/205bd5ddfbdfaffa.html" target="n" data-glyph="102,1" class="i property">CursorSize</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">ConsoleHandle</span> <span id="r19 rd" class="r19 r">consoleHandle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#d72136ddad017191" class="i method">GetActiveScreenBufferHandle</a>();
+                <b>int</b> <span id="r20 rd" class="r20 r">size</span> = (<b>int</b>)<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#8e9dc1f40894850a" class="i method">GetConsoleCursorInfo</a>(<span class="r19 r">consoleHandle</span>).<a href="ConsoleControl.cs.html#af307a12a3753dbb" class="i field">Size</a>;
+ 
+                <b>return</b> <span class="r20 r">size</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>const int</b> <span id="r21 rd" class="r21 r">MinCursorSize</span> = 0;
+                <b>const int</b> <span id="r22 rd" class="r22 r">MaxCursorSize</span> = 100;
+ 
+                <b>if</b> (<b>value</b> &gt;= <span class="r21 r">MinCursorSize</span> &amp;&amp; <b>value</b> &lt;= <span class="r22 r">MaxCursorSize</span>)
+                {
+                    <span class="i">ConsoleHandle</span> <span id="r23 rd" class="r23 r">consoleHandle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#d72136ddad017191" class="i method">GetActiveScreenBufferHandle</a>();
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#207b7680f453770b" class="t t">CONSOLE_CURSOR_INFO</a> <span id="r24 rd" class="r24 r">cursorInfo</span> =
+                        <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#8e9dc1f40894850a" class="i method">GetConsoleCursorInfo</a>(<span class="r23 r">consoleHandle</span>);
+ 
+                    <b>if</b> (<b>value</b> == 0)
+                    {
+                        <span class="r24 r">cursorInfo</span>.<a href="ConsoleControl.cs.html#cad7d7cf6d579097" class="i field">Visible</a> = <b>false</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r24 r">cursorInfo</span>.<a href="ConsoleControl.cs.html#af307a12a3753dbb" class="i field">Size</a> = (<b>uint</b>)<b>value</b>;
+                        <span class="r24 r">cursorInfo</span>.<a href="ConsoleControl.cs.html#cad7d7cf6d579097" class="i field">Visible</a> = <b>true</b>;
+                    }
+ 
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#ff9185707bb9c695" class="i method">SetConsoleCursorInfo</a>(<span class="r23 r">consoleHandle</span>, <span class="r24 r">cursorInfo</span>);
+                }
+                <b>else</b>
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value&quot;</span>, <b>value</b>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidCursorSizeError</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set outside of the buffer</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleWindowInfo failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a>
+        <a id="b0647c09250304a1" href="../../R/b0647c09250304a1.html" target="n" data-glyph="102,1" class="i property">WindowPosition</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r25 rd" class="r25 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r25 r">bufferInfo</span>);
+ 
+                <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r26 rd" class="r26 r">c</span> = <b>new</b> <span class="t">Coordinates</span>(<span class="r25 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a>, <span class="r25 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a>);
+ 
+                <b>return</b> <span class="r26 r">c</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r27 rd" class="r27 r">bufferInfo</span>;
+ 
+                <span class="i">ConsoleHandle</span> <span id="r28 rd" class="r28 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r27 r">bufferInfo</span>);
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6cd4a96da231ccf6" class="t t">SMALL_RECT</a> <span id="r29 rd" class="r29 r">r</span> = <span class="r27 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>;
+ 
+                <span class="c">// the dimensions of the window can&#39;t extend past the dimensions of the screen buffer.  This means that the</span>
+                <span class="c">// X position of the window is limited to the buffer width minus one minus the window width, and the Y</span>
+                <span class="c">// position of the window is limited to the buffer height minus one minus the window height.</span>
+                <b>int</b> <span id="r30 rd" class="r30 r">windowWidth</span> = <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> - <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> + 1;
+                <b>int</b> <span id="r31 rd" class="r31 r">windowHeight</span> = <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> - <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> + 1;
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> &lt; 0 || <b>value</b>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> &gt; <span class="r27 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a> - <span class="r30 r">windowWidth</span>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.X&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidXWindowPositionError</span>);
+                }
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a> &lt; 0 || <b>value</b>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a> &gt; <span class="r27 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a> - <span class="r31 r">windowHeight</span>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Y&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidYWindowPositionError</span>);
+                }
+ 
+                <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> = (<b>short</b>)<b>value</b>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a>;
+                <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> = (<b>short</b>)<b>value</b>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>;
+ 
+                <span class="c">// subtract 1 from each dimension because the semantics of the win32 api are not &quot;number of characters in</span>
+                <span class="c">// span&quot; but &quot;starting and ending position&quot;</span>
+                <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> = (<b>short</b>)(<span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> + <span class="r30 r">windowWidth</span> - 1);
+                <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> = (<b>short</b>)(<span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> + <span class="r31 r">windowHeight</span> - 1);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> &gt;= <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a>, <span class="s">&quot;Window size is too narrow&quot;</span>);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> &gt;= <span class="r29 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a>, <span class="s">&quot;Window size is too short&quot;</span>);
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6c949b0bf64ed813" class="i method">SetConsoleWindowInfo</a>(<span class="r28 r">handle</span>, <b>true</b>, <span class="r29 r">r</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If setting to an invalid size</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleScreenBufferSize failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#4d1d20b1c8ac2812" class="t t">Size</a>
+        <a id="fd18ef5c5670be87" href="../../R/fd18ef5c5670be87.html" target="n" data-glyph="102,1" class="i property">BufferSize</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r32 rd" class="r32 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r32 r">bufferInfo</span>);
+                <b>return</b> <b>new</b> <span class="t">Size</span>(<span class="r32 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>, <span class="r32 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>);
+            }
+ 
+            <b>set</b>
+            {
+                <span class="c">// looking in windows/core/ntcon/server/output.c, it looks like the minimum size is 1 row X however many</span>
+                <span class="c">// characters will fit in the minimum window size system metric (SM_CXMIN).  Instead of going to the effort of</span>
+                <span class="c">// computing that minimum here, it is cleaner and cheaper to make the call to SetConsoleScreenBuffer and just</span>
+                <span class="c">// translate any exception that might get thrown.</span>
+                <b>try</b>
+                {
+                    <span class="i">ConsoleHandle</span> <span id="r33 rd" class="r33 r">handle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#d72136ddad017191" class="i method">GetActiveScreenBufferHandle</a>();
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#20c37713e74573a8" class="i method">SetConsoleScreenBufferSize</a>(<span class="r33 r">handle</span>, <b>value</b>);
+                }
+                <b>catch</b> (<a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a> <span id="r34 rd" class="r34 r">e</span>)
+                {
+                    <span class="i">Win32Exception</span> <span id="r35 rd" class="r35 r">win32exception</span> = <span class="r34 r">e</span>.<span class="i">InnerException</span> <b>as</b> <span class="i">Win32Exception</span>;
+                    <b>if</b> (<span class="r35 r">win32exception</span> != <b>null</b> &amp;&amp;
+                        <span class="r35 r">win32exception</span>.<span class="i">NativeErrorCode</span> == 0x57)
+                    {
+                        <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value&quot;</span>, <b>value</b>,
+                            <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidBufferSizeError</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <b>throw</b>;
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If setting width or height to less than 1, larger than the screen buffer,</span>
+        <span class="c">///</span><span class="c">  over the maximum window size allowed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleWindowInfo failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#4d1d20b1c8ac2812" class="t t">Size</a>
+        <a id="6093427be194b276" href="../../R/6093427be194b276.html" target="n" data-glyph="102,1" class="i property">WindowSize</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r36 rd" class="r36 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r36 r">bufferInfo</span>);
+ 
+                <a href="/System.Management.Automation/A.html#4d1d20b1c8ac2812" class="t t">Size</a> <span id="r37 rd" class="r37 r">s</span> =
+                    <b>new</b> <span class="t">Size</span>(
+                        <span class="r36 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> - <span class="r36 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> + 1,
+                        <span class="r36 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> - <span class="r36 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> + 1);
+ 
+                <b>return</b> <span class="r37 r">s</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r38 rd" class="r38 r">bufferInfo</span>;
+ 
+                <span class="i">ConsoleHandle</span> <span id="r39 rd" class="r39 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r38 r">bufferInfo</span>);
+ 
+                <span class="c">// the dimensions of the window can&#39;t extend past the dimensions of the screen buffer.  This means that the</span>
+                <span class="c">// width of the window is limited to the buffer width minus one minus the window X position, and the height</span>
+                <span class="c">// of the window is limited to the buffer height minus one minus the window Y position.</span>
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a> &lt; 1)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Width&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowWidthTooSmallError</span>);
+                }
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a> &lt; 1)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Height&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowHeightTooSmallError</span>);
+                }
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a> &gt; <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Width&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowWidthLargerThanBufferError</span>);
+                }
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a> &gt; <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Height&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowHeightLargerThanBufferError</span>);
+                }
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a> &gt; <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a12ce3646588958c" class="i field">MaxWindowSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Width&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowWidthTooLargeErrorTemplate</span>,
+                        <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a12ce3646588958c" class="i field">MaxWindowSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>);
+                }
+ 
+                <b>if</b> (<b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a> &gt; <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a12ce3646588958c" class="i field">MaxWindowSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value.Height&quot;</span>, <b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowHeightTooLargeErrorTemplate</span>,
+                        <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a12ce3646588958c" class="i field">MaxWindowSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>);
+                }
+ 
+                <span class="c">// if the new size will extend past the edge of screen buffer, then move the window position to try to</span>
+                <span class="c">// accommodate that.</span>
+ 
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6cd4a96da231ccf6" class="t t">SMALL_RECT</a> <span id="r40 rd" class="r40 r">r</span> = <span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a631f54217795fe3" class="i field">WindowRect</a>;
+ 
+                <span class="c">// subtract 1 from each dimension because the semantics of the win32 api are not &quot;number of characters in</span>
+                <span class="c">// span&quot; but &quot;starting and ending position&quot;</span>
+ 
+                <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> = (<b>short</b>)(<span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> + <b>value</b>.<a href="/System.Management.Automation/A.html#cc1bb8de7549bf9d" class="i property">Width</a> - 1);
+                <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> = (<b>short</b>)(<span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> + <b>value</b>.<a href="/System.Management.Automation/A.html#5ca800015fea1ce6" class="i property">Height</a> - 1);
+ 
+                <span class="c">// Now we check if the bottom right coordinate of our window went over the coordinate of the bottom</span>
+                <span class="c">// right of the buffer.  If it did then we need to adjust the window.</span>
+ 
+                <span class="c">// bufferInfo.BufferSize.X - 1 will give us the rightmost coordinate of the buffer.</span>
+                <span class="c">// r.Right - rightCoordinateOfBuffer will give us how much we need to adjust the window left and right coordinates.</span>
+                <span class="c">// Then we can do the same for top and bottom.</span>
+                <b>short</b> <span id="r41 rd" class="r41 r">adjustLeft</span> = (<b>short</b>)(<span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> - (<span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a> - 1));
+                <b>short</b> <span id="r42 rd" class="r42 r">adjustTop</span> = (<b>short</b>)(<span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> - (<span class="r38 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a> - 1));
+ 
+                <b>if</b> (<span class="r41 r">adjustLeft</span> &gt; 0)
+                {
+                    <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> -= <span class="r41 r">adjustLeft</span>;
+                    <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> -= <span class="r41 r">adjustLeft</span>;
+                }
+ 
+                <b>if</b> (<span class="r42 r">adjustTop</span> &gt; 0)
+                {
+                    <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> -= <span class="r42 r">adjustTop</span>;
+                    <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> -= <span class="r42 r">adjustTop</span>;
+                }
+ 
+                <b>if</b> (<span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> &lt; <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value&quot;</span>, <b>value</b>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowTooNarrowError</span>);
+                }
+ 
+                <b>if</b> (<span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> &lt; <span class="r40 r">r</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a>)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(<span class="s">&quot;value&quot;</span>, <b>value</b>,
+                        <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowTooShortError</span>);
+                }
+ 
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6c949b0bf64ed813" class="i method">SetConsoleWindowInfo</a>(<span class="r39 r">handle</span>, <b>true</b>, <span class="r40 r">r</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#4d1d20b1c8ac2812" class="t t">Size</a>
+        <a id="49b96c24e0001ce1" href="../../R/49b96c24e0001ce1.html" target="n" data-glyph="102,1" class="i property">MaxWindowSize</a>
+        {
+            <b>get</b>
+            {
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r43 rd" class="r43 r">bufferInfo</span>;
+                <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r43 r">bufferInfo</span>);
+                <a href="/System.Management.Automation/A.html#4d1d20b1c8ac2812" class="t t">Size</a> <span id="r44 rd" class="r44 r">s</span> = <b>new</b> <span class="t">Size</span>(<span class="r43 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a12ce3646588958c" class="i field">MaxWindowSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>, <span class="r43 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#a12ce3646588958c" class="i field">MaxWindowSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>);
+ 
+                <b>return</b> <span class="r44 r">s</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s GetLargestConsoleWindowSize failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#4d1d20b1c8ac2812" class="t t">Size</a>
+        <a id="bce01d578c5cfa13" href="../../R/bce01d578c5cfa13.html" target="n" data-glyph="102,1" class="i property">MaxPhysicalWindowSize</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">ConsoleHandle</span> <span id="r45 rd" class="r45 r">handle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#d72136ddad017191" class="i method">GetActiveScreenBufferHandle</a>();
+                <b>return</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#618df1b8c7afb6fc" class="i method">GetLargestConsoleWindowSize</a>(<span class="r45 r">handle</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper method to create and trace PipelineStoppedException.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="/System.Management.Automation/A.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a> <a id="311ff17b693afa28" href="../../R/311ff17b693afa28.html" target="n" data-glyph="76,1" class="i method">NewPipelineStoppedException</a>()
+        {
+            <a href="/System.Management.Automation/A.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a> <span id="r46 rd" class="r46 r">e</span> = <b>new</b> <span class="t">PipelineStoppedException</span>();
+            <b>return</b> <span class="r46 r">e</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Used by ReadKey, cache KeyEvent based on if input.RepeatCount &gt; 1.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Input key event record.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">cache</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Cache key event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="1bc21fa52cf0f2b9" href="../../R/1bc21fa52cf0f2b9.html" target="n" data-glyph="76,1" class="i method">CacheKeyEvent</a>(<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#e73d8325cf12163f" class="t t">KEY_EVENT_RECORD</a> <span id="r47 rd" class="r47 r">input</span>, <b>ref</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#e73d8325cf12163f" class="t t">KEY_EVENT_RECORD</a> <span id="r48 rd" class="r48 r">cache</span>)
+        {
+            <b>if</b> (<span class="r47 r">input</span>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> &gt; 1)
+            {
+                <span class="r48 r">cache</span> = <span class="r47 r">input</span>;
+                <span class="r48 r">cache</span>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a>--;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class</span>
+        <span class="c">///</span><span class="c"> This method unwraps the repeat count in KEY_EVENT_RECORD by caching repeated keystrokes</span>
+        <span class="c">///</span><span class="c"> in a logical queue. The implications are:</span>
+        <span class="c">///</span><span class="c"> 1) Per discussion with Sburns on 2005/01/20, calling this method with allowCtrlC | includeKeyUp may not</span>
+        <span class="c">///</span><span class="c">    return ctrl-c even it is pressed. This is because ctrl-c could generate the following sequence of</span>
+        <span class="c">///</span><span class="c">    key events: {Ctrl, KeyDown}, {Ctrl-c KeyDown}, {Ctrl, KeyUp}, {c, KeyUp} if Ctrl is released before c.</span>
+        <span class="c">///</span><span class="c">    In this case, {Ctrl, KeyUp}, {c, KeyUp} would be returned.</span>
+        <span class="c">///</span><span class="c"> 2) If the cache is non-empty, a call to ReadLine will not return the cached keys. This</span>
+        <span class="c">///</span><span class="c">    behavior is the same as that of System.Console.ReadKey.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">options</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If neither IncludeKeyDown or IncludeKeyUp is set in </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">options</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s setting input buffer mode to disregard window and mouse input failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s ReadConsoleInput failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#789e42f61d8e8616" class="t t">KeyInfo</a>
+        <a id="fd3d8f27a03f5c94" href="../../R/fd3d8f27a03f5c94.html" target="n" data-glyph="72,1" class="i method">ReadKey</a>(<a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a> <span id="r49 rd" class="r49 r">options</span>)
+        {
+            <b>if</b> ((<span class="r49 r">options</span> &amp; (<a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#ab2f6d77984ce27d" class="i field">IncludeKeyDown</a> | <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#31318a6916ef253b" class="i field">IncludeKeyUp</a>)) == 0)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r49 r">options</span>), <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidReadKeyOptionsError</span>);
+            }
+ 
+            <span class="c">// keyInfo is initialized in the below if-else statement</span>
+            <a href="/System.Management.Automation/A.html#789e42f61d8e8616" class="t t">KeyInfo</a> <span id="r50 rd" class="r50 r">keyInfo</span>;
+ 
+            <b>if</b> (<a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> &gt; 0)
+            {
+                <span class="c">//    Ctrl-C is not allowed and Ctrl-C is cached.</span>
+                <b>if</b> (((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#6f84d41ef2dbc2fa" class="i field">AllowCtrlC</a>) == 0) &amp;&amp; <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#3ba5fb532dbded4b" class="i field">UnicodeChar</a> == (<b>char</b>)3)
+                {
+                    <span class="c">// Ctrl-C is in the cache, stop pipeline immediately</span>
+ 
+                    <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a>--;
+                    <b>throw</b> <a href="#311ff17b693afa28" class="i method">NewPipelineStoppedException</a>();
+                }
+                <span class="c">// If IncludeKeyUp is not set and cached key events are KeyUp OR</span>
+                <span class="c">//    IncludeKeyDown is not set and cached key events are KeyDown, clear the cache</span>
+                <b>if</b> ((((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#31318a6916ef253b" class="i field">IncludeKeyUp</a>) == 0) &amp;&amp; !<a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a>) ||
+                     (((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#ab2f6d77984ce27d" class="i field">IncludeKeyDown</a>) == 0) &amp;&amp; <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a>))
+                {
+                    <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> = 0;
+                }
+            }
+ 
+            <b>if</b> (<a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> &gt; 0)
+            {
+                <a href="#4e0b4cfd67959f79" class="i method">KEY_EVENT_RECORDToKeyInfo</a>(<a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>, <b>out</b> <span class="r50 r">keyInfo</span>);
+                <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a>--;
+            }
+            <b>else</b>
+            {
+                <span class="i">ConsoleHandle</span> <span id="r51 rd" class="r51 r">handle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#082a79a70f5af6dc" class="i method">GetConioDeviceHandle</a>();
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#3515a77acb59df32" class="t t">INPUT_RECORD</a>[] <span id="r52 rd" class="r52 r">inputRecords</span> = <b>new</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#3515a77acb59df32" class="t t">INPUT_RECORD</a>[1];
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#1d1eff9fb00ac8e2" class="t t">ConsoleModes</a> <span id="r53 rd" class="r53 r">originalMode</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#133579be57ae9c3e" class="i method">GetMode</a>(<span class="r51 r">handle</span>);
+ 
+                <span class="c">// set input mode to exclude mouse or window events</span>
+                <span class="c">// turn off ProcessedInput flag to handle ctrl-c</span>
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#1d1eff9fb00ac8e2" class="t t">ConsoleModes</a> <span id="r54 rd" class="r54 r">newMode</span> = <span class="r53 r">originalMode</span> &amp;
+                                            ~<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#1d1eff9fb00ac8e2" class="t t">ConsoleModes</a>.<a href="ConsoleControl.cs.html#e5176e17af084185" class="i field">WindowInput</a> &amp;
+                                            ~<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#1d1eff9fb00ac8e2" class="t t">ConsoleModes</a>.<a href="ConsoleControl.cs.html#ace876bd01ee480a" class="i field">MouseInput</a> &amp;
+                                            ~<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#1d1eff9fb00ac8e2" class="t t">ConsoleModes</a>.<a href="ConsoleControl.cs.html#dc342310a77c2d1f" class="i field">ProcessedInput</a>;
+ 
+                <b>try</b>
+                {
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6c1ab9fc2b7085b1" class="i method">SetMode</a>(<span class="r51 r">handle</span>, <span class="r54 r">newMode</span>);
+                    <b>while</b> (<b>true</b>)
+                    {
+                        <b>int</b> <span id="r55 rd" class="r55 r">actualNumberOfInput</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#f965c525cbbe65be" class="i method">ReadConsoleInput</a>(<span class="r51 r">handle</span>, <b>ref</b> <span class="r52 r">inputRecords</span>);
+                        <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r55 r">actualNumberOfInput</span> == 1,
+                            <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;ReadConsoleInput returns {0} number of input event records&quot;</span>,
+                                <span class="r55 r">actualNumberOfInput</span>));
+                        <b>if</b> (<span class="r55 r">actualNumberOfInput</span> == 1)
+                        {
+                            <b>if</b> (((<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#909b13750b87fe9a" class="t t">InputRecordEventTypes</a>)<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#692b201be40e1be8" class="i field">EventType</a>) ==
+                                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#909b13750b87fe9a" class="t t">InputRecordEventTypes</a>.<a href="ConsoleControl.cs.html#207951a2afb6e3a2" class="i field">KEY_EVENT</a>)
+                            {
+                                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a> || <span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> != 0,
+                                    <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;ReadConsoleInput returns a KeyEvent that is KeyDown and RepeatCount 0&quot;</span>));
+                                <b>if</b> (<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> == 0)
+                                {
+                                    <span class="c">// Sometimes Win32 ReadConsoleInput returns a KeyEvent record whose</span>
+                                    <span class="c">// RepeatCount is zero. This type of record does not</span>
+                                    <span class="c">// represent a keystroke.</span>
+                                    <b>continue</b>;
+                                }
+                                <span class="c">//    Ctrl-C is not allowed and Ctrl-C is input</span>
+                                <b>if</b> ((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#6f84d41ef2dbc2fa" class="i field">AllowCtrlC</a>) == 0 &amp;&amp;
+                                    <span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#3ba5fb532dbded4b" class="i field">UnicodeChar</a> == (<b>char</b>)3)
+                                {
+                                    <a href="#1bc21fa52cf0f2b9" class="i method">CacheKeyEvent</a>(<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>, <b>ref</b> <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>);
+                                    <b>throw</b> <a href="#311ff17b693afa28" class="i method">NewPipelineStoppedException</a>();
+                                }
+                                <span class="c">// if KeyDown events are wanted and event is KeyDown OR</span>
+                                <span class="c">//    KeyUp events are wanted and event is KeyUp</span>
+                                <b>if</b> ((((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#ab2f6d77984ce27d" class="i field">IncludeKeyDown</a>) != 0) &amp;&amp;
+                                        <span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a>) ||
+                                    (((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#31318a6916ef253b" class="i field">IncludeKeyUp</a>) != 0) &amp;&amp;
+                                        !<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a>))
+                                {
+                                    <a href="#1bc21fa52cf0f2b9" class="i method">CacheKeyEvent</a>(<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>, <b>ref</b> <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>);
+                                    <a href="#4e0b4cfd67959f79" class="i method">KEY_EVENT_RECORDToKeyInfo</a>(<span class="r52 r">inputRecords</span>[0].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>, <b>out</b> <span class="r50 r">keyInfo</span>);
+                                    <b>break</b>;
+                                }
+                            }
+                        }
+                    }
+                }
+                <b>finally</b>
+                {
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6c1ab9fc2b7085b1" class="i method">SetMode</a>(<span class="r51 r">handle</span>, <span class="r53 r">originalMode</span>);
+                }
+            }
+ 
+            <b>if</b> ((<span class="r49 r">options</span> &amp; <a href="/System.Management.Automation/A.html#da21b13889b0c6ff" class="t t">ReadKeyOptions</a>.<a href="/System.Management.Automation/A.html#04b955d74c21745f" class="i field">NoEcho</a>) == 0)
+            {
+                <a href="#bc2d195ae1b5f992" class="i field">parent</a>.<a href="ConsoleHostUserInterface.cs.html#7bbdf405250a2a18" class="i method">WriteToConsole</a>(<span class="r50 r">keyInfo</span>.<a href="/System.Management.Automation/A.html#5ecc487d47639a7c" class="i property">Character</a>, <span class="r56 r">transcribeResult</span>: <b>true</b>);
+            }
+ 
+            <b>return</b> <span class="r50 r">keyInfo</span>;
+        }
+ 
+        <b>private static
+        void</b>
+        <a id="4e0b4cfd67959f79" href="../../R/4e0b4cfd67959f79.html" target="n" data-glyph="76,1" class="i method">KEY_EVENT_RECORDToKeyInfo</a>(<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#e73d8325cf12163f" class="t t">KEY_EVENT_RECORD</a> <span id="r57 rd" class="r57 r">keyEventRecord</span>, <b>out</b> <a href="/System.Management.Automation/A.html#789e42f61d8e8616" class="t t">KeyInfo</a> <span id="r58 rd" class="r58 r">keyInfo</span>)
+        {
+            <span class="r58 r">keyInfo</span> = <b>new</b> <span class="t">KeyInfo</span>(
+                <span class="r57 r">keyEventRecord</span>.<a href="ConsoleControl.cs.html#200e0018f0eb3bb3" class="i field">VirtualKeyCode</a>,
+                <span class="r57 r">keyEventRecord</span>.<a href="ConsoleControl.cs.html#3ba5fb532dbded4b" class="i field">UnicodeChar</a>,
+                (<a href="/System.Management.Automation/A.html#3c611791047998fb" class="t t">ControlKeyStates</a>)<span class="r57 r">keyEventRecord</span>.<a href="ConsoleControl.cs.html#084ac8e4e12a4f8a" class="i field">ControlKeyState</a>,
+                <span class="r57 r">keyEventRecord</span>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s FlushConsoleInputBuffer failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        void</b>
+        <a id="6531202092eb497c" href="../../R/6531202092eb497c.html" target="n" data-glyph="72,1" class="i method">FlushInputBuffer</a>()
+        {
+            <span class="i">ConsoleHandle</span> <span id="r59 rd" class="r59 r">handle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#082a79a70f5af6dc" class="i method">GetConioDeviceHandle</a>();
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#b6792028911d4516" class="i method">FlushConsoleInputBuffer</a>(<span class="r59 r">handle</span>);
+ 
+            <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> = 0;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s GetNumberOfConsoleInputEvents failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s PeekConsoleInput failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        bool</b>
+        <a id="f81f008842ad4f73" href="../../R/f81f008842ad4f73.html" target="n" data-glyph="102,1" class="i property">KeyAvailable</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> &gt; 0)
+                {
+                    <b>return</b> <b>true</b>;
+                }
+ 
+                <span class="i">ConsoleHandle</span> <span id="r60 rd" class="r60 r">handle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#082a79a70f5af6dc" class="i method">GetConioDeviceHandle</a>();
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#3515a77acb59df32" class="t t">INPUT_RECORD</a>[] <span id="r61 rd" class="r61 r">inputRecords</span> =
+                    <b>new</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#3515a77acb59df32" class="t t">INPUT_RECORD</a>[<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#e15d7b59091da7e8" class="i method">GetNumberOfConsoleInputEvents</a>(<span class="r60 r">handle</span>)];
+ 
+                <b>int</b> <span id="r62 rd" class="r62 r">actualNumberOfInputRecords</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#02768bae29db33fd" class="i method">PeekConsoleInput</a>(<span class="r60 r">handle</span>, <b>ref</b> <span class="r61 r">inputRecords</span>);
+ 
+                <b>for</b> (<b>int</b> <span id="r63 rd" class="r63 r">i</span> = 0; <span class="r63 r">i</span> &lt; <span class="r62 r">actualNumberOfInputRecords</span>; <span class="r63 r">i</span>++)
+                {
+                    <b>if</b> (((<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#909b13750b87fe9a" class="t t">InputRecordEventTypes</a>)<span class="r61 r">inputRecords</span>[<span class="r63 r">i</span>].<a href="ConsoleControl.cs.html#692b201be40e1be8" class="i field">EventType</a>) ==
+                            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#909b13750b87fe9a" class="t t">InputRecordEventTypes</a>.<a href="ConsoleControl.cs.html#207951a2afb6e3a2" class="i field">KEY_EVENT</a>)
+                    {
+                        <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<span class="r61 r">inputRecords</span>[<span class="r63 r">i</span>].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a> || <span class="r61 r">inputRecords</span>[<span class="r63 r">i</span>].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> != 0,
+                            <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;PeekConsoleInput returns a KeyEvent that is KeyDown and RepeatCount 0&quot;</span>));
+ 
+                        <b>if</b> (<span class="r61 r">inputRecords</span>[<span class="r63 r">i</span>].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#03dada6459abc972" class="i field">KeyDown</a> &amp;&amp; <span class="r61 r">inputRecords</span>[<span class="r63 r">i</span>].<a href="ConsoleControl.cs.html#cd0b04dc517b5739" class="i field">KeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> == 0)
+                        {
+                            <span class="c">// Sometimes Win32 ReadConsoleInput returns a KeyEvent record whose</span>
+                            <span class="c">// KeyDown is true and RepeatCount is zero. This type of record does not</span>
+                            <span class="c">// represent a keystroke.</span>
+                            <b>continue</b>;
+                        }
+ 
+                        <b>return</b> <b>true</b>;
+                    }
+                }
+ 
+                <b>return</b> <b>false</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set to null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If set to a string whose length is not between 1 to 1023</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If Win32&#39;s GetConsoleWindowTitle failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s SetConsoleWindowTitle failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="11e4964dd1cddd95" href="../../R/11e4964dd1cddd95.html" target="n" data-glyph="102,1" class="i property">WindowTitle</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a9a0c130d8d40cc4" class="i method">GetConsoleWindowTitle</a>();
+            }
+ 
+            <b>set</b>
+            {
+                <b>const int</b> <span id="r64 rd" class="r64 r">MaxWindowTitleLength</span> = 1023;
+                <b>const int</b> <span id="r65 rd" class="r65 r">MinWindowTitleLength</span> = 0;
+ 
+                <b>if</b> (<b>value</b> != <b>null</b>)
+                {
+                    <b>if</b> (
+                        <b>value</b>.<span class="i">Length</span> &gt;= <span class="r65 r">MinWindowTitleLength</span> &amp;&amp;
+                        <b>value</b>.<span class="i">Length</span> &lt;= <span class="r64 r">MaxWindowTitleLength</span>
+                        )
+                    {
+                        <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#24eecbbf011d99cc" class="i method">SetConsoleWindowTitle</a>(<b>value</b>);
+                    }
+                    <b>else</b> <b>if</b> (<b>value</b>.<span class="i">Length</span> &lt; <span class="r65 r">MinWindowTitleLength</span>)
+                    {
+                        <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<span class="s">&quot;value&quot;</span>, <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">WindowTitleTooShortError</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<span class="s">&quot;value&quot;</span>,
+                                                                 <span class="i">ConsoleHostRawUserInterfaceStrings</span>
+                                                                     .<span class="i">WindowTitleTooLongErrorTemplate</span>,
+                                                                 <span class="r64 r">MaxWindowTitleLength</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentNullException</span>(<span class="s">&quot;value&quot;</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r66 r">origin</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> location on screen buffer where contents will be written</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">contents</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> array of info to be written</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r66 r">origin</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is outside of the screen buffer.</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">contents</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is an ill-formed BufferCell array</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    it is illegal to write </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">contents</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> at </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r66 r">origin</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> in the buffer</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    there is not enough memory to complete calls to Win32&#39;s WriteConsoleOutput</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        void</b>
+        <a id="174f5a9e3abeeb8e" href="../../R/174f5a9e3abeeb8e.html" target="n" data-glyph="72,1" class="i method">SetBufferContents</a>(<a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r66 rd" class="r66 r">origin</span>, <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[,] <span id="r67 rd" class="r67 r">contents</span>)
+        {
+            <b>if</b> (<span class="r67 r">contents</span> == <b>null</b>)
+            {
+                <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentNullException</span>(<b>nameof</b>(<span class="r67 r">contents</span>));
+            }
+            <span class="c">// the origin must be within the window.</span>
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r68 rd" class="r68 r">bufferInfo</span>;
+ 
+            <span class="i">ConsoleHandle</span> <span id="r69 rd" class="r69 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r68 r">bufferInfo</span>);
+            <a href="#dd52c507d0c944ec" class="i method">CheckCoordinateWithinBuffer</a>(<b>ref</b> <span class="r66 r">origin</span>, <b>ref</b> <span class="r68 r">bufferInfo</span>, <b>nameof</b>(<span class="r66 r">origin</span>));
+ 
+            <span class="c">// The output is clipped by the console subsystem, so we don&#39;t have to check that the array exceeds the buffer</span>
+            <span class="c">// boundaries.</span>
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a8a1fecddbe032de" class="i method">WriteConsoleOutput</a>(<span class="r69 r">handle</span>, <span class="r66 r">origin</span>, <span class="r67 r">contents</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">region</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is completely outside of the screen buffer, it&#39;s a no-op.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">region</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> region with all elements = -1 means &quot;entire screen buffer&quot;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r71 r">fill</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> character and attribute to fill the screen buffer</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Provided for clearing regions -- less chatty than passing an array of cells.</span>
+        <span class="c">///</span><span class="c"> Clear screen is:</span>
+        <span class="c">///</span><span class="c">    SetBufferContents(new Rectangle(-1, -1, -1, -1), &#39; &#39;, ForegroundColor, BackgroundColor);</span>
+        <span class="c">///</span><span class="c">    CursorPosition = new Coordinates(0, 0);</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> fill.Type is ignored</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">region</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">&#39;s Left exceeds Right or Bottom exceeds Top</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    it is illegal to set </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">region</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> in the buffer with </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r71 r">fill</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If Win32&#39;s CreateFile fails</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s GetConsoleScreenBufferInfo fails</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    there is not enough memory to complete calls to Win32&#39;s WriteConsoleOutput</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        void</b>
+        <a id="fe8118eec9fabb22" href="../../R/fe8118eec9fabb22.html" target="n" data-glyph="72,1" class="i method">SetBufferContents</a>(<a href="/System.Management.Automation/A.html#bf950e0fd28033b0" class="t t">Rectangle</a> <span id="r70 rd" class="r70 r">region</span>, <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a> <span id="r71 rd" class="r71 r">fill</span>)
+        {
+            <span class="c">// make sure the rect is valid</span>
+            <b>if</b> (<span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> &lt; <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r70 r">region</span>),
+                    <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidRegionErrorTemplate</span>,
+                    <span class="s">&quot;region.Right&quot;</span>, <span class="s">&quot;region.Left&quot;</span>);
+            }
+ 
+            <b>if</b> (<span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> &lt; <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r70 r">region</span>),
+                    <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidRegionErrorTemplate</span>,
+                    <span class="s">&quot;region.Bottom&quot;</span>, <span class="s">&quot;region.Top&quot;</span>);
+            }
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r72 rd" class="r72 r">bufferInfo</span>;
+ 
+            <span class="i">ConsoleHandle</span> <span id="r73 rd" class="r73 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r72 r">bufferInfo</span>);
+ 
+            <b>int</b> <span id="r74 rd" class="r74 r">bufferWidth</span> = <span class="r72 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>;
+            <b>int</b> <span id="r75 rd" class="r75 r">bufferHeight</span> = <span class="r72 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>;
+            <span class="i">WORD</span> <span id="r76 rd" class="r76 r">attribute</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<span class="i">ColorToWORD</span>(<span class="r71 r">fill</span>.<a href="/System.Management.Automation/A.html#35e126b8f7133d81" class="i property">ForegroundColor</a>, <span class="r71 r">fill</span>.<a href="/System.Management.Automation/A.html#a2242c14e6ef19a3" class="i property">BackgroundColor</a>);
+            <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r77 rd" class="r77 r">origin</span> = <b>new</b> <span class="t">Coordinates</span>(0, 0);
+            <b>uint</b> <span id="r78 rd" class="r78 r">codePage</span>;
+ 
+            <span class="c">// region == {-1, -1, -1, -1} is a special case meaning &quot;the whole screen buffer&quot;</span>
+            <b>if</b> (<span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a> == -1 &amp;&amp; <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> == -1 &amp;&amp; <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a> == -1 &amp;&amp; <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> == -1)
+            {
+                <b>if</b> (<span class="r74 r">bufferWidth</span> % 2 == 1 &amp;&amp;
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#b4d45aadc9c3920c" class="i method">IsCJKOutputCodePage</a>(<b>out</b> <span class="r78 r">codePage</span>) &amp;&amp;
+                    <a href="#ad4536afdc8f85a9" class="i method">LengthInBufferCells</a>(<span class="r71 r">fill</span>.<a href="/System.Management.Automation/A.html#b94f4479d2cd5557" class="i property">Character</a>) == 2)
+                {
+                    <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r71 r">fill</span>));
+                }
+ 
+                <b>int</b> <span id="r79 rd" class="r79 r">cells</span> = <span class="r74 r">bufferWidth</span> * <span class="r75 r">bufferHeight</span>;
+ 
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a6a910c01b3d8537" class="i method">FillConsoleOutputCharacter</a>(<span class="r73 r">handle</span>, <span class="r71 r">fill</span>.<a href="/System.Management.Automation/A.html#b94f4479d2cd5557" class="i property">Character</a>, <span class="r79 r">cells</span>, <span class="r77 r">origin</span>);
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#dd39a6c393a8924a" class="i method">FillConsoleOutputAttribute</a>(<span class="r73 r">handle</span>, <span class="r76 r">attribute</span>, <span class="r79 r">cells</span>, <span class="r77 r">origin</span>);
+                <b>return</b>;
+            }
+ 
+            <span class="c">// The FillConsoleOutputXxx functions wrap at the end of a line.  So we need to convert our rectangular region</span>
+            <span class="c">// into line segments that don&#39;t extend past the end of a line.  We will also clip the rectangle so that the semantics</span>
+            <span class="c">// are the same as SetBufferContents(Coordinates, BufferCell[,]), which clips if the rectangle extends past the</span>
+            <span class="c">// screen buffer boundaries.</span>
+            <b>if</b> (<span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a> &gt;= <span class="r74 r">bufferWidth</span> || <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a> &gt;= <span class="r75 r">bufferHeight</span> || <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> &lt; 0 || <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> &lt; 0)
+            {
+                <span class="c">// region is entirely outside the buffer boundaries</span>
+                <a href="#4c626a318a0dddb1" class="i field">tracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;region outside boundaries&quot;</span>);
+                <b>return</b>;
+            }
+ 
+            <b>int</b> <span id="r80 rd" class="r80 r">lineStart</span> = <span class="i">Math</span>.<span class="i">Max</span>(0, <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>);
+            <b>int</b> <span id="r81 rd" class="r81 r">lineEnd</span> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r74 r">bufferWidth</span> - 1, <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a>);
+            <b>int</b> <span id="r82 rd" class="r82 r">lineLength</span> = <span class="r81 r">lineEnd</span> - <span class="r80 r">lineStart</span> + 1;
+ 
+            <span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> = <span class="r80 r">lineStart</span>;
+ 
+            <b>int</b> <span id="r83 rd" class="r83 r">firstRow</span> = <span class="i">Math</span>.<span class="i">Max</span>(0, <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>);
+            <b>int</b> <span id="r84 rd" class="r84 r">lastRow</span> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r75 r">bufferHeight</span> - 1, <span class="r70 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>);
+            <span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a> = <span class="r83 r">firstRow</span>;
+ 
+            <b>if</b> (<a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#b4d45aadc9c3920c" class="i method">IsCJKOutputCodePage</a>(<b>out</b> <span class="r78 r">codePage</span>))
+            {
+                <a href="/System.Management.Automation/A.html#bf950e0fd28033b0" class="t t">Rectangle</a> <span id="r85 rd" class="r85 r">existingRegion</span> = <b>new</b> <span class="t">Rectangle</span>(0, 0, 1, <span class="r84 r">lastRow</span> - <span class="r83 r">firstRow</span>);
+                <b>int</b> <span id="r86 rd" class="r86 r">charLength</span> = <a href="#ad4536afdc8f85a9" class="i method">LengthInBufferCells</a>(<span class="r71 r">fill</span>.<a href="/System.Management.Automation/A.html#b94f4479d2cd5557" class="i property">Character</a>);
+                <span class="c">// Check left edge</span>
+                <b>if</b> (<span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> &gt; 0)
+                {
+                    <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[,] <span id="r87 rd" class="r87 r">leftExisting</span> = <b>new</b> <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[<span class="r85 r">existingRegion</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> + 1, 2];
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#9f652e9aab6b1d6d" class="i method">ReadConsoleOutputCJK</a>(<span class="r73 r">handle</span>, <span class="r78 r">codePage</span>,
+                        <b>new</b> <span class="t">Coordinates</span>(<span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> - 1, <span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>), <span class="r85 r">existingRegion</span>, <b>ref</b> <span class="r87 r">leftExisting</span>);
+                    <b>for</b> (<b>int</b> <span id="r88 rd" class="r88 r">r</span> = 0; <span class="r88 r">r</span> &lt;= <span class="r85 r">existingRegion</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>; <span class="r88 r">r</span>++)
+                    {
+                        <b>if</b> (<span class="r87 r">leftExisting</span>[<span class="r88 r">r</span>, 0].<a href="/System.Management.Automation/A.html#2dbed14bfac26d72" class="i property">BufferCellType</a> == <a href="/System.Management.Automation/A.html#3c3f2b2b5dfb7582" class="t t">BufferCellType</a>.<a href="/System.Management.Automation/A.html#f6d6d49b392106b7" class="i field">Leading</a>)
+                        {
+                            <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r71 r">fill</span>));
+                        }
+                    }
+                }
+                <span class="c">// Check right edge</span>
+                <b>if</b> (<span class="r81 r">lineEnd</span> == <span class="r74 r">bufferWidth</span> - 1)
+                {
+                    <b>if</b> (<span class="r86 r">charLength</span> == 2)
+                    {
+                        <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r71 r">fill</span>));
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="c">// use ReadConsoleOutputCJK because checking the left and right edges of the existing output</span>
+                    <span class="c">// is NOT needed</span>
+                    <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[,] <span id="r89 rd" class="r89 r">rightExisting</span> = <b>new</b> <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[<span class="r85 r">existingRegion</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> + 1, 2];
+                    <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#9f652e9aab6b1d6d" class="i method">ReadConsoleOutputCJK</a>(<span class="r73 r">handle</span>, <span class="r78 r">codePage</span>,
+                        <b>new</b> <span class="t">Coordinates</span>(<span class="r81 r">lineEnd</span>, <span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>), <span class="r85 r">existingRegion</span>, <b>ref</b> <span class="r89 r">rightExisting</span>);
+                    <b>if</b> (<span class="r82 r">lineLength</span> % 2 == 0)
+                    {
+                        <b>for</b> (<b>int</b> <span id="r90 rd" class="r90 r">r</span> = 0; <span class="r90 r">r</span> &lt;= <span class="r85 r">existingRegion</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>; <span class="r90 r">r</span>++)
+                        {
+                            <b>if</b> (<span class="r89 r">rightExisting</span>[<span class="r90 r">r</span>, 0].<a href="/System.Management.Automation/A.html#2dbed14bfac26d72" class="i property">BufferCellType</a> == <a href="/System.Management.Automation/A.html#3c3f2b2b5dfb7582" class="t t">BufferCellType</a>.<a href="/System.Management.Automation/A.html#f6d6d49b392106b7" class="i field">Leading</a>)
+                            {
+                                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r71 r">fill</span>));
+                            }
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <b>for</b> (<b>int</b> <span id="r91 rd" class="r91 r">r</span> = 0; <span class="r91 r">r</span> &lt;= <span class="r85 r">existingRegion</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>; <span class="r91 r">r</span>++)
+                        {
+                            <b>if</b> (<span class="r89 r">rightExisting</span>[<span class="r91 r">r</span>, 0].<a href="/System.Management.Automation/A.html#2dbed14bfac26d72" class="i property">BufferCellType</a> == <a href="/System.Management.Automation/A.html#3c3f2b2b5dfb7582" class="t t">BufferCellType</a>.<a href="/System.Management.Automation/A.html#f6d6d49b392106b7" class="i field">Leading</a> ^ <span class="r86 r">charLength</span> == 2)
+                            {
+                                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r71 r">fill</span>));
+                            }
+                        }
+                    }
+                }
+ 
+                <b>if</b> (<span class="r82 r">lineLength</span> % 2 == 1)
+                {
+                    <span class="r82 r">lineLength</span>++;
+                }
+            }
+ 
+            <b>for</b> (<b>int</b> <span id="r92 rd" class="r92 r">row</span> = <span class="r83 r">firstRow</span>; <span class="r92 r">row</span> &lt;= <span class="r84 r">lastRow</span>; ++<span class="r92 r">row</span>)
+            {
+                <span class="r77 r">origin</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a> = <span class="r92 r">row</span>;
+ 
+                <span class="c">// we know that lineStart and lineEnd will always be within the buffer area because of previous boundary</span>
+                <span class="c">// checks already done.</span>
+ 
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a6a910c01b3d8537" class="i method">FillConsoleOutputCharacter</a>(<span class="r73 r">handle</span>, <span class="r71 r">fill</span>.<a href="/System.Management.Automation/A.html#b94f4479d2cd5557" class="i property">Character</a>, <span class="r82 r">lineLength</span>, <span class="r77 r">origin</span>);
+                <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#dd39a6c393a8924a" class="i method">FillConsoleOutputAttribute</a>(<span class="r73 r">handle</span>, <span class="r76 r">attribute</span>, <span class="r82 r">lineLength</span>, <span class="r77 r">origin</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> If the rectangle is invalid, ie, Right exceeds Left OR Bottom exceeds Top,</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">region</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> area on screen buffer to be read</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> an array of BufferCell containing screen buffer contents</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">region</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">&#39;s Left exceeds Right or Bottom exceeds Top.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining a handle to the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    obtaining information about the buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    there is not enough memory to complete calls to Win32&#39;s ReadConsoleOutput</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b>
+        <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[,] <a id="acb15dea98fd3fa3" href="../../R/acb15dea98fd3fa3.html" target="n" data-glyph="72,1" class="i method">GetBufferContents</a>(<a href="/System.Management.Automation/A.html#bf950e0fd28033b0" class="t t">Rectangle</a> <span id="r93 rd" class="r93 r">region</span>)
+        {
+            <span class="c">// make sure the rect is valid</span>
+            <b>if</b> (<span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> &lt; <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r93 r">region</span>),
+                    <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidRegionErrorTemplate</span>,
+                    <span class="s">&quot;region.Right&quot;</span>, <span class="s">&quot;region.Left&quot;</span>);
+            }
+ 
+            <b>if</b> (<span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> &lt; <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r93 r">region</span>),
+                    <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">InvalidRegionErrorTemplate</span>,
+                    <span class="s">&quot;region.Bottom&quot;</span>, <span class="s">&quot;region.Top&quot;</span>);
+            }
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r94 rd" class="r94 r">bufferInfo</span>;
+ 
+            <span class="i">ConsoleHandle</span> <span id="r95 rd" class="r95 r">handle</span> = <a href="#15bb71eef61620a9" class="i method">GetBufferInfo</a>(<b>out</b> <span class="r94 r">bufferInfo</span>);
+            <b>int</b> <span id="r96 rd" class="r96 r">bufferWidth</span> = <span class="r94 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>;
+            <b>int</b> <span id="r97 rd" class="r97 r">bufferHeight</span> = <span class="r94 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>;
+ 
+            <b>if</b> (<span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a> &gt;= <span class="r96 r">bufferWidth</span> || <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a> &gt;= <span class="r97 r">bufferHeight</span> || <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> &lt; 0 || <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> &lt; 0)
+            {
+                <span class="c">// region is entirely outside the buffer boundaries</span>
+                <a href="#4c626a318a0dddb1" class="i field">tracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;region outside boundaries&quot;</span>);
+                <b>return</b> <b>new</b> <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[0, 0];
+            }
+ 
+            <b>int</b> <span id="r98 rd" class="r98 r">colStart</span> = <span class="i">Math</span>.<span class="i">Max</span>(0, <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>);
+            <b>int</b> <span id="r99 rd" class="r99 r">colEnd</span> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r96 r">bufferWidth</span> - 1, <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a>);
+            <b>int</b> <span id="r100 rd" class="r100 r">rowStart</span> = <span class="i">Math</span>.<span class="i">Max</span>(0, <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>);
+            <b>int</b> <span id="r101 rd" class="r101 r">rowEnd</span> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r97 r">bufferHeight</span> - 1, <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>);
+            <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r102 rd" class="r102 r">origin</span> = <b>new</b> <span class="t">Coordinates</span>(<span class="r98 r">colStart</span>, <span class="r100 r">rowStart</span>);
+ 
+            <span class="c">// contentsRegion indicates the area in contents (declared below) in which</span>
+            <span class="c">// the data read from ReadConsoleOutput is stored.</span>
+            <a href="/System.Management.Automation/A.html#bf950e0fd28033b0" class="t t">Rectangle</a> <span id="r103 rd" class="r103 r">contentsRegion</span> = <b>new</b> <span class="t">Rectangle</span>();
+            <span class="r103 r">contentsRegion</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a> = <span class="i">Math</span>.<span class="i">Max</span>(0, 0 - <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>);
+            <span class="r103 r">contentsRegion</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a> = <span class="i">Math</span>.<span class="i">Max</span>(0, 0 - <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>);
+            <span class="r103 r">contentsRegion</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> = <span class="r103 r">contentsRegion</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a> + (<span class="r99 r">colEnd</span> - <span class="r98 r">colStart</span>);
+            <span class="r103 r">contentsRegion</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> = <span class="r103 r">contentsRegion</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a> + (<span class="r101 r">rowEnd</span> - <span class="r100 r">rowStart</span>);
+ 
+            <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[,] <span id="r104 rd" class="r104 r">contents</span> = <b>new</b> <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a>[<span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a> - <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a> + 1,
+                                                    <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a> - <span class="r93 r">region</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a> + 1];
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#c635f6fe721b9351" class="i method">ReadConsoleOutput</a>(<span class="r95 r">handle</span>, <span class="r102 r">origin</span>, <span class="r103 r">contentsRegion</span>, <b>ref</b> <span class="r104 r">contents</span>);
+ 
+            <b>return</b> <span class="r104 r">contents</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r105 r">source</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> area to be moved</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r106 r">destination</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> top left corner to which source to be moved</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r107 r">clip</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> area to be updated caused by the move</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r108 r">fill</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> character and attribute to fill the area vacated by the move</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If obtaining the active screen buffer failed</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Call to Win32&#39;s ScrollConsoleScreenBuffer failed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        void</b>
+        <a id="dbf465de05ea7774" href="../../R/dbf465de05ea7774.html" target="n" data-glyph="72,1" class="i method">ScrollBufferContents</a>
+        (
+            <a href="/System.Management.Automation/A.html#bf950e0fd28033b0" class="t t">Rectangle</a> <span id="r105 rd" class="r105 r">source</span>,
+            <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r106 rd" class="r106 r">destination</span>,
+            <a href="/System.Management.Automation/A.html#bf950e0fd28033b0" class="t t">Rectangle</a> <span id="r107 rd" class="r107 r">clip</span>,
+            <a href="/System.Management.Automation/A.html#9e00d99644eab7e7" class="t t">BufferCell</a> <span id="r108 rd" class="r108 r">fill</span>
+        )
+        {
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6cd4a96da231ccf6" class="t t">SMALL_RECT</a> <span id="r109 rd" class="r109 r">scrollRectangle</span>;
+            <span class="r109 r">scrollRectangle</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> = (<b>short</b>)<span class="r105 r">source</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>;
+            <span class="r109 r">scrollRectangle</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> = (<b>short</b>)<span class="r105 r">source</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a>;
+            <span class="r109 r">scrollRectangle</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> = (<b>short</b>)<span class="r105 r">source</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>;
+            <span class="r109 r">scrollRectangle</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> = (<b>short</b>)<span class="r105 r">source</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>;
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#6cd4a96da231ccf6" class="t t">SMALL_RECT</a> <span id="r110 rd" class="r110 r">clipRectangle</span>;
+            <span class="r110 r">clipRectangle</span>.<a href="ConsoleControl.cs.html#66ce7deb70bef9f3" class="i field">Left</a> = (<b>short</b>)<span class="r107 r">clip</span>.<a href="/System.Management.Automation/A.html#f9f9b1a5f1ea8921" class="i property">Left</a>;
+            <span class="r110 r">clipRectangle</span>.<a href="ConsoleControl.cs.html#0016188fa9c34162" class="i field">Right</a> = (<b>short</b>)<span class="r107 r">clip</span>.<a href="/System.Management.Automation/A.html#3b92808be89977f9" class="i property">Right</a>;
+            <span class="r110 r">clipRectangle</span>.<a href="ConsoleControl.cs.html#40d524bbcb015b61" class="i field">Top</a> = (<b>short</b>)<span class="r107 r">clip</span>.<a href="/System.Management.Automation/A.html#b735ee5b0a172601" class="i property">Top</a>;
+            <span class="r110 r">clipRectangle</span>.<a href="ConsoleControl.cs.html#2a466af33d30108e" class="i field">Bottom</a> = (<b>short</b>)<span class="r107 r">clip</span>.<a href="/System.Management.Automation/A.html#ac779af5ccbcb1f6" class="i property">Bottom</a>;
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#00043fcf4690a445" class="t t">COORD</a> <span id="r111 rd" class="r111 r">origin</span>;
+            <span class="r111 r">origin</span>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a> = (<b>short</b>)<span class="r106 r">destination</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a>;
+            <span class="r111 r">origin</span>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a> = (<b>short</b>)<span class="r106 r">destination</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>;
+ 
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#9ad6afa10191aa8a" class="t t">CHAR_INFO</a> <span id="r112 rd" class="r112 r">fillChar</span>;
+ 
+            <span class="r112 r">fillChar</span>.<a href="ConsoleControl.cs.html#99811542029cf255" class="i field">UnicodeChar</a> = <span class="r108 r">fill</span>.<a href="/System.Management.Automation/A.html#b94f4479d2cd5557" class="i property">Character</a>;
+            <span class="r112 r">fillChar</span>.<a href="ConsoleControl.cs.html#740512f5552ef4e2" class="i field">Attributes</a> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<span class="i">ColorToWORD</span>(<span class="r108 r">fill</span>.<a href="/System.Management.Automation/A.html#35e126b8f7133d81" class="i property">ForegroundColor</a>, <span class="r108 r">fill</span>.<a href="/System.Management.Automation/A.html#a2242c14e6ef19a3" class="i property">BackgroundColor</a>);
+ 
+            <span class="i">ConsoleHandle</span> <span id="r113 rd" class="r113 r">consoleHandle</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#d72136ddad017191" class="i method">GetActiveScreenBufferHandle</a>();
+            <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a27674f6e46b93e0" class="i method">ScrollConsoleScreenBuffer</a>
+            (
+                <span class="r113 r">consoleHandle</span>,
+                <span class="r109 r">scrollRectangle</span>,
+                <span class="r110 r">clipRectangle</span>,
+                <span class="r111 r">origin</span>,
+                <span class="r112 r">fillChar</span>
+            );
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r114 r">s</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If Win32&#39;s WideCharToMultiByte fails</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        int</b> <a id="4c0e2a9047c59726" href="../../R/4c0e2a9047c59726.html" target="n" data-glyph="72,1" class="i method">LengthInBufferCells</a>(<b>string</b> <span id="r114 rd" class="r114 r">s</span>)
+        {
+            <b>return</b> <a href="#718850df43965d9a" class="k">this</a>.<a href="#6163641d500c8ea1" class="i method">LengthInBufferCells</a>(<span class="r114 r">s</span>, 0);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r115 r">s</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r116 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If Win32&#39;s WideCharToMultiByte fails</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        int</b> <a id="6163641d500c8ea1" href="../../R/6163641d500c8ea1.html" target="n" data-glyph="72,1" class="i method">LengthInBufferCells</a>(<b>string</b> <span id="r115 rd" class="r115 r">s</span>, <b>int</b> <span id="r116 rd" class="r116 r">offset</span>)
+        {
+            <b>if</b> (<span class="r115 r">s</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentNullException</span>(<span class="s">&quot;str&quot;</span>);
+            }
+ 
+            <b>return</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#b78d80746511c2bb" class="i method">LengthInBufferCells</a>(<span class="r115 r">s</span>, <span class="r116 r">offset</span>, <a href="#bc2d195ae1b5f992" class="i field">parent</a>.<a href="ConsoleHostUserInterface.cs.html#5db1812edea1b244" class="i property">SupportsVirtualTerminal</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r117 r">c</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If Win32&#39;s WideCharToMultiByte fails</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override
+        int</b> <a id="ad4536afdc8f85a9" href="../../R/ad4536afdc8f85a9.html" target="n" data-glyph="72,1" class="i method">LengthInBufferCells</a>(<b>char</b> <span id="r117 rd" class="r117 r">c</span>)
+        {
+            <b>return</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#e26e981e21022d34" class="i method">LengthInBufferCells</a>(<span class="r117 r">c</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> internal
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clear the ReadKey cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span><span class="c">/&gt;</span>
+        <b>internal void</b> <a id="35a22fc56a5f740a" href="../../R/35a22fc56a5f740a.html" target="n" data-glyph="74,1" class="i method">ClearKeyCache</a>()
+        {
+            <a href="#77b1f2d5ab273d14" class="i field">cachedKeyEvent</a>.<a href="ConsoleControl.cs.html#09193d9fb3bc908c" class="i field">RepeatCount</a> = 0;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> internal
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> helpers
+ 
+        <span class="c">// pass-by-ref for speed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r118 r">c</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r119 r">bufferInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r120 r">paramName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentOutOfRangeException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r118 r">c</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is outside of the output buffer area</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private static
+        void</b>
+        <a id="dd52c507d0c944ec" href="../../R/dd52c507d0c944ec.html" target="n" data-glyph="76,1" class="i method">CheckCoordinateWithinBuffer</a>(<b>ref</b> <a href="/System.Management.Automation/A.html#c6f6da6e12de292e" class="t t">Coordinates</a> <span id="r118 rd" class="r118 r">c</span>, <b>ref</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r119 rd" class="r119 r">bufferInfo</span>, <b>string</b> <span id="r120 rd" class="r120 r">paramName</span>)
+        {
+            <b>if</b> (<span class="r118 r">c</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> &lt; 0 || <span class="r118 r">c</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a> &gt; <span class="r119 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#0742affafd7a86ed" class="i field">X</a>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(
+                    <span class="r120 r">paramName</span> + <span class="s">&quot;.X&quot;</span>,
+                    <span class="r118 r">c</span>.<a href="/System.Management.Automation/A.html#62aff8c33e5f09b9" class="i property">X</a>,
+                    <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">CoordinateOutOfBufferErrorTemplate</span>, <span class="r119 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>);
+            }
+ 
+            <b>if</b> (<span class="r118 r">c</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a> &lt; 0 || <span class="r118 r">c</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a> &gt; <span class="r119 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>.<a href="ConsoleControl.cs.html#3fd8b6ba4892d18e" class="i field">Y</a>)
+            {
+                <b>throw</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentOutOfRangeException</span>(
+                    <span class="r120 r">paramName</span> + <span class="s">&quot;.Y&quot;</span>,
+                    <span class="r118 r">c</span>.<a href="/System.Management.Automation/A.html#168280a926d1b9da" class="i property">Y</a>,
+                    <span class="i">ConsoleHostRawUserInterfaceStrings</span>.<span class="i">CoordinateOutOfBufferErrorTemplate</span>, <span class="r119 r">bufferInfo</span>.<a href="ConsoleControl.cs.html#8948dd4587a0e93f" class="i field">BufferSize</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get output buffer info.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r121 r">bufferInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If Win32&#39;s CreateFile fails</span>
+        <span class="c">///</span><span class="c">    OR</span>
+        <span class="c">///</span><span class="c">    Win32&#39;s GetConsoleScreenBufferInfo fails</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private static</b>
+        <span class="i">ConsoleHandle</span>
+        <a id="15bb71eef61620a9" href="../../R/15bb71eef61620a9.html" target="n" data-glyph="76,1" class="i method">GetBufferInfo</a>(<b>out</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#bddc36d28ff118a0" class="t t">CONSOLE_SCREEN_BUFFER_INFO</a> <span id="r121 rd" class="r121 r">bufferInfo</span>)
+        {
+            <span class="i">ConsoleHandle</span> <span id="r122 rd" class="r122 r">result</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#d72136ddad017191" class="i method">GetActiveScreenBufferHandle</a>();
+            <span class="r121 r">bufferInfo</span> = <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#a992b7826acc25f2" class="i method">GetConsoleScreenBufferInfo</a>(<span class="r122 r">result</span>);
+            <b>return</b> <span class="r122 r">result</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> helpers
+ 
+        <b>private readonly</b> <span class="i">ConsoleColor</span> <a id="2a19891ea93d42c6" href="../../R/2a19891ea93d42c6.html" target="n" data-glyph="46,1" class="i field">defaultForeground</a> = <span class="i">ConsoleColor</span>.<span class="i">Gray</span>;
+ 
+        <b>private readonly</b> <span class="i">ConsoleColor</span> <a id="c53e39b6b4af5a77" href="../../R/c53e39b6b4af5a77.html" target="n" data-glyph="46,1" class="i field">defaultBackground</a> = <span class="i">ConsoleColor</span>.<span class="i">Black</span>;
+ 
+        <b>private readonly</b> <a href="../../P/b737197b2d219638.html#b737197b2d219638" class="t t">ConsoleHostUserInterface</a> <a id="bc2d195ae1b5f992" href="../../R/bc2d195ae1b5f992.html" target="n" data-glyph="46,1" class="i field">parent</a> = <b>null</b>;
+ 
+        <b>private</b> <a href="ConsoleControl.cs.html#e8b5dc8576b8da6f" class="t t">ConsoleControl</a>.<a href="ConsoleControl.cs.html#e73d8325cf12163f" class="t t">KEY_EVENT_RECORD</a> <a id="77b1f2d5ab273d14" href="../../R/77b1f2d5ab273d14.html" target="n" data-glyph="46,1" class="i field">cachedKeyEvent</a>;
+ 
+        [<span class="i">TraceSourceAttribute</span>(<span class="s">&quot;ConsoleHostRawUserInterface&quot;</span>, <span class="s">&quot;Console host&#39;s subclass of S.M.A.Host.RawConsole&quot;</span>)]
+        <b>private static readonly</b> <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="4c626a318a0dddb1" href="../../R/4c626a318a0dddb1.html" target="n" data-glyph="46,1" class="i field">tracer</a> = <a href="/System.Management.Automation/A.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">GetTracer</span>(<span class="s">&quot;ConsoleHostRawUserInterface&quot;</span>, <span class="s">&quot;Console host&#39;s subclass of S.M.A.Host.RawConsole&quot;</span>);
+    }
+}   <span class="c">// namespace</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">
+// Managed code only implementation for portability
+ 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Management.Automation;
+using System.Management.Automation.Runspaces;
+using System.Management.Automation.Host;
+using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
+ 
+namespace Microsoft.PowerShell
+{
+    // this is all originally from https://msdn.microsoft.com/library/ee706570%28v=vs.85%29.aspx
+ 
+    internal sealed class ConsoleHostRawUserInterface : PSHostRawUserInterface
+    {
+ 
+        private readonly ConsoleHostUserInterface _parent = null;
+ 
+        internal ConsoleHostRawUserInterface(ConsoleHostUserInterface mshConsole) : base()
+        {
+            _parent = mshConsole;
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the background color of the displayed text.
+        /// This maps to the corresponding Console.Background property.
+        /// &lt;/summary&gt;
+        public override ConsoleColor BackgroundColor
+        {
+            get { return Console.BackgroundColor; }
+ 
+            set { Console.BackgroundColor = value; }
+        }
+ 
+        // TODO: Make wrap width user-customizable.
+        private static Size s_wrapSize = new Size(80, 40);
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the size of the host buffer.
+        /// &lt;/summary&gt;
+        public override Size BufferSize
+        {
+            get
+            {
+                // Console can return zero when a pseudo-TTY is allocated, which
+                // is useless for us. Instead, map to the wrap size.
+                return Console.BufferWidth == 0 || Console.BufferHeight == 0
+                    ? s_wrapSize
+                    : new Size(Console.BufferWidth, Console.BufferHeight);
+            }
+ 
+            set
+            {
+                Console.SetBufferSize(value.Width, value.Height);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the cursor position.
+        /// &lt;/summary&gt;
+        public override Coordinates CursorPosition
+        {
+            get
+            {
+                return new Coordinates(Console.CursorLeft, Console.CursorTop);
+            }
+ 
+            set
+            {
+                Console.SetCursorPosition(value.X &lt; 0 ? 0 : value.X,
+                                          value.Y &lt; 0 ? 0 : value.Y);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the size of the displayed cursor.
+        /// This maps to the corresponding Console.CursorSize property.
+        /// &lt;/summary&gt;
+        public override int CursorSize
+        {
+            // Future porting note: this API throws on Windows when output is
+            // redirected, but never throws on Unix because it&#39;s fake.
+            get { return Console.CursorSize; }
+ 
+            set { Console.CursorSize = value; }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the foreground color of the displayed text.
+        /// This maps to the corresponding Console.ForegroundColor property.
+        /// &lt;/summary&gt;
+        public override ConsoleColor ForegroundColor
+        {
+            get { return Console.ForegroundColor; }
+ 
+            set { Console.ForegroundColor = value; }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets a value indicating whether the user has pressed a key. This maps
+        /// to the corresponding Console.KeyAvailable property.
+        /// &lt;/summary&gt;
+        public override bool KeyAvailable
+        {
+            get { return Console.KeyAvailable; }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets the dimensions of the largest window that could be rendered in
+        /// the current display, if the buffer was at the least that large.
+        /// This maps to the MaxWindowSize.
+        /// &lt;/summary&gt;
+        public override Size MaxPhysicalWindowSize
+        {
+            get { return MaxWindowSize; }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets the dimensions of the largest window size that can be
+        /// displayed. This maps to the Console.LargestWindowWidth and
+        /// Console.LargestWindowHeight properties to determine the returned
+        /// value of this property.
+        /// &lt;/summary&gt;
+        public override Size MaxWindowSize
+        {
+            get
+            {
+                // Console can return zero when a pseudo-TTY is allocated, which
+                // is useless for us. Instead, map to the wrap size.
+                return Console.LargestWindowWidth == 0 || Console.LargestWindowHeight == 0
+                    ? s_wrapSize
+                    : new Size(Console.LargestWindowWidth, Console.LargestWindowHeight);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the position of the displayed window. This maps to the
+        /// Console window position APIs to determine the returned value of this
+        /// property.
+        /// &lt;/summary&gt;
+        public override Coordinates WindowPosition
+        {
+            get { return new Coordinates(Console.WindowLeft, Console.WindowTop); }
+ 
+            set { Console.SetWindowPosition(value.X, value.Y); }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the size of the displayed window. This example
+        /// uses the corresponding Console window size APIs to determine the
+        /// returned value of this property.
+        /// &lt;/summary&gt;
+        public override Size WindowSize
+        {
+            get
+            {
+                // Console can return zero when a pseudo-TTY is allocated, which
+                // is useless for us. Instead, map to the wrap size.
+                return Console.WindowWidth == 0 || Console.WindowHeight == 0
+                    ? s_wrapSize
+                    : new Size(Console.WindowWidth, Console.WindowHeight);
+            }
+ 
+            set
+            {
+                Console.SetWindowSize(value.Width, value.Height);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Cached Window Title, for systems that needs it.
+        /// &lt;/summary&gt;
+        private string _title = string.Empty;
+ 
+        /// &lt;summary&gt;
+        /// Gets or sets the title of the displayed window. The example
+        /// maps the Console.Title property to the value of this property.
+        /// &lt;/summary&gt;
+        public override string WindowTitle
+        {
+            get
+            {
+                // Console throws an exception on Unix platforms, so we handle
+                // caching and returning the Window title ourselves.
+                return Platform.IsWindows ? Console.Title : _title;
+            }
+ 
+            set
+            {
+                Console.Title = value;
+                _title = value;
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// This API resets the input buffer.
+        /// &lt;/summary&gt;
+        public override void FlushInputBuffer()
+        {
+            if (!Console.IsInputRedirected)
+            {
+                Console.OpenStandardInput().Flush();
+            }
+        }
+ 
+        public void ScrollBuffer(int lines)
+        {
+            for (int i = 0; i &lt; lines; ++i)
+            {
+                Console.Out.Write(&#39;\n&#39;);
+ 
+            }
+        }
+ 
+        internal struct COORD
+        {
+            internal short X;
+ 
+            internal short Y;
+ 
+            public override string ToString()
+            {
+                return string.Format(CultureInfo.InvariantCulture, &quot;{0},{1}&quot;, X, Y);
+            }
+        }
+ 
+        internal struct SMALL_RECT
+        {
+            internal short Left;
+ 
+            internal short Top;
+ 
+            internal short Right;
+ 
+            internal short Bottom;
+ 
+            public override string ToString()
+            {
+                return string.Format(CultureInfo.InvariantCulture, &quot;{0},{1},{2},{3}&quot;, Left, Top, Right, Bottom);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// This API returns a rectangular region of the screen buffer. In
+        /// this example this functionality is not needed so the method throws
+        /// a NotImplementException exception.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;rectangle&quot;&gt;Defines the size of the rectangle.&lt;/param&gt;
+        /// &lt;returns&gt;Throws a NotImplementedException exception.&lt;/returns&gt;
+        public override BufferCell[,] GetBufferContents(Rectangle rectangle)
+        {
+            throw new NotImplementedException(&quot;The method or operation is not implemented.&quot;);
+        }
+ 
+        /// &lt;summary&gt;
+        /// This API reads a pressed, released, or pressed and released keystroke
+        /// from the keyboard device, blocking processing until a keystroke is
+        /// typed that matches the specified keystroke options.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;options&quot;&gt;Only NoEcho is supported.&lt;/param&gt;
+        public override KeyInfo ReadKey(ReadKeyOptions options)
+        {
+            ConsoleKeyInfo key = Console.ReadKey((options &amp; ReadKeyOptions.NoEcho) != 0);
+            return new KeyInfo((int)key.Key, key.KeyChar, new ControlKeyStates(), true);
+        }
+ 
+        /// &lt;summary&gt;
+        /// This API crops a region of the screen buffer. In this example
+        /// this functionality is not needed so the method throws a
+        /// NotImplementException exception.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;source&quot;&gt;The region of the screen to be scrolled.&lt;/param&gt;
+        /// &lt;param name=&quot;destination&quot;&gt;The region of the screen to receive the
+        /// source region contents.&lt;/param&gt;
+        /// &lt;param name=&quot;clip&quot;&gt;The region of the screen to include in the operation.&lt;/param&gt;
+        /// &lt;param name=&quot;fill&quot;&gt;The character and attributes to be used to fill all cell.&lt;/param&gt;
+        public override void ScrollBufferContents(Rectangle source, Coordinates destination, Rectangle clip, BufferCell fill)
+        {
+            throw new NotImplementedException(&quot;The method or operation is not implemented.&quot;);
+        }
+ 
+        /// &lt;summary&gt;
+        /// This method copies an array of buffer cells into the screen buffer
+        /// at a specified location.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;origin&quot;&gt;The parameter used to set the origin where the buffer where begin writing to.&lt;/param&gt;
+        /// &lt;param name=&quot;contents&quot;&gt;The parameter used to contain the contents to be written to the buffer.&lt;/param&gt;
+        public override void SetBufferContents(Coordinates origin,
+                                               BufferCell[,] contents)
+        {
+            // if there are no contents, there is nothing to set the buffer to
+            if (contents == null)
+            {
+                PSTraceSource.NewArgumentNullException(&quot;contents&quot;);
+            }
+            // if the cursor is on the last line, we need to make more space to print the specified buffer
+            if (origin.Y == BufferSize.Height - 1 &amp;&amp; origin.X &gt;= BufferSize.Width)
+            {
+                // for each row in the buffer, create a new line
+                int rows = contents.GetLength(0);
+                ScrollBuffer(rows);
+                // for each row in the buffer, move the cursor y up to the beginning of the created blank space
+                // but not above zero
+                if (origin.Y &gt;= rows)
+                {
+                    origin.Y -= rows;
+                }
+            }
+ 
+</span><span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            // Make sure that the physical cursor position matches where we think it is.
+            // This is a problem on *nix, because input that the user types is echoed
+            // and that moves the cursor. As a consequence, the cursor needs to be repositioned
+            // before we update the screen.
+            CursorPosition = origin;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+<span class="e">
+            // iterate through the buffer to set
+            foreach (var charitem in contents)
+            {
+                // set the cursor to false to prevent cursor flicker
+                Console.CursorVisible = false;
+ 
+                // if x is exceeding buffer width, reset to the next line
+                if (origin.X &gt;= BufferSize.Width)
+                {
+                    origin.X = 0;
+                }
+ 
+                // write the character from contents
+                Console.Out.Write(charitem.Character);
+            }
+ 
+            // reset the cursor to the original position
+            CursorPosition = origin;
+            // reset the cursor to visible
+            Console.CursorVisible = true;
+        }
+ 
+        /// &lt;summary&gt;
+        /// This method copies a given character, foreground color, and background
+        /// color to a region of the screen buffer. In this example this
+        /// functionality is not needed so the method throws a
+        /// NotImplementException exception./// &lt;/summary&gt;
+        /// &lt;param name=&quot;rectangle&quot;&gt;Defines the area to be filled.&lt;/param&gt;
+        /// &lt;param name=&quot;fill&quot;&gt;Defines the fill character.&lt;/param&gt;
+        public override void SetBufferContents(Rectangle rectangle, BufferCell fill)
+        {
+            throw new NotImplementedException(&quot;The method or operation is not implemented.&quot;);
+        }
+ 
+        /// &lt;summary&gt;
+        /// See base class.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;s&quot;&gt;&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+ 
+        public override
+        int LengthInBufferCells(string s)
+        {
+            return this.LengthInBufferCells(s, 0);
+        }
+ 
+        /// &lt;summary&gt;
+        /// See base class.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;s&quot;&gt;&lt;/param&gt;
+        /// &lt;param name=&quot;offset&quot;&gt;&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+ 
+        public override
+        int LengthInBufferCells(string s, int offset)
+        {
+            if (s == null)
+            {
+                throw PSTraceSource.NewArgumentNullException(&quot;str&quot;);
+            }
+ 
+            return ConsoleControl.LengthInBufferCells(s, offset, _parent.SupportsVirtualTerminal);
+        }
+    }
+}
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+</pre></td></tr></table></div></body></html>

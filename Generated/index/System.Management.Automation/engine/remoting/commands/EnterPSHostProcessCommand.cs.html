@@ -1,0 +1,844 @@
+﻿<!DOCTYPE html>
+<html><head><title>EnterPSHostProcessCommand.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(835);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/commands/EnterPSHostProcessCommand.cs" target="_top">engine\remoting\commands\EnterPSHostProcessCommand.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This cmdlet enters into an interactive session with the specified local process by</span>
+    <span class="c">///</span><span class="c"> creating a remote runspace to the process and pushing it on the current PSHost.</span>
+    <span class="c">///</span><span class="c"> If the selected process does not contain PowerShell then an error message will result.</span>
+    <span class="c">///</span><span class="c"> If the current user does not have sufficient privileges to attach to the selected process</span>
+    <span class="c">///</span><span class="c"> then an error message will result.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#d056c4b8c99405e5" class="t t">VerbsCommon</a>.<a href="../../../utils/Verbs.cs.html#a39399adfa6ea6ba" class="i field">Enter</a>, <span class="s">&quot;PSHostProcess&quot;</span>, <span class="i">DefaultParameterSetName</span> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#9937f40a6acbd563" class="i field">ProcessIdParameterSet</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=2096580&quot;</span>)]
+    <b>public sealed class</b> <a id="e47e977008f46371" href="../../../R/e47e977008f46371.html" target="n" data-glyph="0,0" class="t t"><span id="6a217d94594d01f0">EnterPSHostProcessCommand</span></a> : <a href="../../../P/30543a6971fed1fc.html#30543a6971fed1fc" class="t t">PSCmdlet</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Members
+ 
+        <b>private</b> <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <a id="538130cecd903b90" href="../../../R/538130cecd903b90.html" target="n" data-glyph="46,1" class="i field">_interactiveHost</a>;
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="3e029a31f0971d01" href="../../../R/3e029a31f0971d01.html" target="n" data-glyph="46,1" class="i field">_connectingRemoteRunspace</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Strings
+ 
+        <b>private const string</b> <a id="7ae454e60adf242e" href="../../../R/7ae454e60adf242e.html" target="n" data-glyph="10,1" class="i field">ProcessParameterSet</a> = <span class="s">&quot;ProcessParameterSet&quot;</span>;
+        <b>private const string</b> <a id="0ba258c99adf0d4b" href="../../../R/0ba258c99adf0d4b.html" target="n" data-glyph="10,1" class="i field">ProcessNameParameterSet</a> = <span class="s">&quot;ProcessNameParameterSet&quot;</span>;
+        <b>private const string</b> <a id="9937f40a6acbd563" href="../../../R/9937f40a6acbd563.html" target="n" data-glyph="10,1" class="i field">ProcessIdParameterSet</a> = <span class="s">&quot;ProcessIdParameterSet&quot;</span>;
+        <b>private const string</b> <a id="3cf9600cc95c7125" href="../../../R/3cf9600cc95c7125.html" target="n" data-glyph="10,1" class="i field">PipeNameParameterSet</a> = <span class="s">&quot;PipeNameParameterSet&quot;</span>;
+        <b>private const string</b> <a id="bb800c7444cde5b7" href="../../../R/bb800c7444cde5b7.html" target="n" data-glyph="10,1" class="i field">PSHostProcessInfoParameterSet</a> = <span class="s">&quot;PSHostProcessInfoParameterSet&quot;</span>;
+ 
+        <b>private const string</b> <a id="98a1e974ed951cc3" href="../../../R/98a1e974ed951cc3.html" target="n" data-glyph="10,1" class="i field">NamedPipeRunspaceName</a> = <span class="s">&quot;PSAttachRunspace&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process to enter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#7ae454e60adf242e" class="i field">ProcessParameterSet</a>)]
+        [<span class="i">ValidateNotNull</span>()]
+        <b>public</b> <span class="i">Process</span> <a id="3414ca6ef2a01a1c" href="../../../R/3414ca6ef2a01a1c.html" target="n" data-glyph="102,1" class="i property">Process</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Id of process to enter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#9937f40a6acbd563" class="i field">ProcessIdParameterSet</a>)]
+        [<span class="i">ValidateRange</span>(0, <b>int</b>.<span class="i">MaxValue</span>)]
+        <b>public int</b> <a id="b8e6138e26c7cfd8" href="../../../R/b8e6138e26c7cfd8.html" target="n" data-glyph="102,1" class="i property">Id</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of process to enter.  An error will result if more than one such process exists.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#0ba258c99adf0d4b" class="i field">ProcessNameParameterSet</a>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        <b>public string</b> <a id="7e39b7b593a00845" href="../../../R/7e39b7b593a00845.html" target="n" data-glyph="102,1" class="i property">Name</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host Process Info object that describes a connectible process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#bb800c7444cde5b7" class="i field">PSHostProcessInfoParameterSet</a>)]
+        [<span class="i">ValidateNotNull</span>()]
+        <b>public</b> <a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a> <a id="2a05a9f8c7286635" href="../../../R/2a05a9f8c7286635.html" target="n" data-glyph="102,1" class="i property">HostProcessInfo</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets the custom named pipe name to connect to. This is usually used in conjunction with `pwsh -CustomPipeName`.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#3cf9600cc95c7125" class="i field">PipeNameParameterSet</a>)]
+        <b>public string</b> <a id="a3448796fe1547a0" href="../../../R/a3448796fe1547a0.html" target="n" data-glyph="102,1" class="i property">CustomPipeName</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Optional name of AppDomain in process to enter.  If not specified then the default AppDomain is used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#7ae454e60adf242e" class="i field">ProcessParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#9937f40a6acbd563" class="i field">ProcessIdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#0ba258c99adf0d4b" class="i field">ProcessNameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e47e977008f46371" class="t t">EnterPSHostProcessCommand</a>.<a href="#bb800c7444cde5b7" class="i field">PSHostProcessInfoParameterSet</a>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        <b>public string</b> <a id="a0f5261c5e3971f3" href="../../../R/a0f5261c5e3971f3.html" target="n" data-glyph="102,1" class="i property">AppDomainName</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> End Processing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="94eb3d3971e1cc86" href="../../../R/94eb3d3971e1cc86.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <span class="c">// Check if system is in locked down mode, in which case this cmdlet is disabled.</span>
+            <b>if</b> (<a href="../../../security/wldpNativeMethods.cs.html#6b51558a7a8cde26" class="t t">SystemPolicy</a>.<a href="../../../security/wldpNativeMethods.cs.html#2c0da8883146dab2" class="i method">GetSystemLockdownPolicy</a>() == <a href="../../../security/wldpNativeMethods.cs.html#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="../../../security/wldpNativeMethods.cs.html#5d74206001d0b817" class="i field">Enforce</a>)
+            {
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSSecurityException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessCmdletDisabled</span>),
+                        <span class="s">&quot;EnterPSHostProcessCmdletDisabled&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#f13302898d557be4" class="i field">SecurityError</a>,
+                        <b>null</b>));
+ 
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Check for host that supports interactive remote sessions.</span>
+            <a href="#538130cecd903b90" class="i field">_interactiveHost</a> = <a href="#e47e977008f46371" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a> <b>as</b> <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a>;
+            <b>if</b> (<a href="#538130cecd903b90" class="i field">_interactiveHost</a> == <b>null</b>)
+            {
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HostDoesNotSupportIASession</span>),
+                        <span class="s">&quot;EnterPSHostProcessHostDoesNotSupportIASession&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <b>null</b>));
+ 
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Check selected process for existence, and whether it hosts PowerShell.</span>
+            <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r0 rd" class="r0 r">namedPipeRunspace</span> = <b>null</b>;
+            <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+            {
+                <b>case</b> <a href="#9937f40a6acbd563" class="i field">ProcessIdParameterSet</a>:
+                    <a href="#3414ca6ef2a01a1c" class="i property">Process</a> = <a href="#b083d06beaf12496" class="i method">GetProcessById</a>(<a href="#b8e6138e26c7cfd8" class="i property">Id</a>);
+                    <a href="#d4d3237bf307d81f" class="i method">VerifyProcess</a>(<a href="#3414ca6ef2a01a1c" class="i property">Process</a>);
+                    <span class="r0 r">namedPipeRunspace</span> = <span class="i">CreateNamedPipeRunspace</span>(<a href="#3414ca6ef2a01a1c" class="i property">Process</a>.<span class="i">Id</span>, <a href="#a0f5261c5e3971f3" class="i property">AppDomainName</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#0ba258c99adf0d4b" class="i field">ProcessNameParameterSet</a>:
+                    <a href="#3414ca6ef2a01a1c" class="i property">Process</a> = <a href="#bbfb3146a83f5c56" class="i method">GetProcessByName</a>(<a href="#7e39b7b593a00845" class="i property">Name</a>);
+                    <a href="#d4d3237bf307d81f" class="i method">VerifyProcess</a>(<a href="#3414ca6ef2a01a1c" class="i property">Process</a>);
+                    <span class="r0 r">namedPipeRunspace</span> = <span class="i">CreateNamedPipeRunspace</span>(<a href="#3414ca6ef2a01a1c" class="i property">Process</a>.<span class="i">Id</span>, <a href="#a0f5261c5e3971f3" class="i property">AppDomainName</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#bb800c7444cde5b7" class="i field">PSHostProcessInfoParameterSet</a>:
+                    <a href="#3414ca6ef2a01a1c" class="i property">Process</a> = <a href="#6e6000d64e7ee52f" class="i method">GetProcessByHostProcessInfo</a>(<a href="#2a05a9f8c7286635" class="i property">HostProcessInfo</a>);
+                    <a href="#d4d3237bf307d81f" class="i method">VerifyProcess</a>(<a href="#3414ca6ef2a01a1c" class="i property">Process</a>);
+ 
+                    <span class="c">// Create named pipe runspace for selected process and open.</span>
+                    <span class="r0 r">namedPipeRunspace</span> = <span class="i">CreateNamedPipeRunspace</span>(<a href="#3414ca6ef2a01a1c" class="i property">Process</a>.<span class="i">Id</span>, <a href="#a0f5261c5e3971f3" class="i property">AppDomainName</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#3cf9600cc95c7125" class="i field">PipeNameParameterSet</a>:
+                    <a href="#bef61c3aad4a57bc" class="i method">VerifyPipeName</a>(<a href="#a3448796fe1547a0" class="i property">CustomPipeName</a>);
+                    <span class="r0 r">namedPipeRunspace</span> = <a href="#9aeda935686add66" class="i method">CreateNamedPipeRunspace</a>(<a href="#a3448796fe1547a0" class="i property">CustomPipeName</a>);
+                    <b>break</b>;
+            }
+ 
+            <span class="c">// Set runspace prompt.  The runspace is closed on pop so we don&#39;t</span>
+            <span class="c">// have to reverse this change.</span>
+            <a href="#1186f52be085a55f" class="i method">PrepareRunspace</a>(<span class="r0 r">namedPipeRunspace</span>);
+ 
+            <b>try</b>
+            {
+                <span class="c">// Push runspace onto host.</span>
+                <a href="#538130cecd903b90" class="i field">_interactiveHost</a>.<a href="../../hostifaces/MshHost.cs.html#0de7c13b058ff86d" class="i method">PushRunspace</a>(<span class="r0 r">namedPipeRunspace</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r1 rd" class="r1 r">e</span>)
+            {
+                <span class="r0 r">namedPipeRunspace</span>.<a href="../../hostifaces/Connection.cs.html#e7b6aa3b7b07847b" class="i method">Close</a>();
+ 
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(
+                        <span class="r1 r">e</span>,
+                        <span class="s">&quot;EnterPSHostProcessCannotPushRunspace&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#e47e977008f46371" class="k">this</a>));
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Stop Processing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="ddd6ff7cde7365df" href="../../../R/ddd6ff7cde7365df.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r2 rd" class="r2 r">connectingRunspace</span> = <a href="#3e029a31f0971d01" class="i field">_connectingRemoteRunspace</a>;
+            <b>if</b> (<span class="r2 r">connectingRunspace</span> != <b>null</b>)
+            {
+                <span class="r2 r">connectingRunspace</span>.<a href="../client/remoterunspace.cs.html#18a6a41cecaa5cb6" class="i method">AbortOpen</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <b>private</b> <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <a id="9aeda935686add66" href="../../../R/9aeda935686add66.html" target="n" data-glyph="76,1" class="i method">CreateNamedPipeRunspace</a>(<b>string</b> <span id="r3 rd" class="r3 r">customPipeName</span>)
+        {
+            <a href="../common/RunspaceConnectionInfo.cs.html#b59a21e6663c2451" class="t t">NamedPipeConnectionInfo</a> <span id="r4 rd" class="r4 r">connectionInfo</span> = <b>new</b> <a href="../common/RunspaceConnectionInfo.cs.html#ac89d34b25b9e5a3" class="t constructor">NamedPipeConnectionInfo</a>(<span class="r3 r">customPipeName</span>);
+            <b>return</b> <a href="#4da13f50b17cfd3c" class="i method">CreateNamedPipeRunspace</a>(<span class="r4 r">connectionInfo</span>);
+        }
+ 
+        <b>private</b> <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <a id="382701d867dc1ff2" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CreateNamedPipeRunspace</a>(<b>int</b> <span id="r5 rd" class="r5 r">procId</span>, <b>string</b> <span id="r6 rd" class="r6 r">appDomainName</span>)
+        {
+            <a href="../common/RunspaceConnectionInfo.cs.html#b59a21e6663c2451" class="t t">NamedPipeConnectionInfo</a> <span id="r7 rd" class="r7 r">connectionInfo</span> = <b>new</b> <a href="../common/RunspaceConnectionInfo.cs.html#00b1e42db3659b60" class="t constructor">NamedPipeConnectionInfo</a>(<span class="r5 r">procId</span>, <span class="r6 r">appDomainName</span>);
+            <b>return</b> <a href="#4da13f50b17cfd3c" class="i method">CreateNamedPipeRunspace</a>(<span class="r7 r">connectionInfo</span>);
+        }
+ 
+        <b>private</b> <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <a id="4da13f50b17cfd3c" href="../../../R/4da13f50b17cfd3c.html" target="n" data-glyph="76,1" class="i method">CreateNamedPipeRunspace</a>(<a href="../common/RunspaceConnectionInfo.cs.html#b59a21e6663c2451" class="t t">NamedPipeConnectionInfo</a> <span id="r8 rd" class="r8 r">connectionInfo</span>)
+        {
+            <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a> <span id="r9 rd" class="r9 r">typeTable</span> = <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a>.<a href="../../TypeTable.cs.html#c6d160f5d02296fa" class="i method">LoadDefaultTypeFiles</a>();
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r10 rd" class="r10 r">remoteRunspace</span> = <a href="../../hostifaces/ConnectionFactory.cs.html#c5fbe142e4e21218" class="t t">RunspaceFactory</a>.<a href="../../hostifaces/ConnectionFactory.cs.html#7efc9e75cdb9fe67" class="i method">CreateRunspace</a>(<span class="r8 r">connectionInfo</span>, <a href="#e47e977008f46371" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>, <span class="r9 r">typeTable</span>) <b>as</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>;
+            <span class="r10 r">remoteRunspace</span>.<a href="../../hostifaces/Connection.cs.html#c40205e63f7ff911" class="i property">Name</a> = <a href="#98a1e974ed951cc3" class="i field">NamedPipeRunspaceName</a>;
+            <span class="r10 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a7ae975f02f2273a" class="i property">ShouldCloseOnPop</a> = <b>true</b>;
+            <a href="#3e029a31f0971d01" class="i field">_connectingRemoteRunspace</a> = <span class="r10 r">remoteRunspace</span>;
+ 
+            <b>try</b>
+            {
+                <span class="r10 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#8f5246099264f315" class="i method">Open</a>();
+                <span class="r10 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#8c26a63dda2acb44" class="i property">Debugger</a>?.<a href="../../debugger/debugger.cs.html#f6349f5fcfadd2ac" class="i method">SetDebugMode</a>(<a href="../../debugger/debugger.cs.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="../../debugger/debugger.cs.html#8f7455ad81a2c081" class="i field">LocalScript</a> | <a href="../../debugger/debugger.cs.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="../../debugger/debugger.cs.html#36492991f477f6e1" class="i field">RemoteScript</a>);
+            }
+            <b>catch</b> (<a href="../../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a> <span id="r11 rd" class="r11 r">e</span>)
+            {
+                <span class="c">// Unwrap inner exception for original error message, if any.</span>
+                <b>string</b> <span id="r12 rd" class="r12 r">errorMessage</span> = (<span class="r11 r">e</span>.<span class="i">InnerException</span> != <b>null</b>) ? (<span class="r11 r">e</span>.<span class="i">InnerException</span>.<span class="i">Message</span> ?? <b>string</b>.<span class="i">Empty</span>) : <b>string</b>.<span class="i">Empty</span>;
+ 
+                <b>if</b> (<span class="r8 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#ae19a20d35691fa8" class="i property">CustomPipeName</a> != <b>null</b>)
+                {
+                    <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="t">RuntimeException</span>(
+                                <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessCannotConnectToPipe</span>,
+                                    <span class="r8 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#ae19a20d35691fa8" class="i property">CustomPipeName</a>,
+                                    <span class="r12 r">errorMessage</span>),
+                                <span class="r11 r">e</span>.<span class="i">InnerException</span>),
+                            <span class="s">&quot;EnterPSHostProcessCannotConnectToPipe&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#214d0e72bcab7ace" class="i field">OperationTimeout</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>));
+                }
+                <b>else</b>
+                {
+                    <b>string</b> <span id="r13 rd" class="r13 r">msgAppDomainName</span> = <span class="r8 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#4074545a85fe2e8f" class="i property">AppDomainName</a> ?? <a href="../common/RemoteSessionNamedPipe.cs.html#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="../common/RemoteSessionNamedPipe.cs.html#51672229da1b0aeb" class="i field">DefaultAppDomainName</a>;
+ 
+                    <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="t">RuntimeException</span>(
+                                <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessCannotConnectToProcess</span>,
+                                    <span class="r13 r">msgAppDomainName</span>,
+                                    <span class="r8 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#92a696b39d4c2017" class="i property">ProcessId</a>,
+                                    <span class="r12 r">errorMessage</span>),
+                                <span class="r11 r">e</span>.<span class="i">InnerException</span>),
+                            <span class="s">&quot;EnterPSHostProcessCannotConnectToProcess&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#214d0e72bcab7ace" class="i field">OperationTimeout</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#3e029a31f0971d01" class="i field">_connectingRemoteRunspace</a> = <b>null</b>;
+            }
+ 
+            <b>return</b> <span class="r10 r">remoteRunspace</span>;
+        }
+ 
+        <b>private static void</b> <a id="1186f52be085a55f" href="../../../R/1186f52be085a55f.html" target="n" data-glyph="76,1" class="i method">PrepareRunspace</a>(<a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r14 rd" class="r14 r">runspace</span>)
+        {
+            <b>string</b> <span id="r15 rd" class="r15 r">promptFn</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessPrompt</span>,
+                <span class="s">@&quot;function global:prompt { &quot;&quot;&quot;</span>,
+                <span class="s">@&quot;$($PID)&quot;</span>,
+                <span class="s">@&quot;PS $($executionContext.SessionState.Path.CurrentLocation)&gt; &quot;&quot; }&quot;</span>
+            );
+ 
+            <span class="c">// Set prompt in pushed named pipe runspace.</span>
+            <b>using</b> (<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r16 rd" class="r16 r">ps</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#40345bc4625ff918" class="i method">Create</a>())
+            {
+                <span class="r16 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#ccf57242c9d46642" class="i property">Runspace</a> = <span class="r14 r">runspace</span>;
+ 
+                <b>try</b>
+                {
+                    <span class="c">// Set pushed runspace prompt.</span>
+                    <span class="r16 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#c97f8d15a2f93e31" class="i method">AddScript</a>(<span class="r15 r">promptFn</span>).<a href="../../hostifaces/PowerShell.cs.html#184e23c46120523e" class="i method">Invoke</a>();
+                }
+                <b>catch</b> (<span class="i">Exception</span>)
+                {
+                }
+            }
+        }
+ 
+        <b>private</b> <span class="i">Process</span> <a id="b083d06beaf12496" href="../../../R/b083d06beaf12496.html" target="n" data-glyph="76,1" class="i method">GetProcessById</a>(<b>int</b> <span id="r17 rd" class="r17 r">procId</span>)
+        {
+            <b>try</b>
+            {
+                <b>return</b> <a href="#3414ca6ef2a01a1c" class="i property">Process</a>.<span class="i">GetProcessById</span>(<span class="r17 r">procId</span>);
+            }
+            <b>catch</b> (<span class="i n">System</span>.<span class="i">ArgumentException</span>)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <a href="../../../utils/MshArgumentException.cs.html#095568dc2e26cb6e" class="t constructor">PSArgumentException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessNoProcessFoundWithId</span>, <span class="r17 r">procId</span>)),
+                            <span class="s">&quot;EnterPSHostProcessNoProcessFoundWithId&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>)
+                        );
+ 
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <b>private</b> <span class="i">Process</span> <a id="6e6000d64e7ee52f" href="../../../R/6e6000d64e7ee52f.html" target="n" data-glyph="76,1" class="i method">GetProcessByHostProcessInfo</a>(<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a> <span id="r18 rd" class="r18 r">hostProcessInfo</span>)
+        {
+            <b>return</b> <a href="#b083d06beaf12496" class="i method">GetProcessById</a>(<span class="r18 r">hostProcessInfo</span>.<a href="#e972a5188ece35d8" class="i property">ProcessId</a>);
+        }
+ 
+        <b>private</b> <span class="i">Process</span> <a id="bbfb3146a83f5c56" href="../../../R/bbfb3146a83f5c56.html" target="n" data-glyph="76,1" class="i method">GetProcessByName</a>(<b>string</b> <span id="r19 rd" class="r19 r">name</span>)
+        {
+            <span class="i">Collection</span>&lt;<span class="i">Process</span>&gt; <span id="r20 rd" class="r20 r">foundProcesses</span>;
+ 
+            <b>using</b> (<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r21 rd" class="r21 r">ps</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#1c6a51d3c837bb4d" class="i method">Create</a>(<a href="../../hostifaces/PowerShell.cs.html#c3c0f0e5e0b337ff" class="t t">RunspaceMode</a>.<a href="../../hostifaces/PowerShell.cs.html#75d224de5df87e75" class="i field">CurrentRunspace</a>))
+            {
+                <span class="r21 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#9cc79c297f6cced9" class="i method">AddCommand</a>(<span class="s">&quot;Get-Process&quot;</span>).<a href="../../hostifaces/PowerShell.cs.html#40674f99a3618f4b" class="i method">AddParameter</a>(<span class="s">&quot;Name&quot;</span>, <span class="r19 r">name</span>);
+                <span class="r20 r">foundProcesses</span> = <span class="r21 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#11053e110c66cae7" class="i method">Invoke</a>&lt;<span class="i">Process</span>&gt;();
+            }
+ 
+            <b>if</b> (<span class="r20 r">foundProcesses</span>.<span class="i">Count</span> == 0)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <a href="../../../utils/MshArgumentException.cs.html#095568dc2e26cb6e" class="t constructor">PSArgumentException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessNoProcessFoundWithName</span>, <span class="r19 r">name</span>)),
+                            <span class="s">&quot;EnterPSHostProcessNoProcessFoundWithName&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>)
+                        );
+            }
+            <b>else</b> <b>if</b> (<span class="r20 r">foundProcesses</span>.<span class="i">Count</span> &gt; 1)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <a href="../../../utils/MshArgumentException.cs.html#095568dc2e26cb6e" class="t constructor">PSArgumentException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessMultipleProcessesFoundWithName</span>, <span class="r19 r">name</span>)),
+                            <span class="s">&quot;EnterPSHostProcessMultipleProcessesFoundWithName&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>)
+                        );
+            }
+ 
+            <b>return</b> <span class="r20 r">foundProcesses</span>[0];
+        }
+ 
+        <b>private void</b> <a id="d4d3237bf307d81f" href="../../../R/d4d3237bf307d81f.html" target="n" data-glyph="76,1" class="i method">VerifyProcess</a>(<span class="i">Process</span> <span id="r22 rd" class="r22 r">process</span>)
+        {
+            <b>if</b> (<span class="r22 r">process</span>.<span class="i">Id</span> == <span class="i">Environment</span>.<span class="i">ProcessId</span>)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="t">PSInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessCantEnterSameProcess</span>),
+                            <span class="s">&quot;EnterPSHostProcessCantEnterSameProcess&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>)
+                        );
+            }
+ 
+            <b>bool</b> <span id="r23 rd" class="r23 r">hostsSMA</span> = <b>false</b>;
+            <span class="i">IReadOnlyCollection</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt; <span id="r24 rd" class="r24 r">availableProcInfo</span> = <a href="#b5fe9e9dcdf2c8bc" class="t t">GetPSHostProcessInfoCommand</a>.<a href="#5ccb350977746e4b" class="i method">GetAppDomainNamesFromProcessId</a>(<b>null</b>);
+            <b>foreach</b> (<b>var</b> <span id="r25 rd" class="r25 r">procInfo</span> <b>in</b> <span class="r24 r">availableProcInfo</span>)
+            {
+                <b>if</b> (<span class="r22 r">process</span>.<span class="i">Id</span> == <span class="r25 r">procInfo</span>.<span class="i">ProcessId</span>)
+                {
+                    <span class="r23 r">hostsSMA</span> = <b>true</b>;
+                    <b>break</b>;
+                }
+            }
+ 
+            <b>if</b> (!<span class="r23 r">hostsSMA</span>)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessNoPowerShell</span>, <a href="#3414ca6ef2a01a1c" class="i property">Process</a>.<span class="i">ProcessName</span>)),
+                            <span class="s">&quot;EnterPSHostProcessNoPowerShell&quot;</span>,
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                            <a href="#e47e977008f46371" class="k">this</a>)
+                        );
+            }
+        }
+ 
+        <b>private void</b> <a id="bef61c3aad4a57bc" href="../../../R/bef61c3aad4a57bc.html" target="n" data-glyph="76,1" class="i method">VerifyPipeName</a>(<b>string</b> <span id="r26 rd" class="r26 r">customPipeName</span>)
+        {
+            <span class="c">// Named Pipes are represented differently on Windows vs macOS &amp; Linux</span>
+            <b>var</b> <span id="r27 rd" class="r27 r">sb</span> = <b>new</b> <span class="i">StringBuilder</span>(<span class="r26 r">customPipeName</span>.<span class="i">Length</span>);
+            <b>if</b> (<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+            {
+                <span class="r27 r">sb</span>.<span class="i">Append</span>(<span class="s">@&quot;\\.\pipe\&quot;</span>);
+            }
+            <b>else</b>
+            {
+                <span class="r27 r">sb</span>.<span class="i">Append</span>(<span class="i">Path</span>.<span class="i">GetTempPath</span>()).<span class="i">Append</span>(<span class="s">&quot;CoreFxPipe_&quot;</span>);
+            }
+ 
+            <span class="r27 r">sb</span>.<span class="i">Append</span>(<span class="r26 r">customPipeName</span>);
+ 
+            <b>string</b> <span id="r28 rd" class="r28 r">pipePath</span> = <span class="r27 r">sb</span>.<span class="i">ToString</span>();
+            <b>if</b> (!<span class="i">File</span>.<span class="i">Exists</span>(<span class="r28 r">pipePath</span>))
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <a href="../../../utils/MshArgumentException.cs.html#095568dc2e26cb6e" class="t constructor">PSArgumentException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSHostProcessNoNamedPipeFound</span>, <span class="r26 r">customPipeName</span>)),
+                        <span class="s">&quot;EnterPSHostProcessNoNamedPipeFound&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <a href="#e47e977008f46371" class="k">this</a>));
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This cmdlet exits an interactive session with a local process.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#d056c4b8c99405e5" class="t t">VerbsCommon</a>.<a href="../../../utils/Verbs.cs.html#19f87bc0a1b09fc0" class="i field">Exit</a>, <span class="s">&quot;PSHostProcess&quot;</span>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=2096583&quot;</span>)]
+    <b>public sealed class</b> <a id="ce760a7dcb4443a3" href="../../../R/ce760a7dcb4443a3.html" target="n" data-glyph="0,0" class="t t"><span id="20e4d443102a5a37">ExitPSHostProcessCommand</span></a> : <a href="../../../P/30543a6971fed1fc.html#30543a6971fed1fc" class="t t">PSCmdlet</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process Record.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="ebf2f8cc7f5101bb" href="../../../R/ebf2f8cc7f5101bb.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="k">var</a> <span id="r29 rd" class="r29 r">_interactiveHost</span> = <a href="#ce760a7dcb4443a3" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a> <b>as</b> <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a>;
+            <b>if</b> (<span class="r29 r">_interactiveHost</span> == <b>null</b>)
+            {
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HostDoesNotSupportIASession</span>),
+                        <span class="s">&quot;ExitPSHostProcessHostDoesNotSupportIASession&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <b>null</b>));
+ 
+                <b>return</b>;
+            }
+ 
+            <span class="r29 r">_interactiveHost</span>.<a href="../../hostifaces/MshHost.cs.html#bfefb28a81efacc0" class="i method">PopRunspace</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This cmdlet returns a collection of PSHostProcessInfo objects containing</span>
+    <span class="c">///</span><span class="c"> process and AppDomain name information for processes that have PowerShell loaded.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#d056c4b8c99405e5" class="t t">VerbsCommon</a>.<a href="../../../utils/Verbs.cs.html#7ee9f5441476f642" class="i field">Get</a>, <span class="s">&quot;PSHostProcessInfo&quot;</span>, <span class="i">DefaultParameterSetName</span> = <a href="#b5fe9e9dcdf2c8bc" class="t t">GetPSHostProcessInfoCommand</a>.<a href="#e3329c578ed51836" class="i field">ProcessNameParameterSet</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=517012&quot;</span>)]
+    [<span class="i">OutputType</span>(<b>typeof</b>(<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>))]
+    <b>public sealed class</b> <a id="b5fe9e9dcdf2c8bc" href="../../../R/b5fe9e9dcdf2c8bc.html" target="n" data-glyph="0,0" class="t t"><span id="4b94cb30ea6f00ae">GetPSHostProcessInfoCommand</span></a> : <a href="../../../P/30543a6971fed1fc.html#30543a6971fed1fc" class="t t">PSCmdlet</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Strings
+ 
+        <b>private const string</b> <a id="70cc4eb6a1f30b34" href="../../../R/70cc4eb6a1f30b34.html" target="n" data-glyph="10,1" class="i field">ProcessParameterSet</a> = <span class="s">&quot;ProcessParameterSet&quot;</span>;
+        <b>private const string</b> <a id="1785ce7cf99c7754" href="../../../R/1785ce7cf99c7754.html" target="n" data-glyph="10,1" class="i field">ProcessIdParameterSet</a> = <span class="s">&quot;ProcessIdParameterSet&quot;</span>;
+        <b>private const string</b> <a id="e3329c578ed51836" href="../../../R/e3329c578ed51836.html" target="n" data-glyph="10,1" class="i field">ProcessNameParameterSet</a> = <span class="s">&quot;ProcessNameParameterSet&quot;</span>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">        // CoreFx uses the system temp path to store the file used for named pipes and is not settable.
+        // This member is only used by Get-PSHostProcessInfo to know where to look for the named pipe files.
+        private static readonly string NamedPipePath = Path.GetTempPath();
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+        <b>private const string</b> <a id="f756ce50aee15ad2" href="../../../R/f756ce50aee15ad2.html" target="n" data-glyph="10,1" class="i field">NamedPipePath</a> = <span class="s">@&quot;\\.\pipe\&quot;</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of Process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#b5fe9e9dcdf2c8bc" class="t t">GetPSHostProcessInfoCommand</a>.<a href="#e3329c578ed51836" class="i field">ProcessNameParameterSet</a>)]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        <b>public string</b>[] <a id="39b8f65a8a903ce8" href="../../../R/39b8f65a8a903ce8.html" target="n" data-glyph="102,1" class="i property">Name</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#b5fe9e9dcdf2c8bc" class="t t">GetPSHostProcessInfoCommand</a>.<a href="#70cc4eb6a1f30b34" class="i field">ProcessParameterSet</a>)]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        <b>public</b> <span class="i">Process</span>[] <a id="018a1c1a01beeb79" href="../../../R/018a1c1a01beeb79.html" target="n" data-glyph="102,1" class="i property">Process</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Id of process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#b5fe9e9dcdf2c8bc" class="t t">GetPSHostProcessInfoCommand</a>.<a href="#1785ce7cf99c7754" class="i field">ProcessIdParameterSet</a>)]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        <b>public int</b>[] <a id="ec518371c6775b40" href="../../../R/ec518371c6775b40.html" target="n" data-glyph="102,1" class="i property">Id</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> End bock processing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="f9b79c880304af8b" href="../../../R/f9b79c880304af8b.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <span class="i">IReadOnlyCollection</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt; <span id="r30 rd" class="r30 r">processAppDomainInfo</span>;
+            <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+            {
+                <b>case</b> <a href="#e3329c578ed51836" class="i field">ProcessNameParameterSet</a>:
+                    <span class="r30 r">processAppDomainInfo</span> = <a href="#5ccb350977746e4b" class="i method">GetAppDomainNamesFromProcessId</a>(<a href="#233738510250e3fe" class="i method">GetProcIdsFromNames</a>(<a href="#39b8f65a8a903ce8" class="i property">Name</a>));
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#1785ce7cf99c7754" class="i field">ProcessIdParameterSet</a>:
+                    <span class="r30 r">processAppDomainInfo</span> = <a href="#5ccb350977746e4b" class="i method">GetAppDomainNamesFromProcessId</a>(<a href="#ec518371c6775b40" class="i property">Id</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#70cc4eb6a1f30b34" class="i field">ProcessParameterSet</a>:
+                    <span class="r30 r">processAppDomainInfo</span> = <a href="#5ccb350977746e4b" class="i method">GetAppDomainNamesFromProcessId</a>(<a href="#e1d93c0abf51fe24" class="i method">GetProcIdsFromProcs</a>(<a href="#018a1c1a01beeb79" class="i property">Process</a>));
+                    <b>break</b>;
+ 
+                <b>default</b>:
+                    <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">&quot;Unknown parameter set.&quot;</span>);
+                    <span class="r30 r">processAppDomainInfo</span> = <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt;(<b>new</b> <span class="i">Collection</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt;());
+                    <b>break</b>;
+            }
+ 
+            <span class="i">WriteObject</span>(<span class="r30 r">processAppDomainInfo</span>, <b>true</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <b>private static int</b>[] <a id="e1d93c0abf51fe24" href="../../../R/e1d93c0abf51fe24.html" target="n" data-glyph="76,1" class="i method">GetProcIdsFromProcs</a>(<span class="i">Process</span>[] <span id="r31 rd" class="r31 r">processes</span>)
+        {
+            <span class="i">List</span>&lt;<b>int</b>&gt; <span id="r32 rd" class="r32 r">returnIds</span> = <b>new</b> <span class="i">List</span>&lt;<b>int</b>&gt;();
+            <b>foreach</b> (<span class="i">Process</span> <span id="r33 rd" class="r33 r">process</span> <b>in</b> <span class="r31 r">processes</span>)
+            {
+                <span class="r32 r">returnIds</span>.<span class="i">Add</span>(<span class="r33 r">process</span>.<span class="i">Id</span>);
+            }
+ 
+            <b>return</b> <span class="r32 r">returnIds</span>.<span class="i">ToArray</span>();
+        }
+ 
+        <b>private static int</b>[] <a id="233738510250e3fe" href="../../../R/233738510250e3fe.html" target="n" data-glyph="76,1" class="i method">GetProcIdsFromNames</a>(<b>string</b>[] <span id="r34 rd" class="r34 r">names</span>)
+        {
+            <b>if</b> ((<span class="r34 r">names</span> == <b>null</b>) || (<span class="r34 r">names</span>.<span class="i">Length</span> == 0))
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <span class="i">List</span>&lt;<b>int</b>&gt; <span id="r35 rd" class="r35 r">returnIds</span> = <b>new</b> <span class="i">List</span>&lt;<b>int</b>&gt;();
+            <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span>[] <span id="r36 rd" class="r36 r">processes</span> = <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span>.<span class="i">GetProcesses</span>();
+            <b>foreach</b> (<b>string</b> <span id="r37 rd" class="r37 r">name</span> <b>in</b> <span class="r34 r">names</span>)
+            {
+                <a href="../../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a> <span id="r38 rd" class="r38 r">namePattern</span> = <a href="../../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a>.<a href="../../regex.cs.html#03cc3ceece086129" class="i method">Get</a>(<span class="r37 r">name</span>, <a href="../../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../../regex.cs.html#2d0521a6986208d3" class="i field">IgnoreCase</a>);
+                <b>foreach</b> (<b>var</b> <span id="r39 rd" class="r39 r">proc</span> <b>in</b> <span class="r36 r">processes</span>)
+                {
+                    <b>if</b> (<span class="r38 r">namePattern</span>.<span class="i">IsMatch</span>(<span class="r39 r">proc</span>.<span class="i">ProcessName</span>))
+                    {
+                        <span class="r35 r">returnIds</span>.<span class="i">Add</span>(<span class="r39 r">proc</span>.<span class="i">Id</span>);
+                    }
+                }
+            }
+ 
+            <b>return</b> <span class="r35 r">returnIds</span>.<span class="i">ToArray</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns all named pipe AppDomain names for given process Ids or all PowerShell</span>
+        <span class="c">///</span><span class="c"> processes if procIds parameter is null.</span>
+        <span class="c">///</span><span class="c"> PowerShell pipe name example:</span>
+        <span class="c">///</span><span class="c">     PSHost.130566795082911445.8224.DefaultAppDomain.powershell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">procIds</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Process Ids or null.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Collection of process AppDomain info.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">IReadOnlyCollection</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt; <a id="5ccb350977746e4b" href="../../../R/5ccb350977746e4b.html" target="n" data-glyph="74,1" class="i method">GetAppDomainNamesFromProcessId</a>(<b>int</b>[] <span id="r40 rd" class="r40 r">procIds</span>)
+        {
+            <b>var</b> <span id="r41 rd" class="r41 r">procAppDomainInfo</span> = <b>new</b> <span class="i">List</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt;();
+ 
+            <span class="c">// Get all named pipe &#39;files&#39; on local machine.</span>
+            <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r42 rd" class="r42 r">namedPipes</span> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+            <b>var</b> <span id="r43 rd" class="r43 r">namedPipeDirectory</span> = <b>new</b> <span class="i">DirectoryInfo</span>(<a href="#f756ce50aee15ad2" class="i field">NamedPipePath</a>);
+            <b>foreach</b> (<b>var</b> <span id="r44 rd" class="r44 r">pipeFileInfo</span> <b>in</b> <span class="r43 r">namedPipeDirectory</span>.<span class="i">EnumerateFiles</span>(<a href="../common/RemoteSessionNamedPipe.cs.html#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="../common/RemoteSessionNamedPipe.cs.html#4ee1b1d91a4e9f07" class="i field">NamedPipeNamePrefixSearch</a>))
+            {
+                <span class="r42 r">namedPipes</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r44 r">pipeFileInfo</span>.<span class="i">DirectoryName</span>, <span class="r44 r">pipeFileInfo</span>.<span class="i">Name</span>));
+            }
+ 
+            <span class="c">// Collect all PowerShell named pipes for given process Ids.</span>
+            <b>foreach</b> (<b>string</b> <span id="r45 rd" class="r45 r">namedPipe</span> <b>in</b> <span class="r42 r">namedPipes</span>)
+            {
+                <b>int</b> <span id="r46 rd" class="r46 r">startIndex</span> = <span class="r45 r">namedPipe</span>.<span class="i">IndexOf</span>(<a href="../common/RemoteSessionNamedPipe.cs.html#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="../common/RemoteSessionNamedPipe.cs.html#2123549b6dcf5453" class="i field">NamedPipeNamePrefix</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <b>if</b> (<span class="r46 r">startIndex</span> &gt; -1)
+                {
+                    <b>int</b> <span id="r47 rd" class="r47 r">pStartTimeIndex</span> = <span class="r45 r">namedPipe</span>.<span class="i">IndexOf</span>(<span class="s">&#39;.&#39;</span>, <span class="r46 r">startIndex</span>);
+                    <b>if</b> (<span class="r47 r">pStartTimeIndex</span> &gt; -1)
+                    {
+                        <b>int</b> <span id="r48 rd" class="r48 r">pIdIndex</span> = <span class="r45 r">namedPipe</span>.<span class="i">IndexOf</span>(<span class="s">&#39;.&#39;</span>, <span class="r47 r">pStartTimeIndex</span> + 1);
+                        <b>if</b> (<span class="r48 r">pIdIndex</span> &gt; -1)
+                        {
+                            <b>int</b> <span id="r49 rd" class="r49 r">pAppDomainIndex</span> = <span class="r45 r">namedPipe</span>.<span class="i">IndexOf</span>(<span class="s">&#39;.&#39;</span>, <span class="r48 r">pIdIndex</span> + 1);
+                            <b>if</b> (<span class="r49 r">pAppDomainIndex</span> &gt; -1)
+                            {
+                                <span class="i">ReadOnlySpan</span>&lt;<b>char</b>&gt; <span id="r50 rd" class="r50 r">idString</span> = <span class="r45 r">namedPipe</span>.<span class="i">AsSpan</span>(<span class="r48 r">pIdIndex</span> + 1, (<span class="r49 r">pAppDomainIndex</span> - <span class="r48 r">pIdIndex</span> - 1));
+                                <b>int</b> <span id="r51 rd" class="r51 r">id</span> = -1;
+                                <b>if</b> (<b>int</b>.<span class="i">TryParse</span>(<span class="r50 r">idString</span>, <b>out</b> <span class="r51 r">id</span>))
+                                {
+                                    <span class="c">// Filter on provided proc Ids.</span>
+                                    <b>if</b> (<span class="r40 r">procIds</span> != <b>null</b>)
+                                    {
+                                        <b>bool</b> <span id="r52 rd" class="r52 r">found</span> = <b>false</b>;
+                                        <b>foreach</b> (<b>int</b> <span id="r53 rd" class="r53 r">procId</span> <b>in</b> <span class="r40 r">procIds</span>)
+                                        {
+                                            <b>if</b> (<span class="r51 r">id</span> == <span class="r53 r">procId</span>)
+                                            {
+                                                <span class="r52 r">found</span> = <b>true</b>;
+                                                <b>break</b>;
+                                            }
+                                        }
+ 
+                                        <b>if</b> (!<span class="r52 r">found</span>) { <b>continue</b>; }
+                                    }
+                                }
+                                <b>else</b>
+                                {
+                                    <span class="c">// Process id is not valid so we&#39;ll skip</span>
+                                    <b>continue</b>;
+                                }
+ 
+                                <b>int</b> <span id="r54 rd" class="r54 r">pNameIndex</span> = <span class="r45 r">namedPipe</span>.<span class="i">IndexOf</span>(<span class="s">&#39;.&#39;</span>, <span class="r49 r">pAppDomainIndex</span> + 1);
+                                <b>if</b> (<span class="r54 r">pNameIndex</span> &gt; -1)
+                                {
+                                    <b>string</b> <span id="r55 rd" class="r55 r">appDomainName</span> = <span class="r45 r">namedPipe</span>.<span class="i">Substring</span>(<span class="r49 r">pAppDomainIndex</span> + 1, (<span class="r54 r">pNameIndex</span> - <span class="r49 r">pAppDomainIndex</span> - 1));
+                                    <b>string</b> <span id="r56 rd" class="r56 r">pName</span> = <span class="r45 r">namedPipe</span>.<span class="i">Substring</span>(<span class="r54 r">pNameIndex</span> + 1);
+ 
+                                    <span class="i">Process</span> <span id="r57 rd" class="r57 r">process</span> = <b>null</b>;
+ 
+                                    <b>try</b>
+                                    {
+                                        <span class="r57 r">process</span> = <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span>.<span class="i">GetProcessById</span>(<span class="r51 r">id</span>);
+                                    }
+                                    <b>catch</b> (<span class="i">Exception</span>)
+                                    {
+                                        <span class="c">// Do nothing if the process no longer exists</span>
+                                    }
+ 
+                                    <b>if</b> (<span class="r57 r">process</span> == <b>null</b>)
+                                    {
+                                        <b>try</b>
+                                        {
+                                            <span class="c">// If the process is gone, try removing the PSHost named pipe</span>
+                                            <b>var</b> <span id="r58 rd" class="r58 r">pipeFile</span> = <b>new</b> <span class="i">FileInfo</span>(<span class="r45 r">namedPipe</span>);
+                                            <span class="r58 r">pipeFile</span>.<span class="i">Delete</span>();
+                                        }
+                                        <b>catch</b> (<span class="i">Exception</span>)
+                                        {
+                                            <span class="c">// best effort to cleanup</span>
+                                        }
+                                    }
+                                    <b>else</b> <b>if</b> (<span class="r57 r">process</span>.<span class="i">ProcessName</span>.<span class="i">Equals</span>(<span class="r56 r">pName</span>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>))
+                                    {
+                                        <span class="c">// only add if the process name matches</span>
+                                        <span class="r41 r">procAppDomainInfo</span>.<span class="i">Add</span>(<b>new</b> <a href="#ad2a28f3f67fccea" class="t constructor">PSHostProcessInfo</a>(<span class="r56 r">pName</span>, <span class="r51 r">id</span>, <span class="r55 r">appDomainName</span>, <span class="r45 r">namedPipe</span>));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r41 r">procAppDomainInfo</span>.<span class="i">Count</span> &gt; 1)
+            {
+                <span class="c">// Sort list by process name.</span>
+                <b>var</b> <span id="r59 rd" class="r59 r">comparerInfo</span> = <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>.<span class="i">CompareInfo</span>;
+                <span class="r41 r">procAppDomainInfo</span>.<span class="i">Sort</span>((<span id="r60 rd" class="r60 r">firstItem</span>, <span id="r61 rd" class="r61 r">secondItem</span>) =&gt; <span class="r59 r">comparerInfo</span>.<span class="i">Compare</span>(<span class="r60 r">firstItem</span>.<span class="i">ProcessName</span>, <span class="r61 r">secondItem</span>.<span class="i">ProcessName</span>, <span class="i">CompareOptions</span>.<span class="i">IgnoreCase</span>));
+            }
+ 
+            <b>return</b> <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#9bf8da34bac5d4e0" class="t t">PSHostProcessInfo</a>&gt;(<span class="r41 r">procAppDomainInfo</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> PSHostProcessInfo class
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> PowerShell host process information class.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="9bf8da34bac5d4e0" href="../../../R/9bf8da34bac5d4e0.html" target="n" data-glyph="0,0" class="t t">PSHostProcessInfo</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Members
+ 
+        <b>private readonly string</b> <a id="ca74f617a9145b26" href="../../../R/ca74f617a9145b26.html" target="n" data-glyph="46,1" class="i field">_pipeNameFilePath</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="038e126e28e7ba08" href="../../../R/038e126e28e7ba08.html" target="n" data-glyph="102,1" class="i property">ProcessName</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Id of process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public int</b> <a id="e972a5188ece35d8" href="../../../R/e972a5188ece35d8.html" target="n" data-glyph="102,1" class="i property">ProcessId</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of PowerShell AppDomain in process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="af61bee61573fc32" href="../../../R/af61bee61573fc32.html" target="n" data-glyph="102,1" class="i property">AppDomainName</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Main window title of the process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="d36724585fecdcc8" href="../../../R/d36724585fecdcc8.html" target="n" data-glyph="102,1" class="i property">MainWindowTitle</a> { <b>get</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>private</b> <a id="18d2f441c57a2e1c" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">PSHostProcessInfo</a>() { }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of the PSHostProcessInfo type.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">processName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of process.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r63 r">processId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Id of process.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r64 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of process AppDomain.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">pipeNameFilePath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">File path of pipe name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="ad2a28f3f67fccea" href="../../../R/ad2a28f3f67fccea.html" target="n" data-glyph="74,1" class="t constructor">PSHostProcessInfo</a>(
+            <b>string</b> <span id="r62 rd" class="r62 r">processName</span>,
+            <b>int</b> <span id="r63 rd" class="r63 r">processId</span>,
+            <b>string</b> <span id="r64 rd" class="r64 r">appDomainName</span>,
+            <b>string</b> <span id="r65 rd" class="r65 r">pipeNameFilePath</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r62 r">processName</span>))
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r62 r">processName</span>));
+            }
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r64 r">appDomainName</span>))
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r64 r">appDomainName</span>));
+            }
+ 
+            <a href="#d36724585fecdcc8" class="i property">MainWindowTitle</a> = <b>string</b>.<span class="i">Empty</span>;
+            <b>try</b>
+            {
+                <b>var</b> <span id="r66 rd" class="r66 r">proc</span> = <span class="i">Process</span>.<span class="i">GetProcessById</span>(<span class="r63 r">processId</span>);
+                <a href="#d36724585fecdcc8" class="i property">MainWindowTitle</a> = <span class="r66 r">proc</span>.<span class="i">MainWindowTitle</span> ?? <b>string</b>.<span class="i">Empty</span>;
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span>)
+            {
+                <span class="c">// Window title is optional.</span>
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span>)
+            {
+                <span class="c">// Window title is optional.</span>
+            }
+ 
+            <a href="#9bf8da34bac5d4e0" class="k">this</a>.<a href="#038e126e28e7ba08" class="i property">ProcessName</a> = <span class="r62 r">processName</span>;
+            <a href="#9bf8da34bac5d4e0" class="k">this</a>.<a href="#e972a5188ece35d8" class="i property">ProcessId</a> = <span class="r63 r">processId</span>;
+            <a href="#9bf8da34bac5d4e0" class="k">this</a>.<a href="#af61bee61573fc32" class="i property">AppDomainName</a> = <span class="r64 r">appDomainName</span>;
+            <a href="#ca74f617a9145b26" class="i field">_pipeNameFilePath</a> = <span class="r65 r">pipeNameFilePath</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Retrieves the pipe name file path.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Pipe name file path.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="e3a04a6f99d9501e" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetPipeNameFilePath</a>()
+        {
+            <b>return</b> <a href="#ca74f617a9145b26" class="i field">_pipeNameFilePath</a>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+}
+</pre></td></tr></table></div></body></html>

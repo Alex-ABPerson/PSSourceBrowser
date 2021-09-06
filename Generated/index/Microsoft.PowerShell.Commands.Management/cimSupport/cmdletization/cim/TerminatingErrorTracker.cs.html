@@ -1,0 +1,238 @@
+﻿<!DOCTYPE html>
+<html><head><title>TerminatingErrorTracker.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(229);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management/cimSupport/cmdletization/cim/TerminatingErrorTracker.cs" target="_top">cimSupport\cmdletization\cim\TerminatingErrorTracker.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management" target="_top">src\Microsoft.PowerShell.Commands.Management\Microsoft.PowerShell.Commands.Management.csproj</a> (Microsoft.PowerShell.Commands.Management)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i">System</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>.<span class="i">Remoting</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Management</span>.<span class="i">Infrastructure</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>.<span class="i">Diagnostics</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Cmdletization</span>.<span class="i n">Cim</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Tracks (per-session) terminating errors in a given cmdlet invocation.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="983f50216bcbdeb5" href="../../../R/983f50216bcbdeb5.html" target="n" data-glyph="2,0" class="t t">TerminatingErrorTracker</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Getting tracker for a given cmdlet invocation
+ 
+        <b>private static readonly</b> <span class="i">ConditionalWeakTable</span>&lt;<span class="i">InvocationInfo</span>, <a href="#983f50216bcbdeb5" class="t t">TerminatingErrorTracker</a>&gt; <a id="152c9d052aa60c23" href="../../../R/152c9d052aa60c23.html" target="n" data-glyph="46,1" class="i field">s_invocationToTracker</a> =
+            <b>new</b>();
+ 
+        <b>private static int</b> <a id="fc7965f6f46d2dab" href="../../../R/fc7965f6f46d2dab.html" target="n" data-glyph="76,1" class="i method">GetNumberOfSessions</a>(<span class="i">InvocationInfo</span> <span id="r0 rd" class="r0 r">invocationInfo</span>)
+        {
+            <span class="c">// if user explicitly specifies CimSession, then the cmdlet runs against exactly those sessions</span>
+            <b>object</b> <span id="r1 rd" class="r1 r">cimSessionArgument</span>;
+            <b>if</b> (<span class="r0 r">invocationInfo</span>.<span class="i">BoundParameters</span>.<span class="i">TryGetValue</span>(<span class="s">&quot;CimSession&quot;</span>, <b>out</b> <span class="r1 r">cimSessionArgument</span>))
+            {
+                <span class="i">IList</span> <span id="r2 rd" class="r2 r">cimSessionArgumentAsList</span> = (<span class="i">IList</span>)<span class="r1 r">cimSessionArgument</span>;
+                <b>return</b> <span class="r2 r">cimSessionArgumentAsList</span>.<span class="i">Count</span>;
+            }
+            <span class="c">// else - either CimSession=localhost OR CimSession is based on CimInstance-&gt;CimSession affinity</span>
+ 
+            <span class="c">// CimInstance-&gt;CimSession affinity in instance cmdlets can come from:</span>
+            <span class="c">// 1. InputObject (either passed through pipeline or explicitly bound to the parameter)</span>
+            <span class="c">// 2. AssociatedObject (either passed through pipeline or explicitly bound to the parameter [we don&#39;t know the name of the parameter though])</span>
+            <span class="c">// CimInstance-&gt;CimSession affinity in static cmdlets can come from:</span>
+            <span class="c">// 1. Any method argument that is either a CimInstance or CimInstance[]</span>
+            <span class="c">// Additionally in both instance and static cmdlets, if the pipeline object is a CimInstance, then it can affect the session acted against</span>
+            <b>if</b> (<span class="r0 r">invocationInfo</span>.<span class="i">ExpectingInput</span>)
+            {
+                <span class="c">// can get unlimited number of CimInstances through pipeline</span>
+                <span class="c">// - this translates into potentially unlimited number of CimSession we will work with</span>
+                <b>return</b> <b>int</b>.<span class="i">MaxValue</span>;
+            }
+ 
+            <b>int</b> <span id="r3 rd" class="r3 r">maxNumberOfSessionsIndicatedByCimInstanceArguments</span> = 1;
+            <b>foreach</b> (<b>object</b> <span id="r4 rd" class="r4 r">cmdletArgument</span> <b>in</b> <span class="r0 r">invocationInfo</span>.<span class="i">BoundParameters</span>.<span class="i">Values</span>)
+            {
+                <span class="i">CimInstance</span>[] <span id="r5 rd" class="r5 r">array</span> = <span class="r4 r">cmdletArgument</span> <b>as</b> <span class="i">CimInstance</span>[];
+                <b>if</b> (<span class="r5 r">array</span> != <b>null</b>)
+                {
+                    <b>int</b> <span id="r6 rd" class="r6 r">numberOfSessionsAssociatedWithArgument</span> = <span class="r5 r">array</span>
+                        .<span class="i">Select</span>(<a href="cimWrapper.cs.html#c2d7e2b732221aa6" class="t t">CimCmdletAdapter</a>.<span class="i">GetSessionOfOriginFromCimInstance</span>)
+                        .<span class="i">Distinct</span>()
+                        .<span class="i">Count</span>();
+                    <span class="r3 r">maxNumberOfSessionsIndicatedByCimInstanceArguments</span> = <span class="i">Math</span>.<span class="i">Max</span>(
+                        <span class="r3 r">maxNumberOfSessionsIndicatedByCimInstanceArguments</span>,
+                        <span class="r6 r">numberOfSessionsAssociatedWithArgument</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r3 r">maxNumberOfSessionsIndicatedByCimInstanceArguments</span>;
+        }
+ 
+        <b>internal static</b> <a href="#983f50216bcbdeb5" class="t t">TerminatingErrorTracker</a> <a id="9bfee74b23b5c8d7" href="../../../R/9bfee74b23b5c8d7.html" target="n" data-glyph="74,1" class="i method">GetTracker</a>(<span class="i">InvocationInfo</span> <span id="r7 rd" class="r7 r">invocationInfo</span>, <b>bool</b> <span id="r8 rd" class="r8 r">isStaticCmdlet</span>)
+        {
+            <b>var</b> <span id="r9 rd" class="r9 r">tracker</span> = <a href="#152c9d052aa60c23" class="i field">s_invocationToTracker</a>.<span class="i">GetValue</span>(
+                <span class="r7 r">invocationInfo</span>,
+                <span id="r10 rd" class="r10 r">_</span> =&gt; <b>new</b> <a href="#479f48788a19ef8c" class="t constructor">TerminatingErrorTracker</a>(<a href="#fc7965f6f46d2dab" class="i method">GetNumberOfSessions</a>(<span class="r7 r">invocationInfo</span>)));
+ 
+            <b>return</b> <span class="r9 r">tracker</span>;
+        }
+ 
+        <b>internal static</b> <a href="#983f50216bcbdeb5" class="t t">TerminatingErrorTracker</a> <a id="f621e583b378992b" href="../../../R/f621e583b378992b.html" target="n" data-glyph="74,1" class="i method">GetTracker</a>(<span class="i">InvocationInfo</span> <span id="r11 rd" class="r11 r">invocationInfo</span>)
+        {
+            <a href="#983f50216bcbdeb5" class="t t">TerminatingErrorTracker</a> <span id="r12 rd" class="r12 r">tracker</span>;
+            <b>bool</b> <span id="r13 rd" class="r13 r">foundTracker</span> = <a href="#152c9d052aa60c23" class="i field">s_invocationToTracker</a>.<span class="i">TryGetValue</span>(<span class="r11 r">invocationInfo</span>, <b>out</b> <span class="r12 r">tracker</span>);
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r13 r">foundTracker</span>, <span class="s">&quot;The other overload of GetTracker should always be called first&quot;</span>);
+            <b>return</b> <span class="r12 r">tracker</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Getting tracker for a given cmdlet invocation
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Tracking terminating errors within a single cmdlet invocation
+ 
+        <b>private readonly int</b> <a id="cfd155d7aef9aa14" href="../../../R/cfd155d7aef9aa14.html" target="n" data-glyph="46,1" class="i field">_numberOfSessions</a>;
+        <b>private int</b> <a id="cfc17ded44ed5383" href="../../../R/cfc17ded44ed5383.html" target="n" data-glyph="46,1" class="i field">_numberOfReportedSessionTerminatingErrors</a>;
+ 
+        <b>private</b> <a id="479f48788a19ef8c" href="../../../R/479f48788a19ef8c.html" target="n" data-glyph="76,1" class="t constructor">TerminatingErrorTracker</a>(<b>int</b> <span id="r14 rd" class="r14 r">numberOfSessions</span>)
+        {
+            <a href="#cfd155d7aef9aa14" class="i field">_numberOfSessions</a> = <span class="r14 r">numberOfSessions</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Tracking session&#39;s &quot;connectivity&quot; status
+ 
+        <b>private readonly</b> <span class="i">ConcurrentDictionary</span>&lt;<span class="i">CimSession</span>, <b>bool</b>&gt; <a id="fbc98eb3deb87729" href="../../../R/fbc98eb3deb87729.html" target="n" data-glyph="46,1" class="i field">_sessionToIsConnected</a> = <b>new</b>();
+ 
+        <b>internal void</b> <a id="0ab32f3fb4437804" href="../../../R/0ab32f3fb4437804.html" target="n" data-glyph="74,1" class="i method">MarkSessionAsConnected</a>(<span class="i">CimSession</span> <span id="r15 rd" class="r15 r">connectedSession</span>)
+        {
+            <a href="#fbc98eb3deb87729" class="i field">_sessionToIsConnected</a>.<span class="i">TryAdd</span>(<span class="r15 r">connectedSession</span>, <b>true</b>);
+        }
+ 
+        <b>internal bool</b> <a id="027084b15a3bd680" href="../../../R/027084b15a3bd680.html" target="n" data-glyph="74,1" class="i method">DidSessionAlreadyPassedConnectivityTest</a>(<span class="i">CimSession</span> <span id="r16 rd" class="r16 r">session</span>)
+        {
+            <b>bool</b> <span id="r17 rd" class="r17 r">alreadyPassedConnectivityTest</span> = <b>false</b>;
+            <b>if</b> (<a href="#fbc98eb3deb87729" class="i field">_sessionToIsConnected</a>.<span class="i">TryGetValue</span>(<span class="r16 r">session</span>, <b>out</b> <span class="r17 r">alreadyPassedConnectivityTest</span>))
+            {
+                <b>return</b> <span class="r17 r">alreadyPassedConnectivityTest</span>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>internal</b> <span class="i">Exception</span> <a id="22d02057d4cecd8d" href="../../../R/22d02057d4cecd8d.html" target="n" data-glyph="74,1" class="i method">GetExceptionIfBrokenSession</a>(
+            <span class="i">CimSession</span> <span id="r18 rd" class="r18 r">potentiallyBrokenSession</span>,
+            <b>bool</b> <span id="r19 rd" class="r19 r">skipTestConnection</span>,
+            <b>out bool</b> <span id="r20 rd" class="r20 r">sessionWasAlreadyTerminated</span>)
+        {
+            <b>if</b> (<a href="#3440dc4e92814b5e" class="i method">IsSessionTerminated</a>(<span class="r18 r">potentiallyBrokenSession</span>))
+            {
+                <span class="r20 r">sessionWasAlreadyTerminated</span> = <b>true</b>;
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <span class="i">Exception</span> <span id="r21 rd" class="r21 r">sessionException</span> = <b>null</b>;
+            <b>if</b> (!<span class="r19 r">skipTestConnection</span> &amp;&amp;
+                !<a href="#983f50216bcbdeb5" class="k">this</a>.<a href="#027084b15a3bd680" class="i method">DidSessionAlreadyPassedConnectivityTest</a>(<span class="r18 r">potentiallyBrokenSession</span>))
+            {
+                <b>try</b>
+                {
+                    <span class="i">CimInstance</span> <span id="r22 rd" class="r22 r">throwAwayCimInstance</span>;
+                    <span class="i">CimException</span> <span id="r23 rd" class="r23 r">cimException</span>;
+                    <span class="r18 r">potentiallyBrokenSession</span>.<span class="i">TestConnection</span>(<b>out</b> <span class="r22 r">throwAwayCimInstance</span>, <b>out</b> <span class="r23 r">cimException</span>);
+                    <span class="r21 r">sessionException</span> = <span class="r23 r">cimException</span>;
+                    <b>if</b> (<span class="r21 r">sessionException</span> == <b>null</b>)
+                    {
+                        <a href="#983f50216bcbdeb5" class="k">this</a>.<a href="#0ab32f3fb4437804" class="i method">MarkSessionAsConnected</a>(<span class="r18 r">potentiallyBrokenSession</span>);
+                    }
+                }
+                <b>catch</b> (<span class="i">InvalidOperationException</span> <span id="r24 rd" class="r24 r">invalidOperationException</span>)
+                {
+                    <span class="r21 r">sessionException</span> = <span class="r24 r">invalidOperationException</span>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r21 r">sessionException</span> != <b>null</b>)
+            {
+                <a href="#9e2ae9e449c2b99d" class="i method">MarkSessionAsTerminated</a>(<span class="r18 r">potentiallyBrokenSession</span>, <b>out</b> <span class="r20 r">sessionWasAlreadyTerminated</span>);
+                <b>return</b> <span class="r21 r">sessionException</span>;
+            }
+            <b>else</b>
+            {
+                <span class="r20 r">sessionWasAlreadyTerminated</span> = <b>false</b>;
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Tracking session&#39;s &quot;terminated&quot; status
+ 
+        <b>private readonly</b> <span class="i">ConcurrentDictionary</span>&lt;<span class="i">CimSession</span>, <b>bool</b>&gt; <a id="1d1c872f5222c5f1" href="../../../R/1d1c872f5222c5f1.html" target="n" data-glyph="46,1" class="i field">_sessionToIsTerminated</a> = <b>new</b>();
+ 
+        <b>internal void</b> <a id="9e2ae9e449c2b99d" href="../../../R/9e2ae9e449c2b99d.html" target="n" data-glyph="74,1" class="i method">MarkSessionAsTerminated</a>(<span class="i">CimSession</span> <span id="r25 rd" class="r25 r">terminatedSession</span>, <b>out bool</b> <span id="r26 rd" class="r26 r">sessionWasAlreadyTerminated</span>)
+        {
+            <b>bool</b> <span id="r27 rd" class="r27 r">closureSafeSessionWasAlreadyTerminated</span> = <b>false</b>;
+            <a href="#1d1c872f5222c5f1" class="i field">_sessionToIsTerminated</a>.<span class="i">AddOrUpdate</span>(
+                <span class="i">key</span>: <span class="r25 r">terminatedSession</span>,
+                <span class="i">addValue</span>: <b>true</b>,
+                <span class="i">updateValueFactory</span>:
+                    (<span class="i">CimSession</span> <span id="r28 rd" class="r28 r">key</span>, <b>bool</b> <span id="r29 rd" class="r29 r">isTerminatedValueInDictionary</span>) =&gt;
+                    {
+                        <span class="r27 r">closureSafeSessionWasAlreadyTerminated</span> = <span class="r29 r">isTerminatedValueInDictionary</span>;
+                        <b>return</b> <b>true</b>;
+                    });
+ 
+            <span class="r26 r">sessionWasAlreadyTerminated</span> = <span class="r27 r">closureSafeSessionWasAlreadyTerminated</span>;
+        }
+ 
+        <b>internal bool</b> <a id="3440dc4e92814b5e" href="../../../R/3440dc4e92814b5e.html" target="n" data-glyph="74,1" class="i method">IsSessionTerminated</a>(<span class="i">CimSession</span> <span id="r30 rd" class="r30 r">session</span>)
+        {
+            <b>bool</b> <span id="r31 rd" class="r31 r">isTerminated</span> = <a href="#1d1c872f5222c5f1" class="i field">_sessionToIsTerminated</a>.<span class="i">GetOrAdd</span>(<span class="r30 r">session</span>, <b>false</b>);
+            <b>return</b> <span class="r31 r">isTerminated</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Reporting errors in a way that takes session&#39;s &quot;terminated&quot; status into account
+ 
+        <b>internal</b> <span class="i">CmdletMethodInvoker</span>&lt;<b>bool</b>&gt; <a id="3df537e146e80e8e" href="../../../R/3df537e146e80e8e.html" target="n" data-glyph="74,1" class="i method">GetErrorReportingDelegate</a>(<span class="i">ErrorRecord</span> <span id="r32 rd" class="r32 r">errorRecord</span>)
+        {
+            <span class="i">ManualResetEventSlim</span> <span id="r33 rd" class="r33 r">manualResetEventSlim</span> = <b>new</b>();
+            <b>object</b> <span id="r34 rd" class="r34 r">lockObject</span> = <b>new</b>();
+            <span class="i">Func</span>&lt;<span class="i">Cmdlet</span>, <b>bool</b>&gt; <span id="r35 rd" class="r35 r">action</span> = (<span class="i">Cmdlet</span> <span id="r36 rd" class="r36 r">cmdlet</span>) =&gt;
+            {
+                <a href="#cfc17ded44ed5383" class="i field">_numberOfReportedSessionTerminatingErrors</a>++;
+                <b>if</b> (<a href="#cfc17ded44ed5383" class="i field">_numberOfReportedSessionTerminatingErrors</a> &gt;= <a href="#cfd155d7aef9aa14" class="i field">_numberOfSessions</a>)
+                {
+                    <span class="r36 r">cmdlet</span>.<span class="i">ThrowTerminatingError</span>(<span class="r32 r">errorRecord</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r36 r">cmdlet</span>.<span class="i">WriteError</span>(<span class="r32 r">errorRecord</span>);
+                }
+ 
+                <b>return</b> <b>false</b>; <span class="c">// not really needed here, but required by CmdletMethodInvoker</span>
+            };
+ 
+            <b>return</b> <b>new</b> <span class="i">CmdletMethodInvoker</span>&lt;<b>bool</b>&gt;
+            {
+                <span class="i">Action</span> = <span class="r35 r">action</span>,
+                <span class="i">Finished</span> = <span class="r33 r">manualResetEventSlim</span>, <span class="c">// not really needed here, but required by CmdletMethodInvoker</span>
+                <span class="i">SyncObject</span> = <span class="r34 r">lockObject</span>, <span class="c">// not really needed here, but required by CmdletMethodInvoker</span>
+            };
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Tracking terminating errors within a single cmdlet invocation
+    }
+}
+</pre></td></tr></table></div></body></html>

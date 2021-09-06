@@ -1,0 +1,702 @@
+﻿<!DOCTYPE html>
+<html><head><title>OutOfProcServerMediator.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(693);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/server/OutOfProcServerMediator.cs" target="_top">engine\remoting\server\OutOfProcServerMediator.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Server</span>
+{
+    <b>internal abstract class</b> <a id="cb33d234f78f6bcc" href="../../../R/cb33d234f78f6bcc.html" target="n" data-glyph="2,0" class="t t">OutOfProcessMediatorBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Protected Data
+ 
+        <b>protected</b> <span class="i">TextReader</span> <a id="abfad4c6c8443090" href="../../../R/abfad4c6c8443090.html" target="n" data-glyph="45,1" class="i field">originalStdIn</a>;
+        <b>protected</b> <a href="../fanin/OutOfProcTransportManager.cs.html#3676916334ddb503" class="t t">OutOfProcessTextWriter</a> <a id="f44551a0cbba1719" href="../../../R/f44551a0cbba1719.html" target="n" data-glyph="45,1" class="i field">originalStdOut</a>;
+        <b>protected</b> <a href="../fanin/OutOfProcTransportManager.cs.html#3676916334ddb503" class="t t">OutOfProcessTextWriter</a> <a id="f3056e06ed0bda19" href="../../../R/f3056e06ed0bda19.html" target="n" data-glyph="45,1" class="i field">originalStdErr</a>;
+        <b>protected</b> <a href="../fanin/OutOfProcTransportManager.cs.html#b0b666eeded95055" class="t t">OutOfProcessServerSessionTransportManager</a> <a id="da332274a3e39695" href="../../../R/da332274a3e39695.html" target="n" data-glyph="45,1" class="i field">sessionTM</a>;
+        <b>protected</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#d3319d959b3f01b4" class="t t">DataProcessingDelegates</a> <a id="9d8d579b061ce479" href="../../../R/9d8d579b061ce479.html" target="n" data-glyph="45,1" class="i field">callbacks</a>;
+ 
+        <b>protected static object</b> <a id="2e95f0e44833dbd8" href="../../../R/2e95f0e44833dbd8.html" target="n" data-glyph="45,1" class="i field">SyncObject</a> = <b>new</b> <b>object</b>();
+        <b>protected object</b> <a id="70b9328d677f0418" href="../../../R/70b9328d677f0418.html" target="n" data-glyph="45,1" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+        <b>protected string</b> <a id="a6a5618d4f92a6fd" href="../../../R/a6a5618d4f92a6fd.html" target="n" data-glyph="45,1" class="i field">_initialCommand</a>;
+        <b>protected</b> <span class="i">ManualResetEvent</span> <a id="27a48511122f16ec" href="../../../R/27a48511122f16ec.html" target="n" data-glyph="45,1" class="i field">allcmdsClosedEvent</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+        <span class="c">// Thread impersonation.</span>
+        <b>protected</b> <span class="i">WindowsIdentity</span> <a id="e87c4af4cc06e8fa" href="../../../R/e87c4af4cc06e8fa.html" target="n" data-glyph="45,1" class="i field">_windowsIdentityToImpersonate</a>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Count of commands in progress.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected int</b> <a id="ec11ba406aa98760" href="../../../R/ec11ba406aa98760.html" target="n" data-glyph="45,1" class="i field">_inProgressCommandsCount</a> = 0;
+ 
+        <b>protected</b> <a href="../../../utils/PowerShellETWTracer.cs.html#3fd13a01d0177ce2" class="t t">PowerShellTraceSource</a> <a id="b7427a97d50f7d78" href="../../../R/b7427a97d50f7d78.html" target="n" data-glyph="45,1" class="i field">tracer</a> = <a href="../../../utils/PowerShellETWTracer.cs.html#37e484a307a595c3" class="t t">PowerShellTraceSourceFactory</a>.<a href="../../../utils/PowerShellETWTracer.cs.html#c94a9fbfef99a75d" class="i method">GetTraceSource</a>();
+ 
+        <b>protected bool</b> <a id="09dd7e136b375df7" href="../../../R/09dd7e136b375df7.html" target="n" data-glyph="45,1" class="i field">_exitProcessOnError</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <b>protected</b> <a id="3700525f447ecd6d" href="../../../R/3700525f447ecd6d.html" target="n" data-glyph="75,1" class="t constructor">OutOfProcessMediatorBase</a>(<b>bool</b> <span id="r0 rd" class="r0 r">exitProcessOnError</span>)
+        {
+            <a href="#09dd7e136b375df7" class="i field">_exitProcessOnError</a> = <span class="r0 r">exitProcessOnError</span>;
+ 
+            <span class="c">// Set up data handling callbacks.</span>
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a> = <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">DataProcessingDelegates</span>();
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#cb5c0d4f23d23e92" class="i field">DataPacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">DataPacketReceived</span>(<a href="#4788e553921c386d" class="i method">OnDataPacketReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#965174e291299456" class="i field">DataAckPacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">DataAckPacketReceived</span>(<a href="#2ead21b5b5c45ba3" class="i method">OnDataAckPacketReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#86ed179bec374226" class="i field">CommandCreationPacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">CommandCreationPacketReceived</span>(<a href="#61d0e506de58027f" class="i method">OnCommandCreationPacketReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#c17901dc153a0229" class="i field">CommandCreationAckReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">CommandCreationAckReceived</span>(<a href="#8936f7c5becb3cb0" class="i method">OnCommandCreationAckReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#6200f3d3917d5c2b" class="i field">ClosePacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">ClosePacketReceived</span>(<a href="#0661c8057c5380a2" class="i method">OnClosePacketReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#b1a960f12d2a03a9" class="i field">CloseAckPacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">CloseAckPacketReceived</span>(<a href="#065b14ad681a716c" class="i method">OnCloseAckPacketReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#b36a4b4bf60b2658" class="i field">SignalPacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">SignalPacketReceived</span>(<a href="#48db90290dda9a3b" class="i method">OnSignalPacketReceived</a>);
+            <a href="#9d8d579b061ce479" class="i field">callbacks</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#320b3821c4ddb687" class="i field">SignalAckPacketReceived</a> += <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<span class="t">SignalAckPacketReceived</span>(<a href="#0eabfea55117c08c" class="i method">OnSignalAckPacketReceived</a>);
+ 
+            <a href="#27a48511122f16ec" class="i field">allcmdsClosedEvent</a> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>true</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Data Processing handlers
+ 
+        <b>protected void</b> <a id="61a49fd32c2e734b" href="../../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">ProcessingThreadStart</a>(<b>object</b> <span id="r1 rd" class="r1 r">state</span>)
+        {
+            <b>try</b>
+            {
+                <b>string</b> <span id="r2 rd" class="r2 r">data</span> = <span class="r1 r">state</span> <b>as string</b>;
+                <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#0082a3c3a966ef97" class="i method">ProcessData</a>(<span class="r2 r">data</span>, <a href="#9d8d579b061ce479" class="i field">callbacks</a>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r3 rd" class="r3 r">e</span>)
+            {
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<span class="i">LogOperationalError</span>(
+                    <a href="../common/PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="../common/PSETWTracer.cs.html#4ddb36cebdb0b70c" class="i field">TransportError</a>,
+                    <a href="../common/PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="../common/PSETWTracer.cs.html#399fd86ea109ec79" class="i field">Open</a>,
+                    <a href="../common/PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="../common/PSETWTracer.cs.html#c682d415f6327c59" class="i field">None</a>,
+                    <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#f59994c1ad9f1ff7" class="i field">EXITCODE_UNHANDLED_EXCEPTION</a>,
+                    <span class="r3 r">e</span>.<span class="i">Message</span>,
+                    <span class="r3 r">e</span>.<span class="i">StackTrace</span>);
+ 
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<span class="i">LogAnalyticError</span>(
+                    <a href="../common/PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="../common/PSETWTracer.cs.html#f50b10cdf9431275" class="i field">TransportError_Analytic</a>,
+                    <a href="../common/PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="../common/PSETWTracer.cs.html#399fd86ea109ec79" class="i field">Open</a>,
+                    <a href="../common/PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="../common/PSETWTracer.cs.html#c682d415f6327c59" class="i field">None</a>,
+                    <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#c5d4a73b62c859ab" class="i field">Transport</a> | <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#a3de02676385c3a4" class="i field">UseAlwaysAnalytic</a>,
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#f59994c1ad9f1ff7" class="i field">EXITCODE_UNHANDLED_EXCEPTION</a>,
+                    <span class="r3 r">e</span>.<span class="i">Message</span>,
+                    <span class="r3 r">e</span>.<span class="i">StackTrace</span>);
+ 
+                <span class="c">// notify the remote client of any errors and fail gracefully</span>
+                <b>if</b> (<a href="#09dd7e136b375df7" class="i field">_exitProcessOnError</a>)
+                {
+                    <a href="#f3056e06ed0bda19" class="i field">originalStdErr</a>.<span class="i">WriteLine</span>(<span class="r3 r">e</span>.<span class="i">Message</span> + <span class="r3 r">e</span>.<span class="i">StackTrace</span>);
+                    <span class="i">Environment</span>.<span class="i">Exit</span>(<a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#f59994c1ad9f1ff7" class="i field">EXITCODE_UNHANDLED_EXCEPTION</a>);
+                }
+            }
+        }
+ 
+        <b>protected void</b> <a id="4788e553921c386d" href="../../../R/4788e553921c386d.html" target="n" data-glyph="75,1" class="i method">OnDataPacketReceived</a>(<b>byte</b>[] <span id="r4 rd" class="r4 r">rawData</span>, <b>string</b> <span id="r5 rd" class="r5 r">stream</span>, <span class="i">Guid</span> <span id="r6 rd" class="r6 r">psGuid</span>)
+        {
+            <b>string</b> <span id="r7 rd" class="r7 r">streamTemp</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Client</span>.<a href="../fanin/WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="../fanin/WSManNativeAPI.cs.html#dc257aa7beeaf400" class="i field">WSMAN_STREAM_ID_STDIN</a>;
+            <b>if</b> (<span class="r5 r">stream</span>.<span class="i">Equals</span>(<b>nameof</b>(<a href="../fanin/PriorityCollection.cs.html#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="../fanin/PriorityCollection.cs.html#ef28607d20d8e243" class="i field">PromptResponse</a>), <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <span class="r7 r">streamTemp</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Client</span>.<a href="../fanin/WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="../fanin/WSManNativeAPI.cs.html#2dd82f73ca1e8381" class="i field">WSMAN_STREAM_ID_PROMPTRESPONSE</a>;
+            }
+ 
+            <b>if</b> (<span class="r6 r">psGuid</span> == <span class="i">Guid</span>.<span class="i">Empty</span>)
+            {
+                <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                {
+                    <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#49c20743b961141c" class="i method">ProcessRawData</a>(<span class="r4 r">rawData</span>, <span class="r7 r">streamTemp</span>);
+                }
+            }
+            <b>else</b>
+            {
+                <span class="c">// this is for a command</span>
+                <a href="../fanin/BaseTransportManager.cs.html#3beeadac29de3a80" class="t t">AbstractServerTransportManager</a> <span id="r8 rd" class="r8 r">cmdTM</span> = <b>null</b>;
+ 
+                <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                {
+                    <span class="r8 r">cmdTM</span> = <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#d5b3015de506bf7e" class="i method">GetCommandTransportManager</a>(<span class="r6 r">psGuid</span>);
+                }
+ 
+                <b>if</b> (<span class="r8 r">cmdTM</span> != <b>null</b>)
+                {
+                    <span class="c">// not throwing when there is no associated command as the command might have</span>
+                    <span class="c">// legitimately closed while the client is sending data. however the client</span>
+                    <span class="c">// should die after timeout as we are not sending an ACK back.</span>
+                    <span class="r8 r">cmdTM</span>.<a href="../fanin/BaseTransportManager.cs.html#34fedc1c13dfc998" class="i method">ProcessRawData</a>(<span class="r4 r">rawData</span>, <span class="r7 r">streamTemp</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="c">// There is no command transport manager to process the input data.</span>
+                    <span class="c">// However, we still need to acknowledge to the client that this input data</span>
+                    <span class="c">// was received.  This can happen with some cmdlets such as Select-Object -First</span>
+                    <span class="c">// where the cmdlet completes before all input data is received.</span>
+                    <a href="#f44551a0cbba1719" class="i field">originalStdOut</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#1fb9fbc09f4031a8" class="i method">WriteLine</a>(<a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#406f6bc786a76226" class="i method">CreateDataAckPacket</a>(<span class="r6 r">psGuid</span>));
+                }
+            }
+        }
+ 
+        <b>protected void</b> <a id="2ead21b5b5c45ba3" href="../../../R/2ead21b5b5c45ba3.html" target="n" data-glyph="75,1" class="i method">OnDataAckPacketReceived</a>(<span class="i">Guid</span> <span id="r9 rd" class="r9 r">psGuid</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(
+                <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#e4dabb20bede1ee9" class="i field">IPCUnknownElementReceived</a>,
+                <span class="i">RemotingErrorIdStrings</span>.<span class="i">IPCUnknownElementReceived</span>,
+                <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#da87a1160aef6567" class="i field">PS_OUT_OF_PROC_DATA_ACK_TAG</a>);
+        }
+ 
+        <b>protected void</b> <a id="61d0e506de58027f" href="../../../R/61d0e506de58027f.html" target="n" data-glyph="75,1" class="i method">OnCommandCreationPacketReceived</a>(<span class="i">Guid</span> <span id="r10 rd" class="r10 r">psGuid</span>)
+        {
+            <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+            {
+                <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#6be630996b674851" class="i method">CreateCommandTransportManager</a>(<span class="r10 r">psGuid</span>);
+ 
+                <b>if</b> (<a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a> == 0)
+                    <a href="#27a48511122f16ec" class="i field">allcmdsClosedEvent</a>.<span class="i">Reset</span>();
+ 
+                <a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a>++;
+ 
+                <a href="#b7427a97d50f7d78" class="i field">tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;OutOfProcessMediator.OnCommandCreationPacketReceived, in progress command count : &quot;</span> + <a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a> + <span class="s">&quot; psGuid : &quot;</span> + <span class="r10 r">psGuid</span>.<span class="i">ToString</span>());
+            }
+        }
+ 
+        <b>protected void</b> <a id="8936f7c5becb3cb0" href="../../../R/8936f7c5becb3cb0.html" target="n" data-glyph="75,1" class="i method">OnCommandCreationAckReceived</a>(<span class="i">Guid</span> <span id="r11 rd" class="r11 r">psGuid</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#e4dabb20bede1ee9" class="i field">IPCUnknownElementReceived</a>, <span class="i">RemotingErrorIdStrings</span>.<span class="i">IPCUnknownElementReceived</span>,
+                <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#a8df37661f74435c" class="i field">PS_OUT_OF_PROC_COMMAND_ACK_TAG</a>);
+        }
+ 
+        <b>protected void</b> <a id="48db90290dda9a3b" href="../../../R/48db90290dda9a3b.html" target="n" data-glyph="75,1" class="i method">OnSignalPacketReceived</a>(<span class="i">Guid</span> <span id="r12 rd" class="r12 r">psGuid</span>)
+        {
+            <b>if</b> (<span class="r12 r">psGuid</span> == <span class="i">Guid</span>.<span class="i">Empty</span>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#1f3d42cd5c6ce75a" class="i field">IPCNoSignalForSession</a>, <span class="i">RemotingErrorIdStrings</span>.<span class="i">IPCNoSignalForSession</span>,
+                    <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#ce99cfb65df7f3fd" class="i field">PS_OUT_OF_PROC_SIGNAL_TAG</a>);
+            }
+            <b>else</b>
+            {
+                <span class="c">// this is for a command</span>
+                <a href="../fanin/BaseTransportManager.cs.html#3beeadac29de3a80" class="t t">AbstractServerTransportManager</a> <span id="r13 rd" class="r13 r">cmdTM</span> = <b>null</b>;
+ 
+                <b>try</b>
+                {
+                    <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                    {
+                        <span class="r13 r">cmdTM</span> = <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#d5b3015de506bf7e" class="i method">GetCommandTransportManager</a>(<span class="r12 r">psGuid</span>);
+                    }
+ 
+                    <span class="c">// dont throw if there is no cmdTM as it might have legitimately closed</span>
+                    <b>if</b> (<span class="r13 r">cmdTM</span> != <b>null</b>)
+                    {
+                        <span class="r13 r">cmdTM</span>.<a href="../fanin/BaseTransportManager.cs.html#394a627c71edfcbe" class="i method">Close</a>(<b>null</b>);
+                    }
+                }
+                <b>finally</b>
+                {
+                    <span class="c">// Always send ack signal to avoid not responding in client.</span>
+                    <a href="#f44551a0cbba1719" class="i field">originalStdOut</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#1fb9fbc09f4031a8" class="i method">WriteLine</a>(<a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#2ba0e1a7d3dfc013" class="i method">CreateSignalAckPacket</a>(<span class="r12 r">psGuid</span>));
+                }
+            }
+        }
+ 
+        <b>protected void</b> <a id="0eabfea55117c08c" href="../../../R/0eabfea55117c08c.html" target="n" data-glyph="75,1" class="i method">OnSignalAckPacketReceived</a>(<span class="i">Guid</span> <span id="r14 rd" class="r14 r">psGuid</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#e4dabb20bede1ee9" class="i field">IPCUnknownElementReceived</a>, <span class="i">RemotingErrorIdStrings</span>.<span class="i">IPCUnknownElementReceived</span>,
+                <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#62d0487a88a3e0f0" class="i field">PS_OUT_OF_PROC_SIGNAL_ACK_TAG</a>);
+        }
+ 
+        <b>protected void</b> <a id="0661c8057c5380a2" href="../../../R/0661c8057c5380a2.html" target="n" data-glyph="75,1" class="i method">OnClosePacketReceived</a>(<span class="i">Guid</span> <span id="r15 rd" class="r15 r">psGuid</span>)
+        {
+            <a href="../../../utils/PowerShellETWTracer.cs.html#3fd13a01d0177ce2" class="t t">PowerShellTraceSource</a> <span id="r16 rd" class="r16 r">tracer</span> = <a href="../../../utils/PowerShellETWTracer.cs.html#37e484a307a595c3" class="t t">PowerShellTraceSourceFactory</a>.<a href="../../../utils/PowerShellETWTracer.cs.html#c94a9fbfef99a75d" class="i method">GetTraceSource</a>();
+ 
+            <b>if</b> (<span class="r15 r">psGuid</span> == <span class="i">Guid</span>.<span class="i">Empty</span>)
+            {
+                <span class="r16 r">tracer</span>.<a href="../../../utils/PowerShellETWTracer.cs.html#74d51c2de1926e3a" class="i method">WriteMessage</a>(<span class="s">&quot;BEGIN calling close on session transport manager&quot;</span>);
+ 
+                <b>bool</b> <span id="r17 rd" class="r17 r">waitForAllcmdsClosedEvent</span> = <b>false</b>;
+ 
+                <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (<a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a> &gt; 0)
+                        <span class="r17 r">waitForAllcmdsClosedEvent</span> = <b>true</b>;
+                }
+ 
+                <span class="c">// Wait outside sync lock if required for all cmds to be closed</span>
+                <span class="c">//</span>
+                <b>if</b> (<span class="r17 r">waitForAllcmdsClosedEvent</span>)
+                    <a href="#27a48511122f16ec" class="i field">allcmdsClosedEvent</a>.<span class="i">WaitOne</span>();
+ 
+                <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                {
+                    <span class="r16 r">tracer</span>.<span class="i">WriteMessage</span>(<span class="s">&quot;OnClosePacketReceived, in progress commands count should be zero : &quot;</span> + <a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a> + <span class="s">&quot;, psGuid : &quot;</span> + <span class="r15 r">psGuid</span>.<span class="i">ToString</span>());
+ 
+                    <b>if</b> (<a href="#da332274a3e39695" class="i field">sessionTM</a> != <b>null</b>)
+                    {
+                        <span class="c">// it appears that when closing PowerShell ISE, therefore closing OutOfProcServerMediator, there are 2 Close command requests</span>
+                        <span class="c">// changing PSRP/IPC at this point is too risky, therefore protecting about this duplication</span>
+                        <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#9caebc4cfc3282a0" class="i method">Close</a>(<b>null</b>);
+                    }
+ 
+                    <span class="r16 r">tracer</span>.<a href="../../../utils/PowerShellETWTracer.cs.html#74d51c2de1926e3a" class="i method">WriteMessage</a>(<span class="s">&quot;END calling close on session transport manager&quot;</span>);
+                    <a href="#da332274a3e39695" class="i field">sessionTM</a> = <b>null</b>;
+                }
+            }
+            <b>else</b>
+            {
+                <span class="r16 r">tracer</span>.<span class="i">WriteMessage</span>(<span class="s">&quot;Closing command with GUID &quot;</span> + <span class="r15 r">psGuid</span>.<span class="i">ToString</span>());
+ 
+                <span class="c">// this is for a command</span>
+                <a href="../fanin/BaseTransportManager.cs.html#3beeadac29de3a80" class="t t">AbstractServerTransportManager</a> <span id="r18 rd" class="r18 r">cmdTM</span> = <b>null</b>;
+ 
+                <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                {
+                    <span class="r18 r">cmdTM</span> = <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#d5b3015de506bf7e" class="i method">GetCommandTransportManager</a>(<span class="r15 r">psGuid</span>);
+                }
+ 
+                <span class="c">// dont throw if there is no cmdTM as it might have legitimately closed</span>
+                <b>if</b> (<span class="r18 r">cmdTM</span> != <b>null</b>)
+                {
+                    <span class="r18 r">cmdTM</span>.<a href="../fanin/BaseTransportManager.cs.html#394a627c71edfcbe" class="i method">Close</a>(<b>null</b>);
+                }
+ 
+                <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                {
+                    <span class="r16 r">tracer</span>.<span class="i">WriteMessage</span>(<span class="s">&quot;OnClosePacketReceived, in progress commands count should be greater than zero : &quot;</span> + <a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a> + <span class="s">&quot;, psGuid : &quot;</span> + <span class="r15 r">psGuid</span>.<span class="i">ToString</span>());
+ 
+                    <a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a>--;
+ 
+                    <b>if</b> (<a href="#ec11ba406aa98760" class="i field">_inProgressCommandsCount</a> == 0)
+                        <a href="#27a48511122f16ec" class="i field">allcmdsClosedEvent</a>.<span class="i">Set</span>();
+                }
+            }
+ 
+            <span class="c">// send close ack</span>
+            <a href="#f44551a0cbba1719" class="i field">originalStdOut</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#1fb9fbc09f4031a8" class="i method">WriteLine</a>(<a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#3a7dd76dd0cb0539" class="i method">CreateCloseAckPacket</a>(<span class="r15 r">psGuid</span>));
+        }
+ 
+        <b>protected void</b> <a id="065b14ad681a716c" href="../../../R/065b14ad681a716c.html" target="n" data-glyph="75,1" class="i method">OnCloseAckPacketReceived</a>(<span class="i">Guid</span> <span id="r19 rd" class="r19 r">psGuid</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#e4dabb20bede1ee9" class="i field">IPCUnknownElementReceived</a>, <span class="i">RemotingErrorIdStrings</span>.<span class="i">IPCUnknownElementReceived</span>,
+                <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#cbf4145e6462e3f2" class="i field">PS_OUT_OF_PROC_CLOSE_ACK_TAG</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Methods
+ 
+        <b>protected</b> <a href="../fanin/OutOfProcTransportManager.cs.html#b0b666eeded95055" class="t t">OutOfProcessServerSessionTransportManager</a> <a id="557114820353e4c4" href="../../../R/557114820353e4c4.html" target="n" data-glyph="75,1" class="i method">CreateSessionTransportManager</a>(
+            <b>string</b> <span id="r20 rd" class="r20 r">configurationName</span>,
+            <a href="../../../utils/CryptoUtils.cs.html#e11543478fd30f75" class="t t">PSRemotingCryptoHelperServer</a> <span id="r21 rd" class="r21 r">cryptoHelper</span>,
+            <b>string</b> <span id="r22 rd" class="r22 r">workingDirectory</span>)
+        {
+            <a href="../fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a> <span id="r23 rd" class="r23 r">senderInfo</span>;
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+            <span class="i">WindowsIdentity</span> <span id="r24 rd" class="r24 r">currentIdentity</span> = <span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>();
+            <a href="../fanin/PSPrincipal.cs.html#f38f79fd26abc753" class="t t">PSPrincipal</a> <span id="r25 rd" class="r25 r">userPrincipal</span> = <b>new</b> <a href="../fanin/PSPrincipal.cs.html#9fa65de366a45f51" class="t constructor">PSPrincipal</a>(
+                <b>new</b> <span class="t">PSIdentity</span>(<b>string</b>.<span class="i">Empty</span>, <b>true</b>, <span class="r24 r">currentIdentity</span>.<span class="i">Name</span>, <b>null</b>),
+                <span class="r24 r">currentIdentity</span>);
+            <span class="r23 r">senderInfo</span> = <b>new</b> <a href="../fanin/PSPrincipal.cs.html#041d397e8ed43c11" class="t constructor">PSSenderInfo</a>(<span class="r25 r">userPrincipal</span>, <span class="s">&quot;http://localhost&quot;</span>);
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">            PSPrincipal userPrincipal = new PSPrincipal(
+                new PSIdentity(string.Empty, true, string.Empty, null),
+                null);
+            senderInfo = new PSSenderInfo(userPrincipal, &quot;http://localhost&quot;);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <a href="../fanin/OutOfProcTransportManager.cs.html#b0b666eeded95055" class="t t">OutOfProcessServerSessionTransportManager</a> <span id="r26 rd" class="r26 r">tm</span> = <b>new</b> <a href="../fanin/OutOfProcTransportManager.cs.html#9304a07267187e08" class="t constructor">OutOfProcessServerSessionTransportManager</a>(<a href="#f44551a0cbba1719" class="i field">originalStdOut</a>, <a href="#f3056e06ed0bda19" class="i field">originalStdErr</a>, <span class="r21 r">cryptoHelper</span>);
+ 
+            <a href="serverremotesession.cs.html#2224dac53a001a7b" class="t t">ServerRemoteSession</a>.<a href="serverremotesession.cs.html#eecd0f3a9029cacc" class="i method">CreateServerRemoteSession</a>(
+                <span class="r23 r">senderInfo</span>,
+                <a href="#a6a5618d4f92a6fd" class="i field">_initialCommand</a>,
+                <span class="r26 r">tm</span>,
+                <span class="r20 r">configurationName</span>,
+                <span class="r22 r">workingDirectory</span>);
+ 
+            <b>return</b> <span class="r26 r">tm</span>;
+        }
+ 
+        <b>protected void</b> <a id="e9f6f8ca4896ad5e" href="../../../R/e9f6f8ca4896ad5e.html" target="n" data-glyph="75,1" class="i method">Start</a>(
+            <b>string</b> <span id="r27 rd" class="r27 r">initialCommand</span>,
+            <a href="../../../utils/CryptoUtils.cs.html#e11543478fd30f75" class="t t">PSRemotingCryptoHelperServer</a> <span id="r28 rd" class="r28 r">cryptoHelper</span>,
+            <b>string</b> <span id="r29 rd" class="r29 r">workingDirectory</span>,
+            <b>string</b> <span id="r30 rd" class="r30 r">configurationName</span>)
+        {
+            <a href="#a6a5618d4f92a6fd" class="i field">_initialCommand</a> = <span class="r27 r">initialCommand</span>;
+ 
+            <a href="#da332274a3e39695" class="i field">sessionTM</a> = <a href="#557114820353e4c4" class="i method">CreateSessionTransportManager</a>(<span class="r30 r">configurationName</span>, <span class="r28 r">cryptoHelper</span>, <span class="r29 r">workingDirectory</span>);
+ 
+            <b>try</b>
+            {
+                <b>while</b> (<b>true</b>)
+                {
+                    <b>string</b> <span id="r31 rd" class="r31 r">data</span> = <a href="#abfad4c6c8443090" class="i field">originalStdIn</a>.<span class="i">ReadLine</span>();
+                    <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                    {
+                        <b>if</b> (<a href="#da332274a3e39695" class="i field">sessionTM</a> == <b>null</b>)
+                        {
+                            <a href="#da332274a3e39695" class="i field">sessionTM</a> = <a href="#557114820353e4c4" class="i method">CreateSessionTransportManager</a>(<span class="r30 r">configurationName</span>, <span class="r28 r">cryptoHelper</span>, <span class="r29 r">workingDirectory</span>);
+                        }
+                    }
+ 
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r31 r">data</span>))
+                    {
+                        <b>lock</b> (<a href="#70b9328d677f0418" class="i field">_syncObject</a>)
+                        {
+                            <span class="c">// give a chance to runspace/pipelines to close (as it looks like the client died</span>
+                            <span class="c">// intermittently)</span>
+                            <a href="#da332274a3e39695" class="i field">sessionTM</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#9caebc4cfc3282a0" class="i method">Close</a>(<b>null</b>);
+                            <a href="#da332274a3e39695" class="i field">sessionTM</a> = <b>null</b>;
+                        }
+ 
+                        <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(
+                            <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#e4dabb20bede1ee9" class="i field">IPCUnknownElementReceived</a>,
+                            <span class="i">RemotingErrorIdStrings</span>.<span class="i">IPCUnknownElementReceived</span>,
+                            <b>string</b>.<span class="i">Empty</span>);
+                    }
+ 
+                    <span class="c">// process data in a thread pool thread..this way Runspace, Command</span>
+                    <span class="c">// data can be processed concurrently.</span>
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+                    <a href="../../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../../Utils.cs.html#4b3987980ff94442" class="i method">QueueWorkItemWithImpersonation</a>(
+                            <a href="#e87c4af4cc06e8fa" class="i field">_windowsIdentityToImpersonate</a>,
+                            <b>new</b> <span class="i">WaitCallback</span>(<span class="i">ProcessingThreadStart</span>),
+                            <span class="r31 r">data</span>);
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">                    ThreadPool.QueueUserWorkItem(new WaitCallback(ProcessingThreadStart), data);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                }
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r32 rd" class="r32 r">e</span>)
+            {
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<span class="i">LogOperationalError</span>(
+                    <a href="../common/PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="../common/PSETWTracer.cs.html#4ddb36cebdb0b70c" class="i field">TransportError</a>,
+                    <a href="../common/PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="../common/PSETWTracer.cs.html#399fd86ea109ec79" class="i field">Open</a>,
+                    <a href="../common/PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="../common/PSETWTracer.cs.html#c682d415f6327c59" class="i field">None</a>,
+                    <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#f59994c1ad9f1ff7" class="i field">EXITCODE_UNHANDLED_EXCEPTION</a>,
+                    <span class="r32 r">e</span>.<span class="i">Message</span>,
+                    <span class="r32 r">e</span>.<span class="i">StackTrace</span>);
+ 
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<span class="i">LogAnalyticError</span>(
+                    <a href="../common/PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="../common/PSETWTracer.cs.html#f50b10cdf9431275" class="i field">TransportError_Analytic</a>,
+                    <a href="../common/PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="../common/PSETWTracer.cs.html#399fd86ea109ec79" class="i field">Open</a>,
+                    <a href="../common/PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="../common/PSETWTracer.cs.html#c682d415f6327c59" class="i field">None</a>,
+                    <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#c5d4a73b62c859ab" class="i field">Transport</a> | <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#a3de02676385c3a4" class="i field">UseAlwaysAnalytic</a>,
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <span class="i">Guid</span>.<span class="i">Empty</span>.<span class="i">ToString</span>(),
+                    <a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#f59994c1ad9f1ff7" class="i field">EXITCODE_UNHANDLED_EXCEPTION</a>,
+                    <span class="r32 r">e</span>.<span class="i">Message</span>,
+                    <span class="r32 r">e</span>.<span class="i">StackTrace</span>);
+ 
+                <b>if</b> (<a href="#09dd7e136b375df7" class="i field">_exitProcessOnError</a>)
+                {
+                    <span class="c">// notify the remote client of any errors and fail gracefully</span>
+                    <a href="#f3056e06ed0bda19" class="i field">originalStdErr</a>.<span class="i">WriteLine</span>(<span class="r32 r">e</span>.<span class="i">Message</span>);
+ 
+                    <span class="i">Environment</span>.<span class="i">Exit</span>(<a href="../fanin/OutOfProcTransportManager.cs.html#bb038d3403da3163" class="t t">OutOfProcessUtils</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#f59994c1ad9f1ff7" class="i field">EXITCODE_UNHANDLED_EXCEPTION</a>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <b>internal sealed class</b> <a id="e4b3b3dcce682bfa" href="../../../R/e4b3b3dcce682bfa.html" target="n" data-glyph="2,0" class="t t">StdIOProcessMediator</a> : <a href="#cb33d234f78f6bcc" class="t t">OutOfProcessMediatorBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private static</b> <a href="#e4b3b3dcce682bfa" class="t t">StdIOProcessMediator</a> <a id="70046217893110ae" href="../../../R/70046217893110ae.html" target="n" data-glyph="46,1" class="i field">s_singletonInstance</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The mediator will take actions from the StdIn stream and responds to them.</span>
+        <span class="c">///</span><span class="c"> It will replace StdIn,StdOut and StdErr stream with TextWriter.Null. This is</span>
+        <span class="c">///</span><span class="c"> to make sure these streams are totally used by our Mediator.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a id="db311263ec3f1c74" href="../../../R/db311263ec3f1c74.html" target="n" data-glyph="76,1" class="t constructor">StdIOProcessMediator</a>() : <a href="#3700525f447ecd6d" class="k">base</a>(<b>true</b>)
+        {
+            <span class="c">// Create input stream reader from Console standard input stream.</span>
+            <span class="c">// We don&#39;t use the provided Console.In TextReader because it can have</span>
+            <span class="c">// an incorrect encoding, e.g., Hyper-V Container console where the</span>
+            <span class="c">// TextReader has incorrect default console encoding instead of the actual</span>
+            <span class="c">// stream encoding.  This way the stream encoding is determined by the</span>
+            <span class="c">// stream BOM as needed.</span>
+            <a href="#abfad4c6c8443090" class="i field">originalStdIn</a> = <b>new</b> <span class="i">StreamReader</span>(<span class="i">Console</span>.<span class="i">OpenStandardInput</span>(), <b>true</b>);
+            <span class="i">Console</span>.<span class="i">SetIn</span>(<span class="i">TextReader</span>.<span class="i">Null</span>);
+ 
+            <span class="c">// replacing StdOut with Null so that no other app messes with the</span>
+            <span class="c">// original stream</span>
+            <a href="#f44551a0cbba1719" class="i field">originalStdOut</a> = <b>new</b> <span class="t">OutOfProcessTextWriter</span>(<span class="i">Console</span>.<span class="i">Out</span>);
+            <span class="i">Console</span>.<span class="i">SetOut</span>(<span class="i">TextWriter</span>.<span class="i">Null</span>);
+ 
+            <span class="c">// replacing StdErr with Null so that no other app messes with the</span>
+            <span class="c">// original stream</span>
+            <a href="#f3056e06ed0bda19" class="i field">originalStdErr</a> = <b>new</b> <span class="t">OutOfProcessTextWriter</span>(<span class="i">Console</span>.<span class="i">Error</span>);
+            <span class="i">Console</span>.<span class="i">SetError</span>(<span class="i">TextWriter</span>.<span class="i">Null</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Static Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Starts the out-of-process powershell server instance.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">initialCommand</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Specifies the initialization script.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">workingDirectory</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Specifies the initial working directory. The working directory is set before the initial command.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">configurationName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Specifies an optional configuration name that configures the endpoint session.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="6eb122c2c274c4c3" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">Run</a>(
+            <b>string</b> <span id="r33 rd" class="r33 r">initialCommand</span>,
+            <b>string</b> <span id="r34 rd" class="r34 r">workingDirectory</span>,
+            <b>string</b> <span id="r35 rd" class="r35 r">configurationName</span>)
+        {
+            <b>lock</b> (<a href="#2e95f0e44833dbd8" class="i field">SyncObject</a>)
+            {
+                <b>if</b> (<a href="#70046217893110ae" class="i field">s_singletonInstance</a> != <b>null</b>)
+                {
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;Run should not be called multiple times&quot;</span>);
+                    <b>return</b>;
+                }
+ 
+                <a href="#70046217893110ae" class="i field">s_singletonInstance</a> = <b>new</b> <a href="#db311263ec3f1c74" class="t constructor">StdIOProcessMediator</a>();
+            }
+ 
+            <a href="#70046217893110ae" class="i field">s_singletonInstance</a>.<a href="#e9f6f8ca4896ad5e" class="i method">Start</a>(
+                <span class="r27 r">initialCommand</span>: <span class="r33 r">initialCommand</span>,
+                <span class="r28 r">cryptoHelper</span>: <b>new</b> <a href="../../../utils/CryptoUtils.cs.html#71ecffd05c1623b9" class="t constructor">PSRemotingCryptoHelperServer</a>(),
+                <span class="r29 r">workingDirectory</span>: <span class="r34 r">workingDirectory</span>,
+                <span class="r30 r">configurationName</span>: <span class="r35 r">configurationName</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <b>internal sealed class</b> <a id="933684383c32ec5f" href="../../../R/933684383c32ec5f.html" target="n" data-glyph="2,0" class="t t">NamedPipeProcessMediator</a> : <a href="#cb33d234f78f6bcc" class="t t">OutOfProcessMediatorBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private static</b> <a href="#933684383c32ec5f" class="t t">NamedPipeProcessMediator</a> <a id="e09f214974335d65" href="../../../R/e09f214974335d65.html" target="n" data-glyph="46,1" class="i field">s_singletonInstance</a>;
+ 
+        <b>private readonly</b> <a href="../common/RemoteSessionNamedPipe.cs.html#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <a id="38f1a309866b5ff8" href="../../../R/38f1a309866b5ff8.html" target="n" data-glyph="46,1" class="i field">_namedPipeServer</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <b>internal bool</b> <a id="0cf562e7d390c43c" href="../../../R/0cf562e7d390c43c.html" target="n" data-glyph="104,1" class="i property">IsDisposed</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#38f1a309866b5ff8" class="i field">_namedPipeServer</a>.<a href="../common/RemoteSessionNamedPipe.cs.html#63d9efb38747cf05" class="i property">IsDisposed</a>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>private</b> <a id="8d4b470bf7e65240" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">NamedPipeProcessMediator</a>() : <a href="#3700525f447ecd6d" class="k">base</a>(<b>false</b>) { }
+ 
+        <b>private</b> <a id="f5bd1e3b79e92ead" href="../../../R/f5bd1e3b79e92ead.html" target="n" data-glyph="76,1" class="t constructor">NamedPipeProcessMediator</a>(
+            <a href="../common/RemoteSessionNamedPipe.cs.html#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <span id="r36 rd" class="r36 r">namedPipeServer</span>) : <a href="#3700525f447ecd6d" class="k">base</a>(<b>false</b>)
+        {
+            <b>if</b> (<span class="r36 r">namedPipeServer</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r36 r">namedPipeServer</span>));
+            }
+ 
+            <a href="#38f1a309866b5ff8" class="i field">_namedPipeServer</a> = <span class="r36 r">namedPipeServer</span>;
+ 
+            <span class="c">// Create transport reader/writers from named pipe.</span>
+            <a href="#abfad4c6c8443090" class="i field">originalStdIn</a> = <span class="r36 r">namedPipeServer</span>.<a href="../common/RemoteSessionNamedPipe.cs.html#63fd4bb62eaca834" class="i property">TextReader</a>;
+            <a href="#f44551a0cbba1719" class="i field">originalStdOut</a> = <b>new</b> <span class="t">OutOfProcessTextWriter</span>(<span class="r36 r">namedPipeServer</span>.<a href="../common/RemoteSessionNamedPipe.cs.html#f0364b8cec6d371c" class="i property">TextWriter</a>);
+            <a href="#f3056e06ed0bda19" class="i field">originalStdErr</a> = <b>new</b> <span class="t">NamedPipeErrorTextWriter</span>(<span class="r36 r">namedPipeServer</span>.<a href="../common/RemoteSessionNamedPipe.cs.html#f0364b8cec6d371c" class="i property">TextWriter</a>);
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+            <span class="c">// Flow impersonation as needed.</span>
+            <a href="../../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../../Utils.cs.html#9b44ca7f35bc8c39" class="i method">TryGetWindowsImpersonatedIdentity</a>(<b>out</b> <a href="#e87c4af4cc06e8fa" class="i field">_windowsIdentityToImpersonate</a>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Static Methods
+ 
+        <b>internal static void</b> <a id="c8e816bb34f034cd" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">Run</a>(
+            <b>string</b> <span id="r37 rd" class="r37 r">initialCommand</span>,
+            <a href="../common/RemoteSessionNamedPipe.cs.html#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <span id="r38 rd" class="r38 r">namedPipeServer</span>)
+        {
+            <b>lock</b> (<a href="#2e95f0e44833dbd8" class="i field">SyncObject</a>)
+            {
+                <b>if</b> (<a href="#e09f214974335d65" class="i field">s_singletonInstance</a> != <b>null</b> &amp;&amp; !<a href="#e09f214974335d65" class="i field">s_singletonInstance</a>.<a href="#0cf562e7d390c43c" class="i property">IsDisposed</a>)
+                {
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;Run should not be called multiple times, unless the singleton was disposed.&quot;</span>);
+                    <b>return</b>;
+                }
+ 
+                <a href="#e09f214974335d65" class="i field">s_singletonInstance</a> = <b>new</b> <a href="#f5bd1e3b79e92ead" class="t constructor">NamedPipeProcessMediator</a>(<span class="r38 r">namedPipeServer</span>);
+            }
+ 
+            <a href="#e09f214974335d65" class="i field">s_singletonInstance</a>.<a href="#e9f6f8ca4896ad5e" class="i method">Start</a>(
+                <span class="r27 r">initialCommand</span>: <span class="r37 r">initialCommand</span>,
+                <span class="r28 r">cryptoHelper</span>: <b>new</b> <a href="../../../utils/CryptoUtils.cs.html#71ecffd05c1623b9" class="t constructor">PSRemotingCryptoHelperServer</a>(),
+                <span class="r29 r">workingDirectory</span>: <b>null</b>,
+                <span class="r30 r">configurationName</span>: <span class="r38 r">namedPipeServer</span>.<a href="../common/RemoteSessionNamedPipe.cs.html#ab2f661a5dfed7bf" class="i property">ConfigurationName</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <b>internal sealed class</b> <a id="d6d492dbec355ed7" href="../../../R/d6d492dbec355ed7.html" target="n" data-glyph="2,0" class="t t">NamedPipeErrorTextWriter</a> : <a href="../fanin/OutOfProcTransportManager.cs.html#3676916334ddb503" class="t t">OutOfProcessTextWriter</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Members
+ 
+        <b>private const string</b> <a id="898bb89d484808c2" href="../../../R/898bb89d484808c2.html" target="n" data-glyph="10,1" class="i field">_errorPrepend</a> = <span class="s">&quot;__NamedPipeError__:&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <b>internal static string</b> <a id="21c7ad4feb2e15a5" href="../../../R/21c7ad4feb2e15a5.html" target="n" data-glyph="104,1" class="i property">ErrorPrepend</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#898bb89d484808c2" class="i field">_errorPrepend</a>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>internal</b> <a id="ef5f289931579d25" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">NamedPipeErrorTextWriter</a>(
+            <span class="i">TextWriter</span> <span id="r39 rd" class="r39 r">textWriter</span>) : <a href="../fanin/OutOfProcTransportManager.cs.html#967f1719da95fd5d" class="k">base</a>(<span class="r39 r">textWriter</span>)
+        { }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Base class overrides
+ 
+        <b>internal override void</b> <a id="d372329526c7cba2" href="../../../R/d372329526c7cba2.html" target="n" data-glyph="74,1" class="i method">WriteLine</a>(<b>string</b> <span id="r40 rd" class="r40 r">data</span>)
+        {
+            <b>string</b> <span id="r41 rd" class="r41 r">dataToWrite</span> = (<span class="r40 r">data</span> != <b>null</b>) ? <a href="#898bb89d484808c2" class="i field">_errorPrepend</a> + <span class="r40 r">data</span> : <b>null</b>;
+            <a href="../fanin/OutOfProcTransportManager.cs.html#3676916334ddb503" class="k">base</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#1fb9fbc09f4031a8" class="i method">WriteLine</a>(<span class="r41 r">dataToWrite</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <b>internal sealed class</b> <a id="7197c602ffd2e360" href="../../../R/7197c602ffd2e360.html" target="n" data-glyph="2,0" class="t t">HyperVSocketMediator</a> : <a href="#cb33d234f78f6bcc" class="t t">OutOfProcessMediatorBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private static</b> <a href="#7197c602ffd2e360" class="t t">HyperVSocketMediator</a> <a id="e1b5df05dd681f7a" href="../../../R/e1b5df05dd681f7a.html" target="n" data-glyph="46,1" class="i field">s_instance</a>;
+ 
+        <b>private readonly</b> <a href="../common/RemoteSessionHyperVSocket.cs.html#2cf869d0533ca645" class="t t">RemoteSessionHyperVSocketServer</a> <a id="38d6c79409b570ad" href="../../../R/38d6c79409b570ad.html" target="n" data-glyph="46,1" class="i field">_hypervSocketServer</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <b>internal bool</b> <a id="cb5950f8faeaf8ee" href="../../../R/../../0000000000.html" target="n" data-glyph="104,1" class="i property">IsDisposed</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#38d6c79409b570ad" class="i field">_hypervSocketServer</a>.<a href="../common/RemoteSessionHyperVSocket.cs.html#9ed6bd53654e866c" class="i property">IsDisposed</a>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>private</b> <a id="e8362e6424705d99" href="../../../R/e8362e6424705d99.html" target="n" data-glyph="76,1" class="t constructor">HyperVSocketMediator</a>()
+            : <a href="#3700525f447ecd6d" class="k">base</a>(<b>false</b>)
+        {
+            <a href="#38d6c79409b570ad" class="i field">_hypervSocketServer</a> = <b>new</b> <a href="../common/RemoteSessionHyperVSocket.cs.html#46c85db7a8673880" class="t constructor">RemoteSessionHyperVSocketServer</a>(<b>false</b>);
+ 
+            <a href="#abfad4c6c8443090" class="i field">originalStdIn</a> = <a href="#38d6c79409b570ad" class="i field">_hypervSocketServer</a>.<a href="../common/RemoteSessionHyperVSocket.cs.html#de8a1fd6665bb4a2" class="i property">TextReader</a>;
+            <a href="#f44551a0cbba1719" class="i field">originalStdOut</a> = <b>new</b> <span class="t">OutOfProcessTextWriter</span>(<a href="#38d6c79409b570ad" class="i field">_hypervSocketServer</a>.<a href="../common/RemoteSessionHyperVSocket.cs.html#c542c26df1cebf2e" class="i property">TextWriter</a>);
+            <a href="#f3056e06ed0bda19" class="i field">originalStdErr</a> = <b>new</b> <span class="t">HyperVSocketErrorTextWriter</span>(<a href="#38d6c79409b570ad" class="i field">_hypervSocketServer</a>.<a href="../common/RemoteSessionHyperVSocket.cs.html#c542c26df1cebf2e" class="i property">TextWriter</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Static Methods
+ 
+        <b>internal static void</b> <a id="254f163b65f6c470" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">Run</a>(
+            <b>string</b> <span id="r42 rd" class="r42 r">initialCommand</span>,
+            <b>string</b> <span id="r43 rd" class="r43 r">configurationName</span>)
+        {
+            <b>lock</b> (<a href="#2e95f0e44833dbd8" class="i field">SyncObject</a>)
+            {
+                <a href="#e1b5df05dd681f7a" class="i field">s_instance</a> = <b>new</b> <a href="#e8362e6424705d99" class="t constructor">HyperVSocketMediator</a>();
+            }
+ 
+            <a href="#e1b5df05dd681f7a" class="i field">s_instance</a>.<a href="#e9f6f8ca4896ad5e" class="i method">Start</a>(
+                <span class="r27 r">initialCommand</span>: <span class="r42 r">initialCommand</span>,
+                <span class="r28 r">cryptoHelper</span>: <b>new</b> <a href="../../../utils/CryptoUtils.cs.html#71ecffd05c1623b9" class="t constructor">PSRemotingCryptoHelperServer</a>(),
+                <span class="r29 r">workingDirectory</span>: <b>null</b>,
+                <span class="r30 r">configurationName</span>: <span class="r43 r">configurationName</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <b>internal sealed class</b> <a id="4bbc940ab571872d" href="../../../R/4bbc940ab571872d.html" target="n" data-glyph="2,0" class="t t">HyperVSocketErrorTextWriter</a> : <a href="../fanin/OutOfProcTransportManager.cs.html#3676916334ddb503" class="t t">OutOfProcessTextWriter</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Members
+ 
+        <b>private const string</b> <a id="faad167d06684e23" href="../../../R/faad167d06684e23.html" target="n" data-glyph="10,1" class="i field">_errorPrepend</a> = <span class="s">&quot;__HyperVSocketError__:&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <b>internal static string</b> <a id="c128900a8072a3f4" href="../../../R/c128900a8072a3f4.html" target="n" data-glyph="104,1" class="i property">ErrorPrepend</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#faad167d06684e23" class="i field">_errorPrepend</a>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>internal</b> <a id="28a831e368e1772c" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">HyperVSocketErrorTextWriter</a>(
+            <span class="i">TextWriter</span> <span id="r44 rd" class="r44 r">textWriter</span>)
+            : <a href="../fanin/OutOfProcTransportManager.cs.html#967f1719da95fd5d" class="k">base</a>(<span class="r44 r">textWriter</span>)
+        { }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Base class overrides
+ 
+        <b>internal override void</b> <a id="746eb55a4838b5ec" href="../../../R/746eb55a4838b5ec.html" target="n" data-glyph="74,1" class="i method">WriteLine</a>(<b>string</b> <span id="r45 rd" class="r45 r">data</span>)
+        {
+            <b>string</b> <span id="r46 rd" class="r46 r">dataToWrite</span> = (<span class="r45 r">data</span> != <b>null</b>) ? <a href="#faad167d06684e23" class="i field">_errorPrepend</a> + <span class="r45 r">data</span> : <b>null</b>;
+            <a href="../fanin/OutOfProcTransportManager.cs.html#3676916334ddb503" class="k">base</a>.<a href="../fanin/OutOfProcTransportManager.cs.html#1fb9fbc09f4031a8" class="i method">WriteLine</a>(<span class="r46 r">dataToWrite</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,837 @@
+﻿<!DOCTYPE html>
+<html><head><title>ObjectReader.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(828);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/utils/ObjectReader.cs" target="_top">utils\ObjectReader.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A PipelineReader for an ObjectStream.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class is not safe for multi-threaded operations.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal abstract class</b> <a id="bbb4094f64a5fd1c" href="../R/bbb4094f64a5fd1c.html" target="n" data-glyph="2,0" class="t t">ObjectReaderBase</a>&lt;<span id="r0 rd t" class="r0 r t">T</span>&gt; : <a href="IObjectReader.cs.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<span class="r0 r t">T</span>&gt;, <span class="i">IDisposable</span>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct with an existing ObjectStream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The stream to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Thrown if the specified stream is null.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>protected</b> <a id="a23727fb08086deb" href="../R/a23727fb08086deb.html" target="n" data-glyph="75,1" class="t constructor">ObjectReaderBase</a>([<span class="i">In</span>, <span class="i">Out</span>] <a href="ObjectStream.cs.html#27e9349816faeecb" class="t t">ObjectStreamBase</a> <span id="r1 rd" class="r1 r">stream</span>)
+        {
+            <b>if</b> (<span class="r1 r">stream</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r1 r">stream</span>), <span class="s">&quot;stream may not be null&quot;</span>);
+            }
+ 
+            <a href="#7b943aca098fcf72" class="i field">_stream</a> = <span class="r1 r">stream</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Events
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event fired when objects are added to the underlying stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override event</b> <span class="i">EventHandler</span> <a id="44fa9d58057bb46b" href="../R/44fa9d58057bb46b.html" target="n" data-glyph="30,1" class="i">DataReady</a>
+        {
+            <b>add</b>
+            {
+                <b>lock</b> (<a href="#a389aa97b1922032" class="i field">_monitorObject</a>)
+                {
+                    <b>bool</b> <span id="r2 rd" class="r2 r">firstRegistrant</span> = (<a href="#c7f779a3e876e1fc" class="i">InternalDataReady</a> == <b>null</b>);
+                    <a href="#c7f779a3e876e1fc" class="i">InternalDataReady</a> += <b>value</b>;
+                    <b>if</b> (<span class="r2 r">firstRegistrant</span>)
+                    {
+                        <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#16ab48f9b8a043bb" class="i">DataReady</a> += <a href="#bbb4094f64a5fd1c" class="k">this</a>.<span class="i">OnDataReady</span>;
+                    }
+                }
+            }
+ 
+            <b>remove</b>
+            {
+                <b>lock</b> (<a href="#a389aa97b1922032" class="i field">_monitorObject</a>)
+                {
+                    <a href="#c7f779a3e876e1fc" class="i">InternalDataReady</a> -= <b>value</b>;
+                    <b>if</b> (<a href="#c7f779a3e876e1fc" class="i">InternalDataReady</a> == <b>null</b>)
+                    {
+                        <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#16ab48f9b8a043bb" class="i">DataReady</a> -= <a href="#bbb4094f64a5fd1c" class="k">this</a>.<span class="i">OnDataReady</span>;
+                    }
+                }
+            }
+        }
+ 
+        <b>public event</b> <span class="i">EventHandler</span> <a id="c7f779a3e876e1fc" href="../R/c7f779a3e876e1fc.html" target="n" data-glyph="30,1" class="i">InternalDataReady</a> = <b>null</b>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Events
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Public Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Waitable handle for caller&#39;s to block until data is ready to read from the underlying stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">WaitHandle</span> <a id="5eed3b8e6f9abcc1" href="../R/5eed3b8e6f9abcc1.html" target="n" data-glyph="102,1" class="i property">WaitHandle</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#f1768112bb171bd9" class="i property">ReadHandle</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check if the stream is closed and contains no data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">True if the stream is closed and contains no data, otherwise; false.</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Attempting to read from the underlying stream if EndOfPipeline is true returns</span>
+        <span class="c">///</span><span class="c"> zero objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="3244de7c30d0da08" href="../R/3244de7c30d0da08.html" target="n" data-glyph="102,1" class="i property">EndOfPipeline</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#6abc1682053f7009" class="i property">EndOfPipeline</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check if the stream is open for further writes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">true if the underlying stream is open, otherwise; false.</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The underlying stream may be readable after it is closed if data remains in the</span>
+        <span class="c">///</span><span class="c"> internal buffer. Check </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#3244de7c30d0da08" class="i property">EndOfPipeline</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> to determine if</span>
+        <span class="c">///</span><span class="c"> the underlying stream is closed and contains no data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="a3cacdc2d03a51cf" href="../R/a3cacdc2d03a51cf.html" target="n" data-glyph="102,1" class="i property">IsOpen</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#eff54ee10bba7a56" class="i property">IsOpen</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the number of objects in the underlying stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="98ce9d4c4326b18d" href="../R/98ce9d4c4326b18d.html" target="n" data-glyph="102,1" class="i property">Count</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#01c58f66ddc41629" class="i property">Count</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the capacity of the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The capacity of the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The capacity is the number of objects that stream may contain at one time.  Once this</span>
+        <span class="c">///</span><span class="c"> limit is reached, attempts to write into the stream block until buffer space</span>
+        <span class="c">///</span><span class="c"> becomes available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="35a9e286d75c1081" href="../R/35a9e286d75c1081.html" target="n" data-glyph="102,1" class="i property">MaxCapacity</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#afd17808c1bd2590" class="i property">MaxCapacity</a>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Public Properties
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Public Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Close the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Causes subsequent calls to IsOpen to return false and calls to</span>
+        <span class="c">///</span><span class="c"> a write operation to throw an ObjectDisposedException.</span>
+        <span class="c">///</span><span class="c"> All calls to Close() after the first call are silently ignored.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ObjectDisposedException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The stream is already disposed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="742b821123b2cffb" href="../R/742b821123b2cffb.html" target="n" data-glyph="72,1" class="i method">Close</a>()
+        {
+            <span class="c">// 2003/09/02-JonN added call to close underlying stream</span>
+            <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#2bbebf10cbee9e83" class="i method">Close</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Public Methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handle DataReady events from the underlying stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The stream raising the event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Standard event args.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="d6f07406a61abd32" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OnDataReady</a>(<b>object</b> <span id="r3 rd" class="r3 r">sender</span>, <span class="i">EventArgs</span> <span id="r4 rd" class="r4 r">args</span>)
+        {
+            <span class="c">// call any event handlers on this, replacing the</span>
+            <span class="c">// ObjectStream sender with &#39;this&#39; since receivers</span>
+            <span class="c">// are expecting a PipelineReader&lt;object&gt;</span>
+            <a href="#c7f779a3e876e1fc" class="i">InternalDataReady</a>.<a href="ExtensionMethods.cs.html#79207b44c90e7eac" class="i method">SafeInvoke</a>(<a href="#bbb4094f64a5fd1c" class="k">this</a>, <span class="r4 r">args</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private Methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private fields
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The underlying stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">Can never be null</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>protected</b> <a href="ObjectStream.cs.html#27e9349816faeecb" class="t t">ObjectStreamBase</a> <a id="7b943aca098fcf72" href="../R/7b943aca098fcf72.html" target="n" data-glyph="45,1" class="i field">_stream</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This object is used to acquire an exclusive lock</span>
+        <span class="c">///</span><span class="c"> on event handler registration.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Note that we lock _monitorObject rather than &quot;this&quot; so that</span>
+        <span class="c">///</span><span class="c"> we are protected from outside code interfering in our</span>
+        <span class="c">///</span><span class="c"> critical section.  Thanks to Wintellect for the hint.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>private readonly object</b> <a id="a389aa97b1922032" href="../R/a389aa97b1922032.html" target="n" data-glyph="46,1" class="i field">_monitorObject</a> = <b>new</b> <b>object</b>();
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private fields
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Public method for dispose.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="488ec1d048383301" href="../R/488ec1d048383301.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#50d6411a4a5f0919" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#bbb4094f64a5fd1c" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Release all resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, release all managed resources.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected abstract void</b> <a id="50d6411a4a5f0919" href="../R/50d6411a4a5f0919.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r5 rd" class="r5 r">disposing</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDisposable
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A PipelineReader reading objects from an ObjectStream.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class is not safe for multi-threaded operations.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="2f447d8e47b67733" href="../R/2f447d8e47b67733.html" target="n" data-glyph="2,0" class="t t">ObjectReader</a> : <a href="#bbb4094f64a5fd1c" class="t t">ObjectReaderBase</a>&lt;<b>object</b>&gt;
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct with an existing ObjectStream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The stream to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Thrown if the specified stream is null.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a id="9bc1423ebb10db57" href="../R/9bc1423ebb10db57.html" target="n" data-glyph="72,1" class="t constructor">ObjectReader</a>([<span class="i">In</span>, <span class="i">Out</span>] <a href="ObjectStream.cs.html#247cf7c4c5dec5a4" class="t t">ObjectStream</a> <span id="r6 rd" class="r6 r">stream</span>)
+            : <a href="#a23727fb08086deb" class="k">base</a>(<span class="r6 r">stream</span>)
+        { }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read at most </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">count</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The maximum number of objects to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The objects read.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method blocks if the number of objects in the stream is less than </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">count</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> and the stream is not closed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<b>object</b>&gt; <a id="56bfcc355f83d0de" href="../R/56bfcc355f83d0de.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>int</b> <span id="r7 rd" class="r7 r">count</span>)
+        {
+            <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#ed04bfd08df9dbc8" class="i method">Read</a>(<span class="r7 r">count</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a single object from the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The next object in the stream.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">This method blocks if the stream is empty</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override object</b> <a id="e40b780789c01b59" href="../R/e40b780789c01b59.html" target="n" data-glyph="72,1" class="i method">Read</a>()
+        {
+            <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#de185c166d88dfca" class="i method">Read</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Blocks until the pipeline closes and reads all objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of zero or more objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the stream is empty, an empty collection is returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<b>object</b>&gt; <a id="4472631852df85cb" href="../R/4472631852df85cb.html" target="n" data-glyph="72,1" class="i method">ReadToEnd</a>()
+        {
+            <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#9c93f6b4d088ff5f" class="i method">ReadToEnd</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reads all objects currently in the stream, but does not block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of zero or more objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method performs a read of all objects currently in the</span>
+        <span class="c">///</span><span class="c"> stream. The method will block until exclusive access to the</span>
+        <span class="c">///</span><span class="c"> stream is acquired.  If there are no objects in the stream,</span>
+        <span class="c">///</span><span class="c"> an empty collection is returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<b>object</b>&gt; <a id="53d4d37d5c0b41d1" href="../R/53d4d37d5c0b41d1.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>()
+        {
+            <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<span class="i">NonBlockingRead</span>(<span class="i">Int32</span>.<span class="i">MaxValue</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reads objects currently in the stream, but does not block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of zero or more objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method performs a read of objects currently in the</span>
+        <span class="c">///</span><span class="c"> stream. The method will block until exclusive access to the</span>
+        <span class="c">///</span><span class="c"> stream is acquired.  If there are no objects in the stream,</span>
+        <span class="c">///</span><span class="c"> an empty collection is returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">maxRequested</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return no more than maxRequested objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<b>object</b>&gt; <a id="dfb90dc95af25b9a" href="../R/dfb90dc95af25b9a.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>(<b>int</b> <span id="r8 rd" class="r8 r">maxRequested</span>)
+        {
+            <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#8d5fae42038b28d3" class="i method">NonBlockingRead</a>(<span class="r8 r">maxRequested</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Peek the next object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The next object in the stream or ObjectStream.EmptyObject if the stream is empty.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override object</b> <a id="ec42d2de6f2c6079" href="../R/ec42d2de6f2c6079.html" target="n" data-glyph="72,1" class="i method">Peek</a>()
+        {
+            <b>return</b> <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#6492437245a546e3" class="i method">Peek</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Release all resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, release all managed resources.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="cb43c7f9732b0a26" href="../R/cb43c7f9732b0a26.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r9 rd" class="r9 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r9 r">disposing</span>)
+            {
+                <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#2bbebf10cbee9e83" class="i method">Close</a>();
+            }
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A PipelineReader reading PSObjects from an ObjectStream.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class is not safe for multi-threaded operations.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="e21d0fd74446da21" href="../R/e21d0fd74446da21.html" target="n" data-glyph="2,0" class="t t">PSObjectReader</a> : <a href="#bbb4094f64a5fd1c" class="t t">ObjectReaderBase</a>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct with an existing ObjectStream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The stream to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Thrown if the specified stream is null.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a id="8ff5ec3b17721619" href="../R/8ff5ec3b17721619.html" target="n" data-glyph="72,1" class="t constructor">PSObjectReader</a>([<span class="i">In</span>, <span class="i">Out</span>] <a href="ObjectStream.cs.html#247cf7c4c5dec5a4" class="t t">ObjectStream</a> <span id="r10 rd" class="r10 r">stream</span>)
+            : <a href="#a23727fb08086deb" class="k">base</a>(<span class="r10 r">stream</span>)
+        { }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read at most </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">count</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The maximum number of objects to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The objects read.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method blocks if the number of objects in the stream is less than </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">count</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> and the stream is not closed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="2c4b75f6e67e9ae9" href="../R/2c4b75f6e67e9ae9.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>int</b> <span id="r11 rd" class="r11 r">count</span>)
+        {
+            <b>return</b> <a href="#2a9386e3fca3d80e" class="i method">MakePSObjectCollection</a>(<a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#ed04bfd08df9dbc8" class="i method">Read</a>(<span class="r11 r">count</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a single PSObject from the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The next PSObject in the stream.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">This method blocks if the stream is empty</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="d724d49d786b4ec4" href="../R/d724d49d786b4ec4.html" target="n" data-glyph="72,1" class="i method">Read</a>()
+        {
+            <b>return</b> <a href="#866f450233052825" class="i method">MakePSObject</a>(<a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#de185c166d88dfca" class="i method">Read</a>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Blocks until the pipeline closes and reads all objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of zero or more objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the stream is empty, an empty collection is returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="c2637b04e793d318" href="../R/c2637b04e793d318.html" target="n" data-glyph="72,1" class="i method">ReadToEnd</a>()
+        {
+            <b>return</b> <a href="#2a9386e3fca3d80e" class="i method">MakePSObjectCollection</a>(<a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#9c93f6b4d088ff5f" class="i method">ReadToEnd</a>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reads all objects currently in the stream, but does not block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of zero or more objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method performs a read of all objects currently in the</span>
+        <span class="c">///</span><span class="c"> stream. The method will block until exclusive access to the</span>
+        <span class="c">///</span><span class="c"> stream is acquired.  If there are no objects in the stream,</span>
+        <span class="c">///</span><span class="c"> an empty collection is returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="e00284dcdc5d2295" href="../R/e00284dcdc5d2295.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>()
+        {
+            <b>return</b> <a href="#2a9386e3fca3d80e" class="i method">MakePSObjectCollection</a>(<a href="#7b943aca098fcf72" class="i field">_stream</a>.<span class="i">NonBlockingRead</span>(<span class="i">Int32</span>.<span class="i">MaxValue</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reads objects currently in the stream, but does not block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of zero or more objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method performs a read of objects currently in the</span>
+        <span class="c">///</span><span class="c"> stream. The method will block until exclusive access to the</span>
+        <span class="c">///</span><span class="c"> stream is acquired.  If there are no objects in the stream,</span>
+        <span class="c">///</span><span class="c"> an empty collection is returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">maxRequested</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return no more than maxRequested objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="2738608bf1dd590d" href="../R/2738608bf1dd590d.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>(<b>int</b> <span id="r12 rd" class="r12 r">maxRequested</span>)
+        {
+            <b>return</b> <a href="#2a9386e3fca3d80e" class="i method">MakePSObjectCollection</a>(<a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#8d5fae42038b28d3" class="i method">NonBlockingRead</a>(<span class="r12 r">maxRequested</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Peek the next PSObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The next PSObject in the stream or ObjectStream.EmptyObject if the stream is empty.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="0b8c9147d2f1fa15" href="../R/0b8c9147d2f1fa15.html" target="n" data-glyph="72,1" class="i method">Peek</a>()
+        {
+            <b>return</b> <a href="#866f450233052825" class="i method">MakePSObject</a>(<a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#6492437245a546e3" class="i method">Peek</a>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Release all resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, release all managed resources.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="74e14461330797c5" href="../R/74e14461330797c5.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r13 rd" class="r13 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r13 r">disposing</span>)
+            {
+                <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#2bbebf10cbee9e83" class="i method">Close</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private
+        <b>private static</b> <a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="866f450233052825" href="../R/866f450233052825.html" target="n" data-glyph="76,1" class="i method">MakePSObject</a>(<b>object</b> <span id="r14 rd" class="r14 r">o</span>)
+        {
+            <b>if</b> (<span class="r14 r">o</span> == <b>null</b>)
+                <b>return</b> <b>null</b>;
+ 
+            <b>return</b> <a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../engine/MshObject.cs.html#e81a321a846beda7" class="i method">AsPSObject</a>(<span class="r14 r">o</span>);
+        }
+ 
+        <span class="c">// It might ultimately be more efficient to</span>
+        <span class="c">// make ObjectStream generic and convert the objects to PSObject</span>
+        <span class="c">// before inserting them into the initial Collection, so that we</span>
+        <span class="c">// don&#39;t have to convert the collection later.</span>
+        <b>private static</b> <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="2a9386e3fca3d80e" href="../R/2a9386e3fca3d80e.html" target="n" data-glyph="76,1" class="i method">MakePSObjectCollection</a>(
+            <span class="i">Collection</span>&lt;<b>object</b>&gt; <span id="r15 rd" class="r15 r">coll</span>)
+        {
+            <b>if</b> (<span class="r15 r">coll</span> == <b>null</b>)
+                <b>return</b> <b>null</b>;
+            <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r16 rd" class="r16 r">retval</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;();
+            <b>foreach</b> (<b>object</b> <span id="r17 rd" class="r17 r">o</span> <b>in</b> <span class="r15 r">coll</span>)
+            {
+                <span class="r16 r">retval</span>.<span class="i">Add</span>(<a href="#866f450233052825" class="i method">MakePSObject</a>(<span class="r17 r">o</span>));
+            }
+ 
+            <b>return</b> <span class="r16 r">retval</span>;
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A ObjectReader for a PSDataCollection ObjectStream.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> PSDataCollection is introduced after 1.0. PSDataCollection is</span>
+    <span class="c">///</span><span class="c"> used to store data which can be used with different</span>
+    <span class="c">///</span><span class="c"> commands concurrently.</span>
+    <span class="c">///</span><span class="c"> Only Read() operation is supported currently.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="4616ab9f6396052d" href="../R/4616ab9f6396052d.html" target="n" data-glyph="2,0" class="t t">PSDataCollectionReader</a>&lt;<span id="r18 rd t" class="r18 r t">T</span>, <span id="r19 rd t" class="r19 r t">TResult</span>&gt;
+        : <a href="#bbb4094f64a5fd1c" class="t t">ObjectReaderBase</a>&lt;<span class="r19 r t">TResult</span>&gt;
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private readonly</b> <a href="../engine/hostifaces/PSDataCollection.cs.html#9f9af4f87c578d39" class="t t">PSDataCollectionEnumerator</a>&lt;<span class="r18 r t">T</span>&gt; <a id="c327d830c7e82f56" href="../R/c327d830c7e82f56.html" target="n" data-glyph="46,1" class="i field">_enumerator</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct with an existing ObjectStream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The stream to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Thrown if the specified stream is null.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a id="dd1066d798fea900" href="../R/dd1066d798fea900.html" target="n" data-glyph="72,1" class="t constructor">PSDataCollectionReader</a>(<a href="ObjectStream.cs.html#7277ae0921f30c7a" class="t t">PSDataCollectionStream</a>&lt;<span class="r18 r t">T</span>&gt; <span id="r20 rd" class="r20 r">stream</span>)
+            : <a href="#a23727fb08086deb" class="k">base</a>(<span class="r20 r">stream</span>)
+        {
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r20 r">stream</span>.<a href="ObjectStream.cs.html#a9e2d90ab43caced" class="i property">ObjectStore</a> != <b>null</b>,
+                <span class="s">&quot;Stream should have a valid data store&quot;</span>);
+            <a href="#c327d830c7e82f56" class="i field">_enumerator</a> = (<a href="../engine/hostifaces/PSDataCollection.cs.html#9f9af4f87c578d39" class="t t">PSDataCollectionEnumerator</a>&lt;<span class="r18 r t">T</span>&gt;)<span class="r20 r">stream</span>.<a href="ObjectStream.cs.html#a9e2d90ab43caced" class="i property">ObjectStore</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#fa82432985fff86c" class="i method">GetEnumerator</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The maximum number of objects to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The objects read.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt; <a id="a2fd02dc2232a046" href="../R/a2fd02dc2232a046.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>int</b> <span id="r21 rd" class="r21 r">count</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a single object from the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The next object in the buffer or AutomationNull if buffer is closed</span>
+        <span class="c">///</span><span class="c"> and data is not available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method blocks if the buffer is empty.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="r19 r t">TResult</span> <a id="1905f5000b39d2d4" href="../R/1905f5000b39d2d4.html" target="n" data-glyph="72,1" class="i method">Read</a>()
+        {
+            <b>object</b> <span id="r22 rd" class="r22 r">result</span> = <a href="../engine/AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../engine/AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>;
+            <b>if</b> (<a href="#c327d830c7e82f56" class="i field">_enumerator</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#6ef3ac0fe157db52" class="i method">MoveNext</a>())
+            {
+                <span class="r22 r">result</span> = <a href="#c327d830c7e82f56" class="i field">_enumerator</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#aad414c629a5004d" class="i property">Current</a>;
+            }
+ 
+            <b>return</b> <a href="#578ab3fd38175897" class="i method">ConvertToReturnType</a>(<span class="r22 r">result</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt; <a id="0d8e0a3a2545b31e" href="../R/0d8e0a3a2545b31e.html" target="n" data-glyph="72,1" class="i method">ReadToEnd</a>()
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt; <a id="aa0efdd8f989dc65" href="../R/aa0efdd8f989dc65.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>()
+        {
+            <b>return</b> <span class="i">NonBlockingRead</span>(<span class="i">Int32</span>.<span class="i">MaxValue</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">maxRequested</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return no more than maxRequested objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt; <a id="917aeee4c35c5924" href="../R/917aeee4c35c5924.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>(<b>int</b> <span id="r23 rd" class="r23 r">maxRequested</span>)
+        {
+            <b>if</b> (<span class="r23 r">maxRequested</span> &lt; 0)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="MshTraceSource.cs.html#3ec1a8e5fa36a1b2" class="i method">NewArgumentOutOfRangeException</a>(<b>nameof</b>(<span class="r23 r">maxRequested</span>), <span class="r23 r">maxRequested</span>);
+            }
+ 
+            <b>if</b> (<span class="r23 r">maxRequested</span> == 0)
+            {
+                <b>return</b> <b>new</b> <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt;();
+            }
+ 
+            <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt; <span id="r24 rd" class="r24 r">result</span> = <b>new</b> <span class="i">Collection</span>&lt;<span class="r19 r t">TResult</span>&gt;();
+            <b>int</b> <span id="r25 rd" class="r25 r">readCount</span> = <span class="r23 r">maxRequested</span>;
+ 
+            <b>while</b> (<span class="r25 r">readCount</span> &gt; 0)
+            {
+                <b>if</b> (<a href="#c327d830c7e82f56" class="i field">_enumerator</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#f5eaaf998b260213" class="i method">MoveNext</a>(<b>false</b>))
+                {
+                    <span class="r24 r">result</span>.<span class="i">Add</span>(<a href="#578ab3fd38175897" class="i method">ConvertToReturnType</a>(<a href="#c327d830c7e82f56" class="i field">_enumerator</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#aad414c629a5004d" class="i property">Current</a>));
+                    <b>continue</b>;
+                }
+ 
+                <b>break</b>;
+            }
+ 
+            <b>return</b> <span class="r24 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="r19 r t">TResult</span> <a id="dc40056ad9a47efd" href="../R/dc40056ad9a47efd.html" target="n" data-glyph="72,1" class="i method">Peek</a>()
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Release all resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, release all managed resources.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="a716d81d3588907d" href="../R/a716d81d3588907d.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r26 rd" class="r26 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r26 r">disposing</span>)
+            {
+                <a href="#7b943aca098fcf72" class="i field">_stream</a>.<a href="ObjectStream.cs.html#2bbebf10cbee9e83" class="i method">Close</a>();
+            }
+        }
+ 
+        <b>private static</b> <span class="r19 r t">TResult</span> <a id="578ab3fd38175897" href="../R/578ab3fd38175897.html" target="n" data-glyph="76,1" class="i method">ConvertToReturnType</a>(<b>object</b> <span id="r27 rd" class="r27 r">inputObject</span>)
+        {
+            <span class="i">Type</span> <span id="r28 rd" class="r28 r">resultType</span> = <b>typeof</b>(<span class="r19 r t">TResult</span>);
+            <b>if</b> (<b>typeof</b>(<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>) == <span class="r28 r">resultType</span> || <b>typeof</b>(<b>object</b>) == <span class="r28 r">resultType</span>)
+            {
+                <span class="r19 r t">TResult</span> <span id="r29 rd" class="r29 r">result</span>;
+                <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#0ba3f8cd03b35aee" class="i method">TryConvertTo</a>(<span class="r27 r">inputObject</span>, <b>out</b> <span class="r29 r">result</span>);
+                <b>return</b> <span class="r29 r">result</span>;
+            }
+ 
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>,
+                <span class="s">&quot;ReturnType should be either object or PSObject only&quot;</span>);
+            <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="MshTraceSource.cs.html#18f73963f5ead5c2" class="i method">NewNotSupportedException</a>();
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A ObjectReader for a PSDataCollection ObjectStream.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> PSDataCollection is introduced after 1.0. PSDataCollection is</span>
+    <span class="c">///</span><span class="c"> used to store data which can be used with different</span>
+    <span class="c">///</span><span class="c"> commands concurrently.</span>
+    <span class="c">///</span><span class="c"> Only Read() operation is supported currently.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="e7b370fd04a9d878" href="../R/e7b370fd04a9d878.html" target="n" data-glyph="2,0" class="t t">PSDataCollectionPipelineReader</a>&lt;<span id="r30 rd t" class="r30 r t">T</span>, <span id="r31 rd t" class="r31 r t">TReturn</span>&gt;
+        : <a href="#bbb4094f64a5fd1c" class="t t">ObjectReaderBase</a>&lt;<span class="r31 r t">TReturn</span>&gt;
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private readonly</b> <a href="../engine/hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<span class="r30 r t">T</span>&gt; <a id="d02f7b57bea6c675" href="../R/d02f7b57bea6c675.html" target="n" data-glyph="46,1" class="i field">_datastore</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private Data
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct with an existing ObjectStream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The stream to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">computerName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">runspaceId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="ed3880d18823d220" href="../R/ed3880d18823d220.html" target="n" data-glyph="74,1" class="t constructor">PSDataCollectionPipelineReader</a>(<a href="ObjectStream.cs.html#7277ae0921f30c7a" class="t t">PSDataCollectionStream</a>&lt;<span class="r30 r t">T</span>&gt; <span id="r32 rd" class="r32 r">stream</span>,
+            <b>string</b> <span id="r33 rd" class="r33 r">computerName</span>, <span class="i">Guid</span> <span id="r34 rd" class="r34 r">runspaceId</span>)
+            : <a href="#a23727fb08086deb" class="k">base</a>(<span class="r32 r">stream</span>)
+        {
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r32 r">stream</span>.<a href="ObjectStream.cs.html#a9e2d90ab43caced" class="i property">ObjectStore</a> != <b>null</b>,
+                <span class="s">&quot;Stream should have a valid data store&quot;</span>);
+            <a href="#d02f7b57bea6c675" class="i field">_datastore</a> = <span class="r32 r">stream</span>.<a href="ObjectStream.cs.html#a9e2d90ab43caced" class="i property">ObjectStore</a>;
+            <a href="#dd88046271547a1a" class="i property">ComputerName</a> = <span class="r33 r">computerName</span>;
+            <a href="#cd21670d80044f03" class="i property">RunspaceId</a> = <span class="r34 r">runspaceId</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Computer name passed in by the pipeline which</span>
+        <span class="c">///</span><span class="c"> created this reader.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="dd88046271547a1a" href="../R/dd88046271547a1a.html" target="n" data-glyph="104,1" class="i property">ComputerName</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Runspace Id passed in by the pipeline which</span>
+        <span class="c">///</span><span class="c"> created this reader.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Guid</span> <a id="cd21670d80044f03" href="../R/cd21670d80044f03.html" target="n" data-glyph="104,1" class="i property">RunspaceId</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The maximum number of objects to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The objects read.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt; <a id="8a9b6d1b1e2924ce" href="../R/8a9b6d1b1e2924ce.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>int</b> <span id="r35 rd" class="r35 r">count</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a single object from the stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The next object in the buffer or AutomationNull if buffer is closed</span>
+        <span class="c">///</span><span class="c"> and data is not available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method blocks if the buffer is empty.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="r31 r t">TReturn</span> <a id="58b71c73922c5bf9" href="../R/58b71c73922c5bf9.html" target="n" data-glyph="72,1" class="i method">Read</a>()
+        {
+            <b>object</b> <span id="r36 rd" class="r36 r">result</span> = <a href="../engine/AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../engine/AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>;
+            <b>if</b> (<a href="#d02f7b57bea6c675" class="i field">_datastore</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a> &gt; 0)
+            {
+                <span class="i">Collection</span>&lt;<span class="r30 r t">T</span>&gt; <span id="r37 rd" class="r37 r">resultCollection</span> = <a href="#d02f7b57bea6c675" class="i field">_datastore</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#dbac5089cef6050c" class="i method">ReadAndRemove</a>(1);
+ 
+                <span class="c">// ReadAndRemove returns a Collection&lt;T&gt; type but we</span>
+                <span class="c">// just want the single object contained in the collection.</span>
+                <b>if</b> (<span class="r37 r">resultCollection</span>.<span class="i">Count</span> == 1)
+                {
+                    <span class="r36 r">result</span> = <span class="r37 r">resultCollection</span>[0];
+                }
+            }
+ 
+            <b>return</b> <a href="#368a73b97e19939c" class="i method">ConvertToReturnType</a>(<span class="r36 r">result</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt; <a id="1c1843e990e93955" href="../R/1c1843e990e93955.html" target="n" data-glyph="72,1" class="i method">ReadToEnd</a>()
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt; <a id="eacc994b76ebbe24" href="../R/eacc994b76ebbe24.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>()
+        {
+            <b>return</b> <span class="i">NonBlockingRead</span>(<span class="i">Int32</span>.<span class="i">MaxValue</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">maxRequested</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return no more than maxRequested objects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt; <a id="eabf9c6a74778e2b" href="../R/eabf9c6a74778e2b.html" target="n" data-glyph="72,1" class="i method">NonBlockingRead</a>(<b>int</b> <span id="r38 rd" class="r38 r">maxRequested</span>)
+        {
+            <b>if</b> (<span class="r38 r">maxRequested</span> &lt; 0)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="MshTraceSource.cs.html#3ec1a8e5fa36a1b2" class="i method">NewArgumentOutOfRangeException</a>(<b>nameof</b>(<span class="r38 r">maxRequested</span>), <span class="r38 r">maxRequested</span>);
+            }
+ 
+            <b>if</b> (<span class="r38 r">maxRequested</span> == 0)
+            {
+                <b>return</b> <b>new</b> <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt;();
+            }
+ 
+            <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt; <span id="r39 rd" class="r39 r">results</span> = <b>new</b> <span class="i">Collection</span>&lt;<span class="r31 r t">TReturn</span>&gt;();
+            <b>int</b> <span id="r40 rd" class="r40 r">readCount</span> = <span class="r38 r">maxRequested</span>;
+ 
+            <b>while</b> (<span class="r40 r">readCount</span> &gt; 0)
+            {
+                <b>if</b> (<a href="#d02f7b57bea6c675" class="i field">_datastore</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a> &gt; 0)
+                {
+                    <span class="r39 r">results</span>.<span class="i">Add</span>(<span class="i">ConvertToReturnType</span>((<a href="#d02f7b57bea6c675" class="i field">_datastore</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#dbac5089cef6050c" class="i method">ReadAndRemove</a>(1))[0]));
+                    <span class="r40 r">readCount</span>--;
+                    <b>continue</b>;
+                }
+ 
+                <b>break</b>;
+            }
+ 
+            <b>return</b> <span class="r39 r">results</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is not supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="r31 r t">TReturn</span> <a id="b8a65c542bce6bf9" href="../R/b8a65c542bce6bf9.html" target="n" data-glyph="72,1" class="i method">Peek</a>()
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Converts to the return type based on language primitives.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">inputObject</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Input object to convert.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Input object converted to the specified return type.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="r31 r t">TReturn</span> <a id="368a73b97e19939c" href="../R/368a73b97e19939c.html" target="n" data-glyph="76,1" class="i method">ConvertToReturnType</a>(<b>object</b> <span id="r41 rd" class="r41 r">inputObject</span>)
+        {
+            <span class="i">Type</span> <span id="r42 rd" class="r42 r">resultType</span> = <b>typeof</b>(<span class="r31 r t">TReturn</span>);
+            <b>if</b> (<b>typeof</b>(<a href="../engine/MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>) == <span class="r42 r">resultType</span> || <b>typeof</b>(<b>object</b>) == <span class="r42 r">resultType</span>)
+            {
+                <span class="r31 r t">TReturn</span> <span id="r43 rd" class="r43 r">result</span>;
+                <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#0ba3f8cd03b35aee" class="i method">TryConvertTo</a>(<span class="r41 r">inputObject</span>, <b>out</b> <span class="r43 r">result</span>);
+                <b>return</b> <span class="r43 r">result</span>;
+            }
+ 
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>,
+                <span class="s">&quot;ReturnType should be either object or PSObject only&quot;</span>);
+            <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="MshTraceSource.cs.html#18f73963f5ead5c2" class="i method">NewNotSupportedException</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Release all resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, release all managed resources.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="a3689879a09903ce" href="../R/a3689879a09903ce.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r44 rd" class="r44 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r44 r">disposing</span>)
+            {
+                <a href="#d02f7b57bea6c675" class="i field">_datastore</a>.<a href="../engine/hostifaces/PSDataCollection.cs.html#17fb91187cc003fd" class="i method">Dispose</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDisposable
+    }
+}
+</pre></td></tr></table></div></body></html>

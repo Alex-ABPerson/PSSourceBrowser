@@ -1,0 +1,808 @@
+﻿<!DOCTYPE html>
+<html><head><title>ControlFlowInstructions.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(799);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/interpreter/ControlFlowInstructions.cs" target="_top">engine\interpreter\ControlFlowInstructions.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">/* ****************************************************************************
+ *
+ * Copyright (c) Microsoft Corporation.
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+ * by the terms of the Apache License, Version 2.0.
+ *
+ * You must not remove this notice, or any other, from this software.
+ *
+ *
+ * ***************************************************************************/</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CLR2</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>
+{
+    <b>using</b> <span class="i">LoopFunc</span> = <span class="i">Func</span>&lt;<b>object</b>[], <span class="i">StrongBox</span>&lt;<b>object</b>&gt;[], <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a>, <b>int</b>&gt;;
+ 
+    <b>internal abstract class</b> <a id="435d822a204d0398" href="../../R/435d822a204d0398.html" target="n" data-glyph="2,0" class="t t"><span id="1d8d15dc1038b974">OffsetInstruction</span></a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>internal const int</b> <a id="c57b2ac9860892ca" href="../../R/c57b2ac9860892ca.html" target="n" data-glyph="8,1" class="i field">Unknown</a> = <span class="i">Int32</span>.<span class="i">MinValue</span>;
+        <b>internal const int</b> <a id="0cee1d3f06e8b01a" href="../../R/0cee1d3f06e8b01a.html" target="n" data-glyph="8,1" class="i field">CacheSize</a> = 32;
+ 
+        <span class="c">// the offset to jump to (relative to this instruction):</span>
+        <b>protected int</b> <a id="fa7961d517da88d6" href="../../R/fa7961d517da88d6.html" target="n" data-glyph="45,1" class="i field">_offset</a> = <a href="#c57b2ac9860892ca" class="i field">Unknown</a>;
+ 
+        <b>public int</b> <a id="8f65e4b23692aed0" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Offset</a> { <b>get</b> { <b>return</b> <a href="#fa7961d517da88d6" class="i field">_offset</a>; } }
+ 
+        <b>public abstract</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="3492bee61f6143e5" href="../../R/3492bee61f6143e5.html" target="n" data-glyph="102,1" class="i property">Cache</a> { <b>get</b>; }
+ 
+        <b>public</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a> <a id="98077ec9c9f936c1" href="../../R/98077ec9c9f936c1.html" target="n" data-glyph="72,1" class="i method">Fixup</a>(<b>int</b> <span id="r0 rd" class="r0 r">offset</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#fa7961d517da88d6" class="i field">_offset</a> == <a href="#c57b2ac9860892ca" class="i field">Unknown</a> &amp;&amp; <span class="r0 r">offset</span> != <a href="#c57b2ac9860892ca" class="i field">Unknown</a>);
+            <a href="#fa7961d517da88d6" class="i field">_offset</a> = <span class="r0 r">offset</span>;
+ 
+            <b>var</b> <span id="r1 rd" class="r1 r">cache</span> = <a href="#3492bee61f6143e5" class="i property">Cache</a>;
+            <b>if</b> (<span class="r1 r">cache</span> != <b>null</b> &amp;&amp; <span class="r0 r">offset</span> &gt;= 0 &amp;&amp; <span class="r0 r">offset</span> &lt; <span class="r1 r">cache</span>.<span class="i">Length</span>)
+            {
+                <b>return</b> <span class="r1 r">cache</span>[<span class="r0 r">offset</span>] ?? (<span class="r1 r">cache</span>[<span class="r0 r">offset</span>] = <a href="#435d822a204d0398" class="k">this</a>);
+            }
+ 
+            <b>return</b> <a href="#435d822a204d0398" class="k">this</a>;
+        }
+ 
+        <b>public override string</b> <a id="0f264091f6e3e574" href="../../R/0f264091f6e3e574.html" target="n" data-glyph="72,1" class="i method">ToDebugString</a>(<b>int</b> <span id="r2 rd" class="r2 r">instructionIndex</span>, <b>object</b> <span id="r3 rd" class="r3 r">cookie</span>, <span class="i">Func</span>&lt;<b>int</b>, <b>int</b>&gt; <span id="r4 rd" class="r4 r">labelIndexer</span>, <span class="i">IList</span>&lt;<b>object</b>&gt; <span id="r5 rd" class="r5 r">objects</span>)
+        {
+            <b>return</b> <a href="#b562b720fbbd33d2" class="i method">ToString</a>() + (<a href="#fa7961d517da88d6" class="i field">_offset</a> != <a href="#c57b2ac9860892ca" class="i field">Unknown</a> ? <span class="s">&quot; -&gt; &quot;</span> + (<span class="r2 r">instructionIndex</span> + <a href="#fa7961d517da88d6" class="i field">_offset</a>) : <b>string</b>.<span class="i">Empty</span>);
+        }
+ 
+        <b>public override string</b> <a id="b562b720fbbd33d2" href="../../R/b562b720fbbd33d2.html" target="n" data-glyph="72,1" class="i method">ToString</a>()
+        {
+            <b>return</b> <a href="Instruction.cs.html#d3163689a00630ac" class="i property">InstructionName</a> + (<a href="#fa7961d517da88d6" class="i field">_offset</a> == <a href="#c57b2ac9860892ca" class="i field">Unknown</a> ? <span class="s">&quot;(?)&quot;</span> : <span class="s">&quot;(&quot;</span> + <a href="#fa7961d517da88d6" class="i field">_offset</a> + <span class="s">&quot;)&quot;</span>);
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="c9e079cf3f7c0f23" href="../../R/c9e079cf3f7c0f23.html" target="n" data-glyph="2,0" class="t t">BranchFalseInstruction</a> : <a href="#435d822a204d0398" class="t t">OffsetInstruction</a>
+    {
+        <b>private static</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="9553478876a9999c" href="../../R/9553478876a9999c.html" target="n" data-glyph="46,1" class="i field">s_cache</a>;
+ 
+        <b>public override</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="59869e51844ce86f" href="../../R/59869e51844ce86f.html" target="n" data-glyph="102,1" class="i property">Cache</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#9553478876a9999c" class="i field">s_cache</a> ??= <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[<a href="#0cee1d3f06e8b01a" class="i field">CacheSize</a>]; }
+        }
+ 
+        <b>internal</b> <a id="8adc2b1810da2fc1" href="../../R/8adc2b1810da2fc1.html" target="n" data-glyph="74,1" class="t constructor">BranchFalseInstruction</a>()
+        {
+        }
+ 
+        <b>public override int</b> <a id="398c46b614aff34d" href="../../R/398c46b614aff34d.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>public override int</b> <a id="cc5e91ce894f8480" href="../../R/cc5e91ce894f8480.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r6 rd" class="r6 r">frame</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#fa7961d517da88d6" class="i field">_offset</a> != <a href="#c57b2ac9860892ca" class="i field">Unknown</a>);
+ 
+            <b>if</b> (!(<b>bool</b>)<span class="r6 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>())
+            {
+                <b>return</b> <a href="#fa7961d517da88d6" class="i field">_offset</a>;
+            }
+ 
+            <b>return</b> +1;
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="416d501c0e5844f5" href="../../R/416d501c0e5844f5.html" target="n" data-glyph="2,0" class="t t">BranchTrueInstruction</a> : <a href="#435d822a204d0398" class="t t">OffsetInstruction</a>
+    {
+        <b>private static</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="05966cf5b7945e87" href="../../R/05966cf5b7945e87.html" target="n" data-glyph="46,1" class="i field">s_cache</a>;
+ 
+        <b>public override</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="20f5614fd99e8c08" href="../../R/20f5614fd99e8c08.html" target="n" data-glyph="102,1" class="i property">Cache</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#05966cf5b7945e87" class="i field">s_cache</a> ??= <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[<a href="#0cee1d3f06e8b01a" class="i field">CacheSize</a>]; }
+        }
+ 
+        <b>internal</b> <a id="d77c1586769d12f9" href="../../R/d77c1586769d12f9.html" target="n" data-glyph="74,1" class="t constructor">BranchTrueInstruction</a>()
+        {
+        }
+ 
+        <b>public override int</b> <a id="4822834a5a950d51" href="../../R/4822834a5a950d51.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>public override int</b> <a id="ed4943856130ff7e" href="../../R/ed4943856130ff7e.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r7 rd" class="r7 r">frame</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#fa7961d517da88d6" class="i field">_offset</a> != <a href="#c57b2ac9860892ca" class="i field">Unknown</a>);
+ 
+            <b>if</b> ((<b>bool</b>)<span class="r7 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>())
+            {
+                <b>return</b> <a href="#fa7961d517da88d6" class="i field">_offset</a>;
+            }
+ 
+            <b>return</b> +1;
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="c2f66da330355298" href="../../R/c2f66da330355298.html" target="n" data-glyph="2,0" class="t t">CoalescingBranchInstruction</a> : <a href="#435d822a204d0398" class="t t">OffsetInstruction</a>
+    {
+        <b>private static</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="6240e9fea59cc8a1" href="../../R/6240e9fea59cc8a1.html" target="n" data-glyph="46,1" class="i field">s_cache</a>;
+ 
+        <b>public override</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="646fca8ce49f4002" href="../../R/646fca8ce49f4002.html" target="n" data-glyph="102,1" class="i property">Cache</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#6240e9fea59cc8a1" class="i field">s_cache</a> ??= <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[<a href="#0cee1d3f06e8b01a" class="i field">CacheSize</a>]; }
+        }
+ 
+        <b>internal</b> <a id="1c9e67efc760819f" href="../../R/1c9e67efc760819f.html" target="n" data-glyph="74,1" class="t constructor">CoalescingBranchInstruction</a>()
+        {
+        }
+ 
+        <b>public override int</b> <a id="24ad5457dab3eea2" href="../../R/24ad5457dab3eea2.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>public override int</b> <a id="bdbaf9ad8d735375" href="../../R/bdbaf9ad8d735375.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>public override int</b> <a id="e62a1ea907dc2891" href="../../R/e62a1ea907dc2891.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r8 rd" class="r8 r">frame</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#fa7961d517da88d6" class="i field">_offset</a> != <a href="#c57b2ac9860892ca" class="i field">Unknown</a>);
+ 
+            <b>if</b> (<span class="r8 r">frame</span>.<a href="InterpretedFrame.cs.html#20d635977dd6f58d" class="i method">Peek</a>() != <b>null</b>)
+            {
+                <b>return</b> <a href="#fa7961d517da88d6" class="i field">_offset</a>;
+            }
+ 
+            <b>return</b> +1;
+        }
+    }
+ 
+    <b>internal class</b> <a id="bf2f6c891eb61744" href="../../R/bf2f6c891eb61744.html" target="n" data-glyph="2,0" class="t t">BranchInstruction</a> : <a href="#435d822a204d0398" class="t t">OffsetInstruction</a>
+    {
+        <b>private static</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[][][] <a id="46642c27ed739c0f" href="../../R/46642c27ed739c0f.html" target="n" data-glyph="46,1" class="i field">s_caches</a>;
+ 
+        <b>public override</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[] <a id="42f11ccc649fd318" href="../../R/42f11ccc649fd318.html" target="n" data-glyph="102,1" class="i property">Cache</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#46642c27ed739c0f" class="i field">s_caches</a> == <b>null</b>)
+                {
+                    <a href="#46642c27ed739c0f" class="i field">s_caches</a> = <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[2][][] { <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[2][], <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[2][] };
+                }
+ 
+                <b>return</b> <a href="#46642c27ed739c0f" class="i field">s_caches</a>[<a href="#1ccc6d1b03fbff15" class="i property">ConsumedStack</a>][<a href="#8192032a045fc61f" class="i property">ProducedStack</a>] ?? (<a href="#46642c27ed739c0f" class="i field">s_caches</a>[<a href="#1ccc6d1b03fbff15" class="i property">ConsumedStack</a>][<a href="#8192032a045fc61f" class="i property">ProducedStack</a>] = <b>new</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>[<a href="#0cee1d3f06e8b01a" class="i field">CacheSize</a>]);
+            }
+        }
+ 
+        <b>internal readonly bool</b> <a id="337f48e046d5c807" href="../../R/337f48e046d5c807.html" target="n" data-glyph="44,1" class="i field">_hasResult</a>;
+        <b>internal readonly bool</b> <a id="1094ba2d5b929cb8" href="../../R/1094ba2d5b929cb8.html" target="n" data-glyph="44,1" class="i field">_hasValue</a>;
+ 
+        <b>internal</b> <a id="e286e50731263ee7" href="../../R/e286e50731263ee7.html" target="n" data-glyph="74,1" class="t constructor">BranchInstruction</a>()
+            : <a href="#04f4fb0e91718ad2" class="k">this</a>(<b>false</b>, <b>false</b>)
+        {
+        }
+ 
+        <b>public</b> <a id="04f4fb0e91718ad2" href="../../R/04f4fb0e91718ad2.html" target="n" data-glyph="72,1" class="t constructor">BranchInstruction</a>(<b>bool</b> <span id="r9 rd" class="r9 r">hasResult</span>, <b>bool</b> <span id="r10 rd" class="r10 r">hasValue</span>)
+        {
+            <a href="#337f48e046d5c807" class="i field">_hasResult</a> = <span class="r9 r">hasResult</span>;
+            <a href="#1094ba2d5b929cb8" class="i field">_hasValue</a> = <span class="r10 r">hasValue</span>;
+        }
+ 
+        <b>public override int</b> <a id="1ccc6d1b03fbff15" href="../../R/1ccc6d1b03fbff15.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#1094ba2d5b929cb8" class="i field">_hasValue</a> ? 1 : 0; }
+        }
+ 
+        <b>public override int</b> <a id="8192032a045fc61f" href="../../R/8192032a045fc61f.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#337f48e046d5c807" class="i field">_hasResult</a> ? 1 : 0; }
+        }
+ 
+        <b>public override int</b> <a id="5bbf8eb9da84d806" href="../../R/5bbf8eb9da84d806.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r11 rd" class="r11 r">frame</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#fa7961d517da88d6" class="i field">_offset</a> != <a href="#c57b2ac9860892ca" class="i field">Unknown</a>);
+ 
+            <b>return</b> <a href="#fa7961d517da88d6" class="i field">_offset</a>;
+        }
+    }
+ 
+    <b>internal abstract class</b> <a id="4577b9d23309710c" href="../../R/4577b9d23309710c.html" target="n" data-glyph="2,0" class="t t">IndexedBranchInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>protected const int</b> <a id="974a8a62a527aa41" href="../../R/974a8a62a527aa41.html" target="n" data-glyph="9,1" class="i field">CacheSize</a> = 32;
+ 
+        <b>internal readonly int</b> <a id="d135e9c3ff239044" href="../../R/d135e9c3ff239044.html" target="n" data-glyph="44,1" class="i field">_labelIndex</a>;
+ 
+        <b>protected</b> <a id="c89a20d9da8b0c40" href="../../R/c89a20d9da8b0c40.html" target="n" data-glyph="75,1" class="t constructor">IndexedBranchInstruction</a>(<b>int</b> <span id="r12 rd" class="r12 r">labelIndex</span>)
+        {
+            <a href="#d135e9c3ff239044" class="i field">_labelIndex</a> = <span class="r12 r">labelIndex</span>;
+        }
+ 
+        <b>public</b> <a href="BranchLabel.cs.html#544039e103f60391" class="t t">RuntimeLabel</a> <a id="f405e60506a9fb22" href="../../R/f405e60506a9fb22.html" target="n" data-glyph="72,1" class="i method">GetLabel</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r13 rd" class="r13 r">frame</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#d135e9c3ff239044" class="i field">_labelIndex</a> != <a href="Instruction.cs.html#091955c50bfe55c2" class="i field">UnknownInstrIndex</a>);
+            <b>return</b> <span class="r13 r">frame</span>.<a href="InterpretedFrame.cs.html#cfdbb5b3d15fbf00" class="i field">Interpreter</a>.<a href="Interpreter.cs.html#07b7b9928a80c8f9" class="i field">_labels</a>[<a href="#d135e9c3ff239044" class="i field">_labelIndex</a>];
+        }
+ 
+        <b>public override string</b> <a id="e85e7fb97035fd03" href="../../R/e85e7fb97035fd03.html" target="n" data-glyph="72,1" class="i method">ToDebugString</a>(<b>int</b> <span id="r14 rd" class="r14 r">instructionIndex</span>, <b>object</b> <span id="r15 rd" class="r15 r">cookie</span>, <span class="i">Func</span>&lt;<b>int</b>, <b>int</b>&gt; <span id="r16 rd" class="r16 r">labelIndexer</span>, <span class="i">IList</span>&lt;<b>object</b>&gt; <span id="r17 rd" class="r17 r">objects</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#d135e9c3ff239044" class="i field">_labelIndex</a> != <a href="Instruction.cs.html#091955c50bfe55c2" class="i field">UnknownInstrIndex</a>);
+            <b>int</b> <span id="r18 rd" class="r18 r">targetIndex</span> = <span class="r16 r">labelIndexer</span>(<a href="#d135e9c3ff239044" class="i field">_labelIndex</a>);
+            <b>return</b> <a href="#490f458d0f287170" class="i method">ToString</a>() + (<span class="r18 r">targetIndex</span> != <a href="BranchLabel.cs.html#eddd89038e02be60" class="t t">BranchLabel</a>.<a href="BranchLabel.cs.html#9741b8d7dd0d23b6" class="i field">UnknownIndex</a> ? <span class="s">&quot; -&gt; &quot;</span> + <span class="r18 r">targetIndex</span> : <b>string</b>.<span class="i">Empty</span>);
+        }
+ 
+        <b>public override string</b> <a id="490f458d0f287170" href="../../R/490f458d0f287170.html" target="n" data-glyph="72,1" class="i method">ToString</a>()
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#d135e9c3ff239044" class="i field">_labelIndex</a> != <a href="Instruction.cs.html#091955c50bfe55c2" class="i field">UnknownInstrIndex</a>);
+            <b>return</b> <a href="Instruction.cs.html#d3163689a00630ac" class="i property">InstructionName</a> + <span class="s">&quot;[&quot;</span> + <a href="#d135e9c3ff239044" class="i field">_labelIndex</a> + <span class="s">&quot;]&quot;</span>;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This instruction implements a goto expression that can jump out of any expression.</span>
+    <span class="c">///</span><span class="c"> It pops values (arguments) from the evaluation stack that the expression tree nodes in between</span>
+    <span class="c">///</span><span class="c"> the goto expression and the target label node pushed and not consumed yet.</span>
+    <span class="c">///</span><span class="c"> A goto expression can jump into a node that evaluates arguments only if it carries</span>
+    <span class="c">///</span><span class="c"> a value and jumps right after the first argument (the carried value will be used as the first argument).</span>
+    <span class="c">///</span><span class="c"> Goto can jump into an arbitrary child of a BlockExpression since the block doesn&#39;t accumulate values</span>
+    <span class="c">///</span><span class="c"> on evaluation stack as its child expressions are being evaluated.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Goto needs to execute any finally blocks on the way to the target label.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">example</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> {</span>
+    <span class="c">///</span><span class="c">     f(1, 2, try { g(3, 4, try { goto L } finally { ... }, 6) } finally { ... }, 7, 8)</span>
+    <span class="c">///</span><span class="c">     L: ...</span>
+    <span class="c">///</span><span class="c"> }</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">example</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The goto expression here jumps to label L while having 4 items on evaluation stack (1, 2, 3 and 4).</span>
+    <span class="c">///</span><span class="c"> The jump needs to execute both finally blocks, the first one on stack level 4 the</span>
+    <span class="c">///</span><span class="c"> second one on stack level 2. So, it needs to jump the first finally block, pop 2 items from the stack,</span>
+    <span class="c">///</span><span class="c"> run second finally block and pop another 2 items from the stack and set instruction pointer to label L.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="a95e454badc5949c" href="../../R/a95e454badc5949c.html" target="n" data-glyph="2,0" class="t t">GotoInstruction</a> : <a href="#4577b9d23309710c" class="t t">IndexedBranchInstruction</a>
+    {
+        <b>private const int</b> <a id="7981b8dfdb05dff6" href="../../R/7981b8dfdb05dff6.html" target="n" data-glyph="10,1" class="i field">Variants</a> = 4;
+ 
+        <b>private static readonly</b> <a href="#a95e454badc5949c" class="t t">GotoInstruction</a>[] <a id="3dd5dfe1c00c54e4" href="../../R/3dd5dfe1c00c54e4.html" target="n" data-glyph="46,1" class="i field">s_cache</a> = <b>new</b> <a href="#a95e454badc5949c" class="t t">GotoInstruction</a>[<a href="#7981b8dfdb05dff6" class="i field">Variants</a> * <a href="#974a8a62a527aa41" class="i field">CacheSize</a>];
+ 
+        <b>private readonly bool</b> <a id="a6417693bdfc8087" href="../../R/a6417693bdfc8087.html" target="n" data-glyph="46,1" class="i field">_hasResult</a>;
+ 
+        <span class="c">// TODO: We can remember hasValue in label and look it up when calculating stack balance. That would save some cache.</span>
+        <b>private readonly bool</b> <a id="6a5cd9673816c772" href="../../R/6a5cd9673816c772.html" target="n" data-glyph="46,1" class="i field">_hasValue</a>;
+ 
+        <span class="c">// The values should technically be Consumed = 1, Produced = 1 for gotos that target a label whose continuation depth</span>
+        <span class="c">// is different from the current continuation depth. This is because we will consume one continuation from the _continuations</span>
+        <span class="c">// and at meantime produce a new _pendingContinuation. However, in case of forward gotos, we don&#39;t not know that is the</span>
+        <span class="c">// case until the label is emitted. By then the consumed and produced stack information is useless.</span>
+        <span class="c">// The important thing here is that the stack balance is 0.</span>
+        <b>public override int</b> <a id="0dc0e5ff33a9e695" href="../../R/0dc0e5ff33a9e695.html" target="n" data-glyph="102,1" class="i property">ConsumedContinuations</a> { <b>get</b> { <b>return</b> 0; } }
+ 
+        <b>public override int</b> <a id="97d8d8c996f1b99e" href="../../R/97d8d8c996f1b99e.html" target="n" data-glyph="102,1" class="i property">ProducedContinuations</a> { <b>get</b> { <b>return</b> 0; } }
+ 
+        <b>public override int</b> <a id="bebecebf0e999d62" href="../../R/bebecebf0e999d62.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#6a5cd9673816c772" class="i field">_hasValue</a> ? 1 : 0; }
+        }
+ 
+        <b>public override int</b> <a id="963fdcef832a7dec" href="../../R/963fdcef832a7dec.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#a6417693bdfc8087" class="i field">_hasResult</a> ? 1 : 0; }
+        }
+ 
+        <b>private</b> <a id="e792b4870f67ded5" href="../../R/e792b4870f67ded5.html" target="n" data-glyph="76,1" class="t constructor">GotoInstruction</a>(<b>int</b> <span id="r19 rd" class="r19 r">targetIndex</span>, <b>bool</b> <span id="r20 rd" class="r20 r">hasResult</span>, <b>bool</b> <span id="r21 rd" class="r21 r">hasValue</span>)
+            : <a href="#c89a20d9da8b0c40" class="k">base</a>(<span class="r19 r">targetIndex</span>)
+        {
+            <a href="#a6417693bdfc8087" class="i field">_hasResult</a> = <span class="r20 r">hasResult</span>;
+            <a href="#6a5cd9673816c772" class="i field">_hasValue</a> = <span class="r21 r">hasValue</span>;
+        }
+ 
+        <b>internal static</b> <a href="#a95e454badc5949c" class="t t">GotoInstruction</a> <a id="3b6df9397a0b2cb8" href="../../R/3b6df9397a0b2cb8.html" target="n" data-glyph="74,1" class="i method">Create</a>(<b>int</b> <span id="r22 rd" class="r22 r">labelIndex</span>, <b>bool</b> <span id="r23 rd" class="r23 r">hasResult</span>, <b>bool</b> <span id="r24 rd" class="r24 r">hasValue</span>)
+        {
+            <b>if</b> (<span class="r22 r">labelIndex</span> &lt; <a href="#974a8a62a527aa41" class="i field">CacheSize</a>)
+            {
+                <b>var</b> <span id="r25 rd" class="r25 r">index</span> = <a href="#7981b8dfdb05dff6" class="i field">Variants</a> * <span class="r22 r">labelIndex</span> | (<span class="r23 r">hasResult</span> ? 2 : 0) | (<span class="r24 r">hasValue</span> ? 1 : 0);
+                <b>return</b> <a href="#3dd5dfe1c00c54e4" class="i field">s_cache</a>[<span class="r25 r">index</span>] ?? (<a href="#3dd5dfe1c00c54e4" class="i field">s_cache</a>[<span class="r25 r">index</span>] = <b>new</b> <a href="#e792b4870f67ded5" class="t constructor">GotoInstruction</a>(<span class="r22 r">labelIndex</span>, <span class="r23 r">hasResult</span>, <span class="r24 r">hasValue</span>));
+            }
+ 
+            <b>return</b> <b>new</b> <a href="#e792b4870f67ded5" class="t constructor">GotoInstruction</a>(<span class="r22 r">labelIndex</span>, <span class="r23 r">hasResult</span>, <span class="r24 r">hasValue</span>);
+        }
+ 
+        <b>public override int</b> <a id="c1855d66945e5c63" href="../../R/c1855d66945e5c63.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r26 rd" class="r26 r">frame</span>)
+        {
+            <span class="c">// goto the target label or the current finally continuation:</span>
+            <b>return</b> <span class="r26 r">frame</span>.<a href="InterpretedFrame.cs.html#15cf0ce617eebb12" class="i method">Goto</a>(<a href="#d135e9c3ff239044" class="i field">_labelIndex</a>, <a href="#6a5cd9673816c772" class="i field">_hasValue</a> ? <span class="r26 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>() : <a href="Interpreter.cs.html#2c0965030a4850cd" class="t t">Interpreter</a>.<a href="Interpreter.cs.html#49f392cd9b38d650" class="i field">NoValue</a>, <span class="r27 r">gotoExceptionHandler</span>: <b>false</b>);
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="e5d12002e6785f15" href="../../R/e5d12002e6785f15.html" target="n" data-glyph="2,0" class="t t">EnterTryCatchFinallyInstruction</a> : <a href="#4577b9d23309710c" class="t t">IndexedBranchInstruction</a>
+    {
+        <b>private readonly bool</b> <a id="a4d30266729b5b8a" href="../../R/a4d30266729b5b8a.html" target="n" data-glyph="46,1" class="i field">_hasFinally</a> = <b>false</b>;
+        <b>private</b> <a href="LightCompiler.cs.html#8e8656bd8d80df81" class="t t">TryCatchFinallyHandler</a> <a id="f06f1ad2190d4e6f" href="../../R/f06f1ad2190d4e6f.html" target="n" data-glyph="46,1" class="i field">_tryHandler</a>;
+ 
+        <b>internal void</b> <a id="bfd444615dcd7e78" href="../../R/bfd444615dcd7e78.html" target="n" data-glyph="74,1" class="i method">SetTryHandler</a>(<a href="LightCompiler.cs.html#8e8656bd8d80df81" class="t t">TryCatchFinallyHandler</a> <span id="r28 rd" class="r28 r">tryHandler</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a> == <b>null</b> &amp;&amp; <span class="r28 r">tryHandler</span> != <b>null</b>, <span class="s">&quot;the tryHandler can be set only once&quot;</span>);
+            <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a> = <span class="r28 r">tryHandler</span>;
+        }
+ 
+        <b>public override int</b> <a id="98a646fcebcd9e26" href="../../R/98a646fcebcd9e26.html" target="n" data-glyph="102,1" class="i property">ProducedContinuations</a> { <b>get</b> { <b>return</b> <a href="#a4d30266729b5b8a" class="i field">_hasFinally</a> ? 1 : 0; } }
+ 
+        <b>private</b> <a id="72de9d5892fb9ab1" href="../../R/72de9d5892fb9ab1.html" target="n" data-glyph="76,1" class="t constructor">EnterTryCatchFinallyInstruction</a>(<b>int</b> <span id="r29 rd" class="r29 r">targetIndex</span>, <b>bool</b> <span id="r30 rd" class="r30 r">hasFinally</span>)
+            : <a href="#c89a20d9da8b0c40" class="k">base</a>(<span class="r29 r">targetIndex</span>)
+        {
+            <a href="#a4d30266729b5b8a" class="i field">_hasFinally</a> = <span class="r30 r">hasFinally</span>;
+        }
+ 
+        <b>internal static</b> <a href="#e5d12002e6785f15" class="t t">EnterTryCatchFinallyInstruction</a> <a id="77adaac2d9832ada" href="../../R/77adaac2d9832ada.html" target="n" data-glyph="74,1" class="i method">CreateTryFinally</a>(<b>int</b> <span id="r31 rd" class="r31 r">labelIndex</span>)
+        {
+            <b>return</b> <b>new</b> <a href="#72de9d5892fb9ab1" class="t constructor">EnterTryCatchFinallyInstruction</a>(<span class="r31 r">labelIndex</span>, <b>true</b>);
+        }
+ 
+        <b>internal static</b> <a href="#e5d12002e6785f15" class="t t">EnterTryCatchFinallyInstruction</a> <a id="ba286d4700411360" href="../../R/ba286d4700411360.html" target="n" data-glyph="74,1" class="i method">CreateTryCatch</a>()
+        {
+            <b>return</b> <b>new</b> <a href="#72de9d5892fb9ab1" class="t constructor">EnterTryCatchFinallyInstruction</a>(<a href="Instruction.cs.html#091955c50bfe55c2" class="i field">UnknownInstrIndex</a>, <b>false</b>);
+        }
+ 
+        <b>public override int</b> <a id="dc32fd6000ba9639" href="../../R/dc32fd6000ba9639.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r32 rd" class="r32 r">frame</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a> != <b>null</b>, <span class="s">&quot;the tryHandler must be set already&quot;</span>);
+ 
+            <b>if</b> (<a href="#a4d30266729b5b8a" class="i field">_hasFinally</a>)
+            {
+                <span class="c">// Push finally.</span>
+                <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#552d25c20a919d59" class="i method">PushContinuation</a>(<a href="#d135e9c3ff239044" class="i field">_labelIndex</a>);
+            }
+ 
+            <b>int</b> <span id="r33 rd" class="r33 r">prevInstrIndex</span> = <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>;
+            <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>++;
+ 
+            <span class="c">// Start to run the try/catch/finally blocks</span>
+            <b>var</b> <span id="r34 rd" class="r34 r">instructions</span> = <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#cfdbb5b3d15fbf00" class="i field">Interpreter</a>.<a href="Interpreter.cs.html#2daea7c5858cb20b" class="i property">Instructions</a>.<a href="InstructionList.cs.html#acc3ffb93deb3c3b" class="i field">Instructions</a>;
+            <b>try</b>
+            {
+                <span class="c">// run the try block</span>
+                <b>int</b> <span id="r35 rd" class="r35 r">index</span> = <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>;
+                <b>while</b> (<span class="r35 r">index</span> &gt;= <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#c00a85ce049eb571" class="i field">TryStartIndex</a> &amp;&amp; <span class="r35 r">index</span> &lt; <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#ca8ecd3b9683b1b7" class="i field">TryEndIndex</a>)
+                {
+                    <span class="r35 r">index</span> += <span class="r34 r">instructions</span>[<span class="r35 r">index</span>].<a href="Instruction.cs.html#b103d092b6cf44ed" class="i method">Run</a>(<span class="r32 r">frame</span>);
+                    <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> = <span class="r35 r">index</span>;
+                }
+ 
+                <span class="c">// we finish the try block and is about to jump out of the try/catch blocks</span>
+                <b>if</b> (<span class="r35 r">index</span> == <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#a78cbdfe407d6d76" class="i field">GotoEndTargetIndex</a>)
+                {
+                    <span class="c">// run the &#39;Goto&#39; that jumps out of the try/catch/finally blocks</span>
+                    <span class="i">Debug</span>.<span class="i">Assert</span>(<span class="r34 r">instructions</span>[<span class="r35 r">index</span>] <b>is</b> <a href="#a95e454badc5949c" class="t t">GotoInstruction</a>, <span class="s">&quot;should be the &#39;Goto&#39; instruction that jumps out the try/catch/finally&quot;</span>);
+                    <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> += <span class="r34 r">instructions</span>[<span class="r35 r">index</span>].<a href="Instruction.cs.html#b103d092b6cf44ed" class="i method">Run</a>(<span class="r32 r">frame</span>);
+                }
+            }
+            <b>catch</b> (<a href="LightCompiler.cs.html#126fd9a43076d93e" class="t t">RethrowException</a>)
+            {
+                <span class="c">// a rethrow instruction in the try handler gets to run</span>
+                <b>throw</b>;
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r36 rd" class="r36 r">exception</span>)
+            {
+                <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#24435b3130bbfee5" class="i method">SaveTraceToException</a>(<span class="r36 r">exception</span>);
+                <span class="c">// rethrow if there is no catch blocks defined for this try block</span>
+                <b>if</b> (!<a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#e8893d3abb6fe8e9" class="i property">IsCatchBlockExist</a>) { <b>throw</b>; }
+ 
+                <span class="c">// Search for the best handler in the TryCatchFinally block. If no suitable handler is found, rethrow</span>
+                <a href="LightCompiler.cs.html#b49e26e8d9415c16" class="t t">ExceptionHandler</a> <span id="r37 rd" class="r37 r">exHandler</span>;
+                <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> += <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<span class="i">GotoHandler</span>(<span class="r32 r">frame</span>, <span class="r36 r">exception</span>, <b>out</b> <span class="r37 r">exHandler</span>);
+                <b>if</b> (<span class="r37 r">exHandler</span> == <b>null</b>) { <b>throw</b>; }
+                <b>bool</b> <span id="r38 rd" class="r38 r">rethrow</span> = <b>false</b>;
+                <b>try</b>
+                {
+                    <span class="c">// run the catch block</span>
+                    <b>int</b> <span id="r39 rd" class="r39 r">index</span> = <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>;
+                    <b>while</b> (<span class="r39 r">index</span> &gt;= <span class="r37 r">exHandler</span>.<a href="LightCompiler.cs.html#b8c5b2f0244537c8" class="i field">HandlerStartIndex</a> &amp;&amp; <span class="r39 r">index</span> &lt; <span class="r37 r">exHandler</span>.<a href="LightCompiler.cs.html#39c86d69ddcd4a1f" class="i field">HandlerEndIndex</a>)
+                    {
+                        <span class="r39 r">index</span> += <span class="r34 r">instructions</span>[<span class="r39 r">index</span>].<a href="Instruction.cs.html#b103d092b6cf44ed" class="i method">Run</a>(<span class="r32 r">frame</span>);
+                        <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> = <span class="r39 r">index</span>;
+                    }
+ 
+                    <span class="c">// we finish the catch block and is about to jump out of the try/catch blocks</span>
+                    <b>if</b> (<span class="r39 r">index</span> == <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#a78cbdfe407d6d76" class="i field">GotoEndTargetIndex</a>)
+                    {
+                        <span class="c">// run the &#39;Goto&#39; that jumps out of the try/catch/finally blocks</span>
+                        <span class="i">Debug</span>.<span class="i">Assert</span>(<span class="r34 r">instructions</span>[<span class="r39 r">index</span>] <b>is</b> <a href="#a95e454badc5949c" class="t t">GotoInstruction</a>, <span class="s">&quot;should be the &#39;Goto&#39; instruction that jumps out the try/catch/finally&quot;</span>);
+                        <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> += <span class="r34 r">instructions</span>[<span class="r39 r">index</span>].<a href="Instruction.cs.html#b103d092b6cf44ed" class="i method">Run</a>(<span class="r32 r">frame</span>);
+                    }
+                }
+                <b>catch</b> (<a href="LightCompiler.cs.html#126fd9a43076d93e" class="t t">RethrowException</a>)
+                {
+                    <span class="c">// a rethrow instruction in a catch block gets to run</span>
+                    <span class="r38 r">rethrow</span> = <b>true</b>;
+                }
+ 
+                <b>if</b> (<span class="r38 r">rethrow</span>) { <b>throw</b>; }
+            }
+            <b>finally</b>
+            {
+                <b>if</b> (<a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#8f6d0bddae35780e" class="i property">IsFinallyBlockExist</a>)
+                {
+                    <span class="c">// We get to the finally block in two paths:</span>
+                    <span class="c">//  1. Jump from the try/catch blocks. This includes two sub-routes:</span>
+                    <span class="c">//        a. &#39;Goto&#39; instruction in the middle of try/catch block</span>
+                    <span class="c">//        b. try/catch block runs to its end. Then the &#39;Goto(end)&#39; will be trigger to jump out of the try/catch block</span>
+                    <span class="c">//  2. Exception thrown from the try/catch blocks</span>
+                    <span class="c">// In the first path, the continuation mechanism works and frame.InstructionIndex will be updated to point to the first instruction of the finally block</span>
+                    <span class="c">// In the second path, the continuation mechanism is not involved and frame.InstructionIndex is not updated</span>
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span>
+                    <b>bool</b> <span id="r40 rd" class="r40 r">isFromJump</span> = <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#14c04077dc537415" class="i method">IsJumpHappened</a>();
+                    <span class="i">Debug</span>.<span class="i">Assert</span>(!<span class="r40 r">isFromJump</span> || <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#aef7f43a714d3ec8" class="i field">FinallyStartIndex</a> == <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>, <span class="s">&quot;we should already jump to the first instruction of the finally&quot;</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                    <span class="c">// run the finally block</span>
+                    <span class="c">// we cannot jump out of the finally block, and we cannot have an immediate rethrow in it</span>
+                    <b>int</b> <span id="r41 rd" class="r41 r">index</span> = <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> = <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#aef7f43a714d3ec8" class="i field">FinallyStartIndex</a>;
+                    <b>while</b> (<span class="r41 r">index</span> &gt;= <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#aef7f43a714d3ec8" class="i field">FinallyStartIndex</a> &amp;&amp; <span class="r41 r">index</span> &lt; <a href="#f06f1ad2190d4e6f" class="i field">_tryHandler</a>.<a href="LightCompiler.cs.html#29597b029a63ddde" class="i field">FinallyEndIndex</a>)
+                    {
+                        <span class="r41 r">index</span> += <span class="r34 r">instructions</span>[<span class="r41 r">index</span>].<a href="Instruction.cs.html#b103d092b6cf44ed" class="i method">Run</a>(<span class="r32 r">frame</span>);
+                        <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> = <span class="r41 r">index</span>;
+                    }
+                }
+            }
+ 
+            <b>return</b> <span class="r32 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> - <span class="r33 r">prevInstrIndex</span>;
+        }
+ 
+        <b>public override string</b> <a id="78a9279a4ada2e55" href="../../R/78a9279a4ada2e55.html" target="n" data-glyph="102,1" class="i property">InstructionName</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#a4d30266729b5b8a" class="i field">_hasFinally</a> ? <span class="s">&quot;EnterTryFinally&quot;</span> : <span class="s">&quot;EnterTryCatch&quot;</span>; }
+        }
+ 
+        <b>public override string</b> <a id="0ba0e9c50818a046" href="../../R/0ba0e9c50818a046.html" target="n" data-glyph="72,1" class="i method">ToString</a>()
+        {
+            <b>return</b> <a href="#a4d30266729b5b8a" class="i field">_hasFinally</a> ? <span class="s">&quot;EnterTryFinally[&quot;</span> + <a href="#d135e9c3ff239044" class="i field">_labelIndex</a> + <span class="s">&quot;]&quot;</span> : <span class="s">&quot;EnterTryCatch&quot;</span>;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The first instruction of finally block.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="066f660bf2484a5e" href="../../R/066f660bf2484a5e.html" target="n" data-glyph="2,0" class="t t">EnterFinallyInstruction</a> : <a href="#4577b9d23309710c" class="t t">IndexedBranchInstruction</a>
+    {
+        <b>private static readonly</b> <a href="#066f660bf2484a5e" class="t t">EnterFinallyInstruction</a>[] <a id="b38199164d11f1b6" href="../../R/b38199164d11f1b6.html" target="n" data-glyph="46,1" class="i field">s_cache</a> = <b>new</b> <a href="#066f660bf2484a5e" class="t t">EnterFinallyInstruction</a>[<a href="#974a8a62a527aa41" class="i field">CacheSize</a>];
+ 
+        <b>public override int</b> <a id="f8f8069980ffc1c3" href="../../R/f8f8069980ffc1c3.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a> { <b>get</b> { <b>return</b> 2; } }
+ 
+        <b>public override int</b> <a id="433bc251f7c7d0b2" href="../../R/433bc251f7c7d0b2.html" target="n" data-glyph="102,1" class="i property">ConsumedContinuations</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>private</b> <a id="33c6e87ff2ebb9db" href="../../R/33c6e87ff2ebb9db.html" target="n" data-glyph="76,1" class="t constructor">EnterFinallyInstruction</a>(<b>int</b> <span id="r42 rd" class="r42 r">labelIndex</span>)
+            : <a href="#c89a20d9da8b0c40" class="k">base</a>(<span class="r42 r">labelIndex</span>)
+        {
+        }
+ 
+        <b>internal static</b> <a href="#066f660bf2484a5e" class="t t">EnterFinallyInstruction</a> <a id="2f5775e4de993ca2" href="../../R/2f5775e4de993ca2.html" target="n" data-glyph="74,1" class="i method">Create</a>(<b>int</b> <span id="r43 rd" class="r43 r">labelIndex</span>)
+        {
+            <b>if</b> (<span class="r43 r">labelIndex</span> &lt; <a href="#974a8a62a527aa41" class="i field">CacheSize</a>)
+            {
+                <b>return</b> <a href="#b38199164d11f1b6" class="i field">s_cache</a>[<span class="r43 r">labelIndex</span>] ?? (<a href="#b38199164d11f1b6" class="i field">s_cache</a>[<span class="r43 r">labelIndex</span>] = <b>new</b> <a href="#33c6e87ff2ebb9db" class="t constructor">EnterFinallyInstruction</a>(<span class="r43 r">labelIndex</span>));
+            }
+ 
+            <b>return</b> <b>new</b> <a href="#33c6e87ff2ebb9db" class="t constructor">EnterFinallyInstruction</a>(<span class="r43 r">labelIndex</span>);
+        }
+ 
+        <b>public override int</b> <a id="26241312306b2d3f" href="../../R/26241312306b2d3f.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r44 rd" class="r44 r">frame</span>)
+        {
+            <span class="c">// If _pendingContinuation == -1 then we were getting into the finally block because an exception was thrown</span>
+            <span class="c">//      in this case we need to set the stack depth</span>
+            <span class="c">// Else we were getting into this finally block from a &#39;Goto&#39; jump, and the stack depth is already set properly</span>
+            <b>if</b> (!<span class="r44 r">frame</span>.<a href="InterpretedFrame.cs.html#14c04077dc537415" class="i method">IsJumpHappened</a>())
+            {
+                <span class="r44 r">frame</span>.<a href="InterpretedFrame.cs.html#4b3e279c90d3d058" class="i method">SetStackDepth</a>(<a href="#f405e60506a9fb22" class="i method">GetLabel</a>(<span class="r44 r">frame</span>).<a href="BranchLabel.cs.html#182783c1d339a57f" class="i field">StackDepth</a>);
+            }
+ 
+            <span class="r44 r">frame</span>.<a href="InterpretedFrame.cs.html#e364efee54f147db" class="i method">PushPendingContinuation</a>();
+            <span class="r44 r">frame</span>.<a href="InterpretedFrame.cs.html#48f8867e95c60a4c" class="i method">RemoveContinuation</a>();
+            <b>return</b> 1;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The last instruction of finally block.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="8d39121b5f0c4457" href="../../R/8d39121b5f0c4457.html" target="n" data-glyph="2,0" class="t t">LeaveFinallyInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>internal static readonly</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a> <a id="984c6a12d61064a0" href="../../R/984c6a12d61064a0.html" target="n" data-glyph="44,1" class="i field">Instance</a> = <b>new</b> <a href="#3e484609f30ed18b" class="t constructor">LeaveFinallyInstruction</a>();
+ 
+        <b>public override int</b> <a id="c13d821024b4e068" href="../../R/c13d821024b4e068.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a> { <b>get</b> { <b>return</b> 2; } }
+ 
+        <b>private</b> <a id="3e484609f30ed18b" href="../../R/3e484609f30ed18b.html" target="n" data-glyph="76,1" class="t constructor">LeaveFinallyInstruction</a>()
+        {
+        }
+ 
+        <b>public override int</b> <a id="c02ca7a89df5e072" href="../../R/c02ca7a89df5e072.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r45 rd" class="r45 r">frame</span>)
+        {
+            <span class="r45 r">frame</span>.<a href="InterpretedFrame.cs.html#f784111006d44df2" class="i method">PopPendingContinuation</a>();
+ 
+            <span class="c">// If _pendingContinuation == -1 then we were getting into the finally block because an exception was thrown</span>
+            <span class="c">// In this case we just return 1, and the the real instruction index will be calculated by GotoHandler later</span>
+            <b>if</b> (!<span class="r45 r">frame</span>.<a href="InterpretedFrame.cs.html#14c04077dc537415" class="i method">IsJumpHappened</a>()) { <b>return</b> 1; }
+            <span class="c">// jump to goto target or to the next finally:</span>
+            <b>return</b> <span class="r45 r">frame</span>.<a href="InterpretedFrame.cs.html#75bcbfcf7e4989a5" class="i method">YieldToPendingContinuation</a>();
+        }
+    }
+ 
+    <span class="c">// no-op: we need this just to balance the stack depth.</span>
+    <b>internal sealed class</b> <a id="9a63f33794c072e1" href="../../R/9a63f33794c072e1.html" target="n" data-glyph="2,0" class="t t">EnterExceptionHandlerInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>internal static readonly</b> <a href="#9a63f33794c072e1" class="t t">EnterExceptionHandlerInstruction</a> <a id="b858303555904195" href="../../R/b858303555904195.html" target="n" data-glyph="44,1" class="i field">Void</a> = <b>new</b> <a href="#7f663155af198e1d" class="t constructor">EnterExceptionHandlerInstruction</a>(<b>false</b>);
+        <b>internal static readonly</b> <a href="#9a63f33794c072e1" class="t t">EnterExceptionHandlerInstruction</a> <a id="7a744a6446bf2fbb" href="../../R/7a744a6446bf2fbb.html" target="n" data-glyph="44,1" class="i field">NonVoid</a> = <b>new</b> <a href="#7f663155af198e1d" class="t constructor">EnterExceptionHandlerInstruction</a>(<b>true</b>);
+ 
+        <span class="c">// True if try-expression is non-void.</span>
+        <b>private readonly bool</b> <a id="dd020cb8aee5eb8e" href="../../R/dd020cb8aee5eb8e.html" target="n" data-glyph="46,1" class="i field">_hasValue</a>;
+ 
+        <b>private</b> <a id="7f663155af198e1d" href="../../R/7f663155af198e1d.html" target="n" data-glyph="76,1" class="t constructor">EnterExceptionHandlerInstruction</a>(<b>bool</b> <span id="r46 rd" class="r46 r">hasValue</span>)
+        {
+            <a href="#dd020cb8aee5eb8e" class="i field">_hasValue</a> = <span class="r46 r">hasValue</span>;
+        }
+ 
+        <span class="c">// If an exception is throws in try-body the expression result of try-body is not evaluated and loaded to the stack.</span>
+        <span class="c">// So the stack doesn&#39;t contain the try-body&#39;s value when we start executing the handler.</span>
+        <span class="c">// However, while emitting instructions try block falls thru the catch block with a value on stack.</span>
+        <span class="c">// We need to declare it consumed so that the stack state upon entry to the handler corresponds to the real</span>
+        <span class="c">// stack depth after throw jumped to this catch block.</span>
+        <b>public override int</b> <a id="705bf7f8d77282e0" href="../../R/705bf7f8d77282e0.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a> { <b>get</b> { <b>return</b> <a href="#dd020cb8aee5eb8e" class="i field">_hasValue</a> ? 1 : 0; } }
+ 
+        <span class="c">// A variable storing the current exception is pushed to the stack by exception handling.</span>
+        <span class="c">// Catch handlers: The value is immediately popped and stored into a local.</span>
+        <span class="c">// Fault handlers: The value is kept on stack during fault handler evaluation.</span>
+        <b>public override int</b> <a id="a591528be1451a18" href="../../R/a591528be1451a18.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>public override int</b> <a id="cf8b8a3ea818c597" href="../../R/cf8b8a3ea818c597.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r47 rd" class="r47 r">frame</span>)
+        {
+            <span class="c">// nop (the exception value is pushed by the interpreter in HandleCatch)</span>
+            <b>return</b> 1;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The last instruction of a catch exception handler.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="c059d67b405b3a66" href="../../R/c059d67b405b3a66.html" target="n" data-glyph="2,0" class="t t">LeaveExceptionHandlerInstruction</a> : <a href="#4577b9d23309710c" class="t t">IndexedBranchInstruction</a>
+    {
+        <b>private static readonly</b> <a href="#c059d67b405b3a66" class="t t">LeaveExceptionHandlerInstruction</a>[] <a id="6c5aaad157074df4" href="../../R/6c5aaad157074df4.html" target="n" data-glyph="46,1" class="i field">s_cache</a> = <b>new</b> <a href="#c059d67b405b3a66" class="t t">LeaveExceptionHandlerInstruction</a>[2 * <a href="#974a8a62a527aa41" class="i field">CacheSize</a>];
+ 
+        <b>private readonly bool</b> <a id="bd925253a21d2e82" href="../../R/bd925253a21d2e82.html" target="n" data-glyph="46,1" class="i field">_hasValue</a>;
+ 
+        <span class="c">// The catch block yields a value if the body is non-void. This value is left on the stack.</span>
+        <b>public override int</b> <a id="75ac42f20d192746" href="../../R/75ac42f20d192746.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#bd925253a21d2e82" class="i field">_hasValue</a> ? 1 : 0; }
+        }
+ 
+        <b>public override int</b> <a id="e7764fd71ec4dc86" href="../../R/e7764fd71ec4dc86.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#bd925253a21d2e82" class="i field">_hasValue</a> ? 1 : 0; }
+        }
+ 
+        <b>private</b> <a id="5489b8a649e28587" href="../../R/5489b8a649e28587.html" target="n" data-glyph="76,1" class="t constructor">LeaveExceptionHandlerInstruction</a>(<b>int</b> <span id="r48 rd" class="r48 r">labelIndex</span>, <b>bool</b> <span id="r49 rd" class="r49 r">hasValue</span>)
+            : <a href="#c89a20d9da8b0c40" class="k">base</a>(<span class="r48 r">labelIndex</span>)
+        {
+            <a href="#bd925253a21d2e82" class="i field">_hasValue</a> = <span class="r49 r">hasValue</span>;
+        }
+ 
+        <b>internal static</b> <a href="#c059d67b405b3a66" class="t t">LeaveExceptionHandlerInstruction</a> <a id="44d6774d678657dd" href="../../R/44d6774d678657dd.html" target="n" data-glyph="74,1" class="i method">Create</a>(<b>int</b> <span id="r50 rd" class="r50 r">labelIndex</span>, <b>bool</b> <span id="r51 rd" class="r51 r">hasValue</span>)
+        {
+            <b>if</b> (<span class="r50 r">labelIndex</span> &lt; <a href="#974a8a62a527aa41" class="i field">CacheSize</a>)
+            {
+                <b>int</b> <span id="r52 rd" class="r52 r">index</span> = (2 * <span class="r50 r">labelIndex</span>) | (<span class="r51 r">hasValue</span> ? 1 : 0);
+                <b>return</b> <a href="#6c5aaad157074df4" class="i field">s_cache</a>[<span class="r52 r">index</span>] ?? (<a href="#6c5aaad157074df4" class="i field">s_cache</a>[<span class="r52 r">index</span>] = <b>new</b> <a href="#5489b8a649e28587" class="t constructor">LeaveExceptionHandlerInstruction</a>(<span class="r50 r">labelIndex</span>, <span class="r51 r">hasValue</span>));
+            }
+ 
+            <b>return</b> <b>new</b> <a href="#5489b8a649e28587" class="t constructor">LeaveExceptionHandlerInstruction</a>(<span class="r50 r">labelIndex</span>, <span class="r51 r">hasValue</span>);
+        }
+ 
+        <b>public override int</b> <a id="96075685fd2cfcdc" href="../../R/96075685fd2cfcdc.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r53 rd" class="r53 r">frame</span>)
+        {
+            <b>return</b> <a href="#f405e60506a9fb22" class="i method">GetLabel</a>(<span class="r53 r">frame</span>).<a href="BranchLabel.cs.html#202f29ce6f3287ca" class="i field">Index</a> - <span class="r53 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The last instruction of a fault exception handler.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="cf4d4be24dd13618" href="../../R/cf4d4be24dd13618.html" target="n" data-glyph="2,0" class="t t">LeaveFaultInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>internal static readonly</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a> <a id="27e1534a0f452f26" href="../../R/27e1534a0f452f26.html" target="n" data-glyph="44,1" class="i field">NonVoid</a> = <b>new</b> <a href="#2b06d679f1d2c749" class="t constructor">LeaveFaultInstruction</a>(<b>true</b>);
+        <b>internal static readonly</b> <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a> <a id="55600f658b5c2a06" href="../../R/55600f658b5c2a06.html" target="n" data-glyph="44,1" class="i field">Void</a> = <b>new</b> <a href="#2b06d679f1d2c749" class="t constructor">LeaveFaultInstruction</a>(<b>false</b>);
+ 
+        <b>private readonly bool</b> <a id="8067b66af3aa940a" href="../../R/8067b66af3aa940a.html" target="n" data-glyph="46,1" class="i field">_hasValue</a>;
+ 
+        <span class="c">// The fault block has a value if the body is non-void, but the value is never used.</span>
+        <span class="c">// We compile the body of a fault block as void.</span>
+        <span class="c">// However, we keep the exception object that was pushed upon entering the fault block on the stack during execution of the block</span>
+        <span class="c">// and pop it at the end.</span>
+        <b>public override int</b> <a id="84c0646146a55f22" href="../../R/84c0646146a55f22.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a>
+        {
+            <b>get</b> { <b>return</b> 1; }
+        }
+ 
+        <span class="c">// While emitting instructions a non-void try-fault expression is expected to produce a value.</span>
+        <b>public override int</b> <a id="eaf37616e4ecef62" href="../../R/eaf37616e4ecef62.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#8067b66af3aa940a" class="i field">_hasValue</a> ? 1 : 0; }
+        }
+ 
+        <b>private</b> <a id="2b06d679f1d2c749" href="../../R/2b06d679f1d2c749.html" target="n" data-glyph="76,1" class="t constructor">LeaveFaultInstruction</a>(<b>bool</b> <span id="r54 rd" class="r54 r">hasValue</span>)
+        {
+            <a href="#8067b66af3aa940a" class="i field">_hasValue</a> = <span class="r54 r">hasValue</span>;
+        }
+ 
+        <b>public override int</b> <a id="7e4e8c13b4c52db2" href="../../R/7e4e8c13b4c52db2.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r55 rd" class="r55 r">frame</span>)
+        {
+            <b>object</b> <span id="r56 rd" class="r56 r">exception</span> = <span class="r55 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>();
+            <b>throw</b> <b>new</b> <span class="t">RethrowException</span>();
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="bc39420802da5e10" href="../../R/bc39420802da5e10.html" target="n" data-glyph="2,0" class="t t">ThrowInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>internal static readonly</b> <a href="#bc39420802da5e10" class="t t">ThrowInstruction</a> <a id="13628c42ae5b4e32" href="../../R/13628c42ae5b4e32.html" target="n" data-glyph="44,1" class="i field">Throw</a> = <b>new</b> <a href="#d41e8465d4ed7225" class="t constructor">ThrowInstruction</a>(<b>true</b>, <b>false</b>);
+        <b>internal static readonly</b> <a href="#bc39420802da5e10" class="t t">ThrowInstruction</a> <a id="e1235c7f4fc35a7b" href="../../R/e1235c7f4fc35a7b.html" target="n" data-glyph="44,1" class="i field">VoidThrow</a> = <b>new</b> <a href="#d41e8465d4ed7225" class="t constructor">ThrowInstruction</a>(<b>false</b>, <b>false</b>);
+        <b>internal static readonly</b> <a href="#bc39420802da5e10" class="t t">ThrowInstruction</a> <a id="54368f9bd888d53a" href="../../R/54368f9bd888d53a.html" target="n" data-glyph="44,1" class="i field">Rethrow</a> = <b>new</b> <a href="#d41e8465d4ed7225" class="t constructor">ThrowInstruction</a>(<b>true</b>, <b>true</b>);
+        <b>internal static readonly</b> <a href="#bc39420802da5e10" class="t t">ThrowInstruction</a> <a id="5e12c96933f61385" href="../../R/5e12c96933f61385.html" target="n" data-glyph="44,1" class="i field">VoidRethrow</a> = <b>new</b> <a href="#d41e8465d4ed7225" class="t constructor">ThrowInstruction</a>(<b>false</b>, <b>true</b>);
+ 
+        <b>private readonly bool</b> <a id="3ee06a2f001bded0" href="../../R/3ee06a2f001bded0.html" target="n" data-glyph="46,1" class="i field">_hasResult</a>, <a id="66c9c5e7bcb4d5ff" href="../../R/66c9c5e7bcb4d5ff.html" target="n" data-glyph="46,1" class="i field">_rethrow</a>;
+ 
+        <b>private</b> <a id="d41e8465d4ed7225" href="../../R/d41e8465d4ed7225.html" target="n" data-glyph="76,1" class="t constructor">ThrowInstruction</a>(<b>bool</b> <span id="r57 rd" class="r57 r">hasResult</span>, <b>bool</b> <span id="r58 rd" class="r58 r">isRethrow</span>)
+        {
+            <a href="#3ee06a2f001bded0" class="i field">_hasResult</a> = <span class="r57 r">hasResult</span>;
+            <a href="#66c9c5e7bcb4d5ff" class="i field">_rethrow</a> = <span class="r58 r">isRethrow</span>;
+        }
+ 
+        <b>public override int</b> <a id="32c56adae37a085d" href="../../R/32c56adae37a085d.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#3ee06a2f001bded0" class="i field">_hasResult</a> ? 1 : 0; }
+        }
+ 
+        <b>public override int</b> <a id="e89daccea38f8da5" href="../../R/e89daccea38f8da5.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> 1;
+            }
+        }
+ 
+        <b>public override int</b> <a id="e5d9f07d8e73c70c" href="../../R/e5d9f07d8e73c70c.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r59 rd" class="r59 r">frame</span>)
+        {
+            <b>var</b> <span id="r60 rd" class="r60 r">ex</span> = (<span class="i">Exception</span>)<span class="r59 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>();
+            <b>if</b> (<a href="#66c9c5e7bcb4d5ff" class="i field">_rethrow</a>)
+            {
+                <span class="c">// ExceptionHandler handler;</span>
+                <span class="c">// return frame.Interpreter.GotoHandler(frame, ex, out handler);</span>
+                <b>throw</b> <b>new</b> <span class="t">RethrowException</span>();
+            }
+ 
+            <b>throw</b> <span class="r60 r">ex</span>;
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="60ea74e83a001986" href="../../R/60ea74e83a001986.html" target="n" data-glyph="2,0" class="t t">SwitchInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<b>int</b>, <b>int</b>&gt; <a id="ed3bff3f747f1d5a" href="../../R/ed3bff3f747f1d5a.html" target="n" data-glyph="46,1" class="i field">_cases</a>;
+ 
+        <b>internal</b> <a id="4bae4b830e3bf8d0" href="../../R/4bae4b830e3bf8d0.html" target="n" data-glyph="74,1" class="t constructor">SwitchInstruction</a>(<span class="i">Dictionary</span>&lt;<b>int</b>, <b>int</b>&gt; <span id="r61 rd" class="r61 r">cases</span>)
+        {
+            <a href="Utilities.cs.html#f760db0369027867" class="t t">Assert</a>.<span class="i">NotNull</span>(<span class="r61 r">cases</span>);
+            <a href="#ed3bff3f747f1d5a" class="i field">_cases</a> = <span class="r61 r">cases</span>;
+        }
+ 
+        <b>public override int</b> <a id="311434afd53cf646" href="../../R/311434afd53cf646.html" target="n" data-glyph="102,1" class="i property">ConsumedStack</a> { <b>get</b> { <b>return</b> 1; } }
+ 
+        <b>public override int</b> <a id="5f9dd8078e7c0ab5" href="../../R/5f9dd8078e7c0ab5.html" target="n" data-glyph="102,1" class="i property">ProducedStack</a> { <b>get</b> { <b>return</b> 0; } }
+ 
+        <b>public override int</b> <a id="5a6233edab10e4ee" href="../../R/5a6233edab10e4ee.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r62 rd" class="r62 r">frame</span>)
+        {
+            <b>int</b> <span id="r63 rd" class="r63 r">target</span>;
+            <b>return</b> <a href="#ed3bff3f747f1d5a" class="i field">_cases</a>.<span class="i">TryGetValue</span>((<b>int</b>)<span class="r62 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>(), <b>out</b> <span class="r63 r">target</span>) ? <span class="r63 r">target</span> : 1;
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="0f90d2d9a80cea70" href="../../R/0f90d2d9a80cea70.html" target="n" data-glyph="2,0" class="t t">EnterLoopInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>private readonly int</b> <a id="92f769b49fad41c5" href="../../R/92f769b49fad41c5.html" target="n" data-glyph="46,1" class="i field">_instructionIndex</a>;
+        <b>private</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <a id="6ad9cb24f2b93c02" href="../../R/6ad9cb24f2b93c02.html" target="n" data-glyph="46,1" class="i field">_variables</a>;
+        <b>private</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <a id="c0176bfe727a18bc" href="../../R/c0176bfe727a18bc.html" target="n" data-glyph="46,1" class="i field">_closureVariables</a>;
+        <b>private</b> <a href="../parser/Compiler.cs.html#0fe6cf831dd0d23e" class="t t">PowerShellLoopExpression</a> <a id="aebe20e4ea656825" href="../../R/aebe20e4ea656825.html" target="n" data-glyph="46,1" class="i field">_loop</a>;
+        <b>private int</b> <a id="847e4535a54ff532" href="../../R/847e4535a54ff532.html" target="n" data-glyph="46,1" class="i field">_loopEnd</a>;
+        <b>private int</b> <a id="20b546e6a427c42d" href="../../R/20b546e6a427c42d.html" target="n" data-glyph="46,1" class="i field">_compilationThreshold</a>;
+ 
+        <b>internal</b> <a id="14b4778c9b8316fb" href="../../R/14b4778c9b8316fb.html" target="n" data-glyph="74,1" class="t constructor">EnterLoopInstruction</a>(<a href="../parser/Compiler.cs.html#0fe6cf831dd0d23e" class="t t">PowerShellLoopExpression</a> <span id="r64 rd" class="r64 r">loop</span>, <a href="LocalVariables.cs.html#73129b416b625324" class="t t">LocalVariables</a> <span id="r65 rd" class="r65 r">locals</span>, <b>int</b> <span id="r66 rd" class="r66 r">compilationThreshold</span>, <b>int</b> <span id="r67 rd" class="r67 r">instructionIndex</span>)
+        {
+            <a href="#aebe20e4ea656825" class="i field">_loop</a> = <span class="r64 r">loop</span>;
+            <a href="#6ad9cb24f2b93c02" class="i field">_variables</a> = <span class="r65 r">locals</span>.<a href="LocalVariables.cs.html#0943437f17548257" class="i method">CopyLocals</a>();
+            <a href="#c0176bfe727a18bc" class="i field">_closureVariables</a> = <span class="r65 r">locals</span>.<a href="LocalVariables.cs.html#09a00b6afebd5f94" class="i property">ClosureVariables</a>;
+            <a href="#20b546e6a427c42d" class="i field">_compilationThreshold</a> = <span class="r66 r">compilationThreshold</span>;
+            <a href="#92f769b49fad41c5" class="i field">_instructionIndex</a> = <span class="r67 r">instructionIndex</span>;
+        }
+ 
+        <b>internal void</b> <a id="42cff5ed5341fa7a" href="../../R/42cff5ed5341fa7a.html" target="n" data-glyph="74,1" class="i method">FinishLoop</a>(<b>int</b> <span id="r68 rd" class="r68 r">loopEnd</span>)
+        {
+            <a href="#847e4535a54ff532" class="i field">_loopEnd</a> = <span class="r68 r">loopEnd</span>;
+        }
+ 
+        <b>public override int</b> <a id="d68a5388fad4aafa" href="../../R/d68a5388fad4aafa.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r69 rd" class="r69 r">frame</span>)
+        {
+            <span class="c">// Don&#39;t lock here, it&#39;s a frequently hit path.</span>
+            <span class="c">//</span>
+            <span class="c">// There could be multiple threads racing, but that is okay.</span>
+            <span class="c">// Two bad things can happen:</span>
+            <span class="c">//   * We miss decrements (some thread sets the counter forward)</span>
+            <span class="c">//   * We might enter the &quot;if&quot; branch more than once.</span>
+            <span class="c">//</span>
+            <span class="c">// The first is okay, it just means we take longer to compile.</span>
+            <span class="c">// The second we explicitly guard against inside of Compile().</span>
+            <span class="c">//</span>
+            <span class="c">// We can&#39;t miss 0. The first thread that writes -1 must have read 0 and hence start compilation.</span>
+            <b>if</b> (<b>unchecked</b>(<a href="#20b546e6a427c42d" class="i field">_compilationThreshold</a>--) == 0)
+            {
+                <b>if</b> (<span class="r69 r">frame</span>.<a href="InterpretedFrame.cs.html#cfdbb5b3d15fbf00" class="i field">Interpreter</a>.<a href="Interpreter.cs.html#5ba37d6188b110ab" class="i property">CompileSynchronously</a>)
+                {
+                    <a href="#800a3ce08d5a5d17" class="i method">Compile</a>(<span class="r69 r">frame</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Kick off the compile on another thread so this one can keep going</span>
+                    <span class="i">ThreadPool</span>.<span class="i">QueueUserWorkItem</span>(<span class="i">Compile</span>, <span class="r69 r">frame</span>);
+                }
+            }
+ 
+            <b>return</b> 1;
+        }
+ 
+        <b>private bool</b> <a id="eecf4ecf75ec0bda" href="../../R/eecf4ecf75ec0bda.html" target="n" data-glyph="106,1" class="i property">Compiled</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#aebe20e4ea656825" class="i field">_loop</a> == <b>null</b>; }
+        }
+ 
+        <b>private void</b> <a id="800a3ce08d5a5d17" href="../../R/800a3ce08d5a5d17.html" target="n" data-glyph="76,1" class="i method">Compile</a>(<b>object</b> <span id="r70 rd" class="r70 r">frameObj</span>)
+        {
+            <b>if</b> (<a href="#eecf4ecf75ec0bda" class="i property">Compiled</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>lock</b> (<a href="#0f90d2d9a80cea70" class="k">this</a>)
+            {
+                <b>if</b> (<a href="#eecf4ecf75ec0bda" class="i property">Compiled</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <span class="c">// PerfTrack.NoteEvent(PerfTrack.Categories.Compiler, &quot;Interpreted loop compiled&quot;);</span>
+ 
+                <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r71 rd" class="r71 r">frame</span> = (<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a>)<span class="r70 r">frameObj</span>;
+                <a href="LoopCompiler.cs.html#66a31d5f01ed5403" class="k">var</a> <span id="r72 rd" class="r72 r">compiler</span> = <b>new</b> <a href="LoopCompiler.cs.html#c44a289bc6a2e015" class="t constructor">LoopCompiler</a>(<a href="#aebe20e4ea656825" class="i field">_loop</a>, <span class="r71 r">frame</span>.<a href="InterpretedFrame.cs.html#cfdbb5b3d15fbf00" class="i field">Interpreter</a>.<a href="Interpreter.cs.html#7fd565757f095c56" class="i property">LabelMapping</a>, <a href="#6ad9cb24f2b93c02" class="i field">_variables</a>, <a href="#c0176bfe727a18bc" class="i field">_closureVariables</a>, <a href="#92f769b49fad41c5" class="i field">_instructionIndex</a>, <a href="#847e4535a54ff532" class="i field">_loopEnd</a>);
+                <b>var</b> <span id="r73 rd" class="r73 r">instructions</span> = <span class="r71 r">frame</span>.<a href="InterpretedFrame.cs.html#cfdbb5b3d15fbf00" class="i field">Interpreter</a>.<a href="Interpreter.cs.html#2daea7c5858cb20b" class="i property">Instructions</a>.<a href="InstructionList.cs.html#acc3ffb93deb3c3b" class="i field">Instructions</a>;
+ 
+                <span class="c">// replace this instruction with an optimized one:</span>
+                <span class="r73 r">instructions</span>[<a href="#92f769b49fad41c5" class="i field">_instructionIndex</a>] = <b>new</b> <a href="#f261bd3717161293" class="t constructor">CompiledLoopInstruction</a>(<span class="r72 r">compiler</span>.<a href="LoopCompiler.cs.html#7e8948191b5f660d" class="i method">CreateDelegate</a>());
+ 
+                <span class="c">// invalidate this instruction, some threads may still hold on it:</span>
+                <a href="#aebe20e4ea656825" class="i field">_loop</a> = <b>null</b>;
+                <a href="#6ad9cb24f2b93c02" class="i field">_variables</a> = <b>null</b>;
+                <a href="#c0176bfe727a18bc" class="i field">_closureVariables</a> = <b>null</b>;
+            }
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="aaec7142eff9c919" href="../../R/aaec7142eff9c919.html" target="n" data-glyph="2,0" class="t t">CompiledLoopInstruction</a> : <a href="Instruction.cs.html#ae0e6be378b87eaa" class="t t">Instruction</a>
+    {
+        <b>private readonly</b> <span class="i">LoopFunc</span> <a id="3fccb4cb5c34e8d3" href="../../R/3fccb4cb5c34e8d3.html" target="n" data-glyph="46,1" class="i field">_compiledLoop</a>;
+ 
+        <b>public</b> <a id="f261bd3717161293" href="../../R/f261bd3717161293.html" target="n" data-glyph="72,1" class="t constructor">CompiledLoopInstruction</a>(<span class="i">LoopFunc</span> <span id="r74 rd" class="r74 r">compiledLoop</span>)
+        {
+            <a href="Utilities.cs.html#f760db0369027867" class="t t">Assert</a>.<span class="i">NotNull</span>(<span class="r74 r">compiledLoop</span>);
+            <a href="#3fccb4cb5c34e8d3" class="i field">_compiledLoop</a> = <span class="r74 r">compiledLoop</span>;
+        }
+ 
+        <b>public override int</b> <a id="c026d0c6202e2a9d" href="../../R/c026d0c6202e2a9d.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r75 rd" class="r75 r">frame</span>)
+        {
+            <b>return</b> <span class="i">_compiledLoop</span>(<span class="r75 r">frame</span>.<a href="InterpretedFrame.cs.html#50fbc06c67e027bf" class="i field">Data</a>, <span class="r75 r">frame</span>.<a href="InterpretedFrame.cs.html#7c542da1e79564cd" class="i field">Closure</a>, <span class="r75 r">frame</span>);
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

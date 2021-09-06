@@ -1,0 +1,517 @@
+﻿<!DOCTYPE html>
+<html><head><title>Program.cs</title><link rel="stylesheet" href="../styles.css"><script src="../scripts.js"></script></head>
+<body class="cB" onload="i(508);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#pwsh/Program.cs" target="_top">Program.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#pwsh" target="_top">src\powershell-win-core\powershell-win-core.csproj</a> (pwsh)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">nullable</span> <span class="k preprocess">enable</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines an entry point for the .NET CLI &quot;powershell&quot; app.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="6253a2b3f8d1aeb7" href="R/../../0000000000.html" target="n" data-glyph="0,0" class="t t"><span id="8a514c58e49997ab">ManagedPSEntry</span></a>
+    {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">        /// &lt;summary&gt;
+        /// Exception to signify an early startup failure.
+        /// &lt;/summary&gt;
+        private sealed class StartupException : Exception
+        {
+            /// &lt;summary&gt;
+            /// Construct a new startup exception instance.
+            /// &lt;/summary&gt;
+            /// &lt;param name=&quot;callName&quot;&gt;The name of the native call that failed.&lt;/param&gt;
+            /// &lt;param name=&quot;exitCode&quot;&gt;The exit code the native call returned.&lt;/param&gt;
+            public StartupException(string callName, int exitCode)
+            {
+                CallName = callName;
+                ExitCode = exitCode;
+            }
+ 
+            /// &lt;summary&gt;
+            /// The name of the native call that failed.
+            /// &lt;/summary&gt;
+            public string CallName { get; }
+ 
+            /// &lt;summary&gt;
+            /// The exit code returned by the failed native call.
+            /// &lt;/summary&gt;
+            public int ExitCode { get; }
+        }
+ 
+        // Environment variable used to short circuit second login check
+        private const string LOGIN_ENV_VAR_NAME = &quot;__PWSH_LOGIN_CHECKED&quot;;
+        private const string LOGIN_ENV_VAR_VALUE = &quot;1&quot;;
+ 
+        // Linux p/Invoke constants
+        private const int LINUX_PATH_MAX = 4096;
+ 
+        // MacOS p/Invoke constants
+        private const int MACOS_CTL_KERN = 1;
+        private const int MACOS_KERN_ARGMAX = 8;
+        private const int MACOS_KERN_PROCARGS2 = 49;
+        private const int MACOS_PROC_PIDPATHINFO_MAXSIZE = 4096;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Starts the managed MSH.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Command line arguments to the managed MSH</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static int</b> <a id="37699db63091a2fa" href="R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Main</a>(<b>string</b>[] <span id="r0 rd" class="r0 r">args</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            AttemptExecPwshLogin(args);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+            <b>return</b> <span class="i">UnmanagedPSEntry</span>.<span class="i">Start</span>(<span class="r0 r">args</span>, <span class="r0 r">args</span>.<span class="i">Length</span>);
+        }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">        /// &lt;summary&gt;
+        /// Checks whether pwsh has been started as a login shell
+        /// and if so, proceeds with the login process.
+        /// This method will return early if pwsh was not started as a login shell
+        /// and will throw if it detects a native call has failed.
+        /// In the event of success, we use an exec() call, so this method never returns.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;args&quot;&gt;The startup arguments to pwsh.&lt;/param&gt;
+        private static void AttemptExecPwshLogin(string[] args)
+        {
+            // If the login environment variable is set, we have already done the login logic and have been exec&#39;d
+            if (Environment.GetEnvironmentVariable(LOGIN_ENV_VAR_NAME) != null)
+            {
+                Environment.SetEnvironmentVariable(LOGIN_ENV_VAR_NAME, null);
+                return;
+            }
+ 
+            bool isLinux = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+ 
+            // The first byte (ASCII char) of the name of this process, used to detect &#39;-&#39; for login
+            byte procNameFirstByte;
+ 
+            // The path to the executable this process was started from
+            string? pwshPath;
+ 
+            // On Linux, we can simply use the /proc filesystem
+            if (isLinux)
+            {
+                // Read the process name byte
+                using (FileStream fs = File.OpenRead(&quot;/proc/self/cmdline&quot;))
+                {
+                    procNameFirstByte = (byte)fs.ReadByte();
+                }
+ 
+                // Run login detection logic
+                if (!IsLogin(procNameFirstByte, args))
+                {
+                    return;
+                }
+ 
+                // Read the symlink to the startup executable
+                IntPtr linkPathPtr = Marshal.AllocHGlobal(LINUX_PATH_MAX);
+                IntPtr bufSize = ReadLink(&quot;/proc/self/exe&quot;, linkPathPtr, (UIntPtr)LINUX_PATH_MAX);
+                pwshPath = Marshal.PtrToStringAnsi(linkPathPtr, (int)bufSize);
+                Marshal.FreeHGlobal(linkPathPtr);
+ 
+                if (pwshPath == null)
+                {
+                    throw new ArgumentNullException(nameof(pwshPath));
+                }
+ 
+                // exec pwsh
+                ThrowOnFailure(&quot;exec&quot;, ExecPwshLogin(args, pwshPath, isMacOS: false));
+                return;
+            }
+ 
+            // At this point, we are on macOS
+ 
+            // Set up the mib array and the query for process maximum args size
+            Span&lt;int&gt; mib = stackalloc int[3];
+            int mibLength = 2;
+            mib[0] = MACOS_CTL_KERN;
+            mib[1] = MACOS_KERN_ARGMAX;
+            int size = IntPtr.Size / 2;
+            int argmax = 0;
+ 
+            // Get the process args size
+            unsafe
+            {
+                fixed (int *mibptr = mib)
+                {
+                    ThrowOnFailure(nameof(argmax), SysCtl(mibptr, mibLength, &amp;argmax, &amp;size, IntPtr.Zero, 0));
+                }
+            }
+ 
+            // Get the PID so we can query this process&#39; args
+            int pid = GetPid();
+ 
+            // The following logic is based on https://gist.github.com/nonowarn/770696
+ 
+            // Now read the process args into the allocated space
+            IntPtr procargs = Marshal.AllocHGlobal(argmax);
+            IntPtr executablePathPtr = IntPtr.Zero;
+            try
+            {
+                mib[0] = MACOS_CTL_KERN;
+                mib[1] = MACOS_KERN_PROCARGS2;
+                mib[2] = pid;
+                mibLength = 3;
+ 
+                unsafe
+                {
+                    fixed (int *mibptr = mib)
+                    {
+                        ThrowOnFailure(nameof(procargs), SysCtl(mibptr, mibLength, procargs.ToPointer(), &amp;argmax, IntPtr.Zero, 0));
+                    }
+ 
+                    // The memory block we&#39;re reading is a series of null-terminated strings
+                    // that looks something like this:
+                    //
+                    // | argc      | &lt;int&gt;
+                    // | exec_path | ... \0
+                    // | argv[0]   | ... \0
+                    // | argv[1]   | ... \0
+                    //   ...
+                    //
+                    // We care about argv[0], since that&#39;s the name the process was started with.
+                    // If argv[0][0] == &#39;-&#39;, we have been invoked as login.
+                    // Doing this, the buffer we populated also recorded `exec_path`,
+                    // which is the path to our executable `pwsh`.
+                    // We can reuse this value later to prevent needing to call a .NET API
+                    // to generate our exec invocation.
+ 
+                    // We don&#39;t care about argc&#39;s value, since argv[0] must always exist.
+                    // Skip over argc, but remember where exec_path is for later
+                    executablePathPtr = IntPtr.Add(procargs, sizeof(int));
+ 
+                    // Skip over exec_path
+                    byte *argvPtr = (byte *)executablePathPtr;
+                    while (*argvPtr != 0) { argvPtr++; }
+                    while (*argvPtr == 0) { argvPtr++; }
+ 
+                    // First char in argv[0]
+                    procNameFirstByte = *argvPtr;
+                }
+ 
+                if (!IsLogin(procNameFirstByte, args))
+                {
+                    return;
+                }
+ 
+                // Get the pwshPath from exec_path
+                pwshPath = Marshal.PtrToStringAnsi(executablePathPtr);
+ 
+                if (pwshPath == null)
+                {
+                    throw new ArgumentNullException(nameof(pwshPath));
+                }
+ 
+                // exec pwsh
+                ThrowOnFailure(&quot;exec&quot;, ExecPwshLogin(args, pwshPath, isMacOS: true));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(procargs);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Checks args to see if -Login has been specified.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;procNameFirstByte&quot;&gt;The first byte of the name of the currently running process.&lt;/param&gt;
+        /// &lt;param name=&quot;args&quot;&gt;Arguments passed to the program.&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        private static bool IsLogin(
+            byte procNameFirstByte,
+            string[] args)
+        {
+            // Process name starting with &#39;-&#39; means this is a login shell
+            if (procNameFirstByte == 0x2D)
+            {
+                return true;
+            }
+ 
+            // Look at the first parameter to see if it is -Login
+            // NOTE: -Login is only supported as the first parameter to PowerShell
+            return args.Length &gt; 0
+                &amp;&amp; args[0].Length &gt; 1
+                &amp;&amp; args[0][0] == &#39;-&#39;
+                &amp;&amp; IsParam(args[0], &quot;login&quot;, &quot;LOGIN&quot;);
+        }
+ 
+        /// &lt;summary&gt;
+        /// Determines if a given parameter is the one we&#39;re looking for.
+        /// Assumes any prefix determines that parameter (true for -l, -c and -f).
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;arg&quot;&gt;The argument to check.&lt;/param&gt;
+        /// &lt;param name=&quot;paramToCheck&quot;&gt;The lowercase name of the parameter to check.&lt;/param&gt;
+        /// &lt;param name=&quot;paramToCheckUpper&quot;&gt;The uppercase name of the parameter to check.&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        private static bool IsParam(
+            string arg,
+            string paramToCheck,
+            string paramToCheckUpper)
+        {
+            // Quick fail if the argument is longer than the parameter
+            if (arg.Length &gt; paramToCheck.Length + 1)
+            {
+                return false;
+            }
+ 
+            // Check arg chars in order and allow prefixes
+            for (int i = 1; i &lt; arg.Length; i++)
+            {
+                if (arg[i] != paramToCheck[i - 1]
+                    &amp;&amp; arg[i] != paramToCheckUpper[i - 1])
+                {
+                    return false;
+                }
+            }
+ 
+            return true;
+        }
+ 
+        /// &lt;summary&gt;
+        /// Create the exec call to /bin/{z}sh -l -c &#39;exec pwsh &quot;$@&quot;&#39; and run it.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;args&quot;&gt;The argument vector passed to pwsh.&lt;/param&gt;
+        /// &lt;param name=&quot;isMacOS&quot;&gt;True if we are running on macOS.&lt;/param&gt;
+        /// &lt;param name=&quot;pwshPath&quot;&gt;Absolute path to the pwsh executable.&lt;/param&gt;
+        /// &lt;returns&gt;
+        /// The exit code of exec if it fails.
+        /// If exec succeeds, this process is overwritten so we never actually return.
+        /// &lt;/returns&gt;
+        private static int ExecPwshLogin(string[] args, string pwshPath, bool isMacOS)
+        {
+            // Create input for /bin/sh that execs pwsh
+            int quotedPwshPathLength = GetQuotedPathLength(pwshPath);
+ 
+            string pwshInvocation = string.Create(
+                quotedPwshPathLength + 10, // exec &#39;{pwshPath}&#39; &quot;$@&quot;
+                (pwshPath, quotedPwshPathLength),
+                CreatePwshInvocation);
+ 
+            // Set up the arguments for &#39;/bin/sh&#39;.
+            // We need to add 5 slots for the &#39;/bin/sh&#39; invocation parts, plus 1 slot for the null terminator at the end
+            var execArgs = new string?[args.Length + 6];
+ 
+            // The command arguments
+ 
+            // First argument is the command name.
+            // Even when executing &#39;zsh&#39;, we want to set this to &#39;/bin/sh&#39;
+            // because this tells &#39;zsh&#39; to run in sh emulation mode (it examines $0)
+            execArgs[0] = &quot;/bin/sh&quot;;
+ 
+            execArgs[1] = &quot;-l&quot;; // Login flag
+            execArgs[2] = &quot;-c&quot;; // Command parameter
+            execArgs[3] = pwshInvocation; // Command to execute
+ 
+            // The /bin/sh option spec looks like:
+            // sh -c command_string [command_name [argument...]]
+            // We must provide a command_name before arguments,
+            // but this is never used since &quot;$@&quot; takes argv[1] - argv[n]
+            // and the `exec` builtin provides its own argv[0].
+            // See https://pubs.opengroup.org/onlinepubs/9699919799.2016edition/
+            //
+            // Since command_name is ignored and we can&#39;t use null (it&#39;s the terminator)
+            // we use empty string
+            execArgs[4] = string.Empty;
+ 
+            // Add the arguments passed to pwsh on the end.
+            args.CopyTo(execArgs, 5);
+ 
+            // A null is required by exec.
+            execArgs[execArgs.Length - 1] = null;
+ 
+            // We can&#39;t use Environment.SetEnvironmentVariable() here.
+            // See https://github.com/dotnet/corefx/issues/40130#issuecomment-519420648.
+            ThrowOnFailure(&quot;setenv&quot;, SetEnv(LOGIN_ENV_VAR_NAME, LOGIN_ENV_VAR_VALUE, overwrite: true));
+ 
+            // On macOS, sh doesn&#39;t support login, so we run /bin/zsh in sh emulation mode.
+            if (isMacOS)
+            {
+                return Exec(&quot;/bin/zsh&quot;, execArgs);
+            }
+ 
+            return Exec(&quot;/bin/sh&quot;, execArgs);
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets what the length of the given string will be if it&#39;s
+        /// quote escaped for /bin/sh.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;str&quot;&gt;The string to quote escape.&lt;/param&gt;
+        /// &lt;returns&gt;The length of the string when it&#39;s quote escaped.&lt;/returns&gt;
+        private static int GetQuotedPathLength(string str)
+        {
+            int length = 2;
+            foreach (char c in str)
+            {
+                length++;
+                if (c == &#39;\&#39;&#39;) { length++; }
+            }
+ 
+            return length;
+        }
+ 
+        /// &lt;summary&gt;
+        /// Implements a SpanAction&amp;lt;T&amp;gt; for string.Create()
+        /// that builds the shell invocation for the login pwsh session.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;strBuf&quot;&gt;The buffer of the string to be created.&lt;/param&gt;
+        /// &lt;param name=&quot;invocationInfo&quot;&gt;Information used to build the required string.&lt;/param&gt;
+        private static void CreatePwshInvocation(
+            Span&lt;char&gt; strBuf,
+            (string path, int quotedLength) invocationInfo)
+        {
+            // &quot;exec &quot;
+            const string prefix = &quot;exec &quot;;
+            prefix.AsSpan().CopyTo(strBuf);
+ 
+            // The quoted path to pwsh, like &quot;&#39;/opt/microsoft/powershell/7/pwsh&#39;&quot;
+            int i = prefix.Length;
+            Span&lt;char&gt; pathSpan = strBuf.Slice(i, invocationInfo.quotedLength);
+            QuoteAndWriteToSpan(invocationInfo.path, pathSpan);
+            i += invocationInfo.quotedLength;
+ 
+            // &#39; &quot;$@&quot;&#39; the argument vector splat to pass pwsh arguments through
+            const string suffix = &quot; \&quot;$@\&quot;&quot;;
+            Span&lt;char&gt; bufSuffix = strBuf.Slice(i);
+            suffix.AsSpan().CopyTo(bufSuffix);
+        }
+ 
+        /// &lt;summary&gt;
+        /// Quotes (and sh quote escapes) a string and writes it to the given span.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;arg&quot;&gt;The string to quote.&lt;/param&gt;
+        /// &lt;param name=&quot;span&quot;&gt;The span to write to.&lt;/param&gt;
+        private static void QuoteAndWriteToSpan(string arg, Span&lt;char&gt; span)
+        {
+            span[0] = &#39;\&#39;&#39;;
+ 
+            int i = 0;
+            int j = 1;
+            for (; i &lt; arg.Length; i++, j++)
+            {
+                char c = arg[i];
+ 
+                if (c == &#39;\&#39;&#39;)
+                {
+                    // /bin/sh quote escaping uses backslashes
+                    span[j] = &#39;\\&#39;;
+                    j++;
+                }
+ 
+                span[j] = c;
+            }
+ 
+            span[j] = &#39;\&#39;&#39;;
+        }
+ 
+        /// &lt;summary&gt;
+        /// If the given exit code is negative, throws a StartupException.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;call&quot;&gt;The native call that was attempted.&lt;/param&gt;
+        /// &lt;param name=&quot;code&quot;&gt;The exit code it returned.&lt;/param&gt;
+        private static void ThrowOnFailure(string call, int code)
+        {
+            if (code &lt; 0)
+            {
+                code = Marshal.GetLastWin32Error();
+                Console.Error.WriteLine($&quot;Call to &#39;{call}&#39; failed with errno {code}&quot;);
+                throw new StartupException(call, code);
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// The `execv` POSIX syscall we use to exec /bin/sh.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;path&quot;&gt;The path to the executable to exec.&lt;/param&gt;
+        /// &lt;param name=&quot;args&quot;&gt;
+        /// The arguments to send through to the executable.
+        /// Array must have its final element be null.
+        /// &lt;/param&gt;
+        /// &lt;returns&gt;
+        /// An exit code if exec failed, but if successful the calling process will be overwritten.
+        /// &lt;/returns&gt;
+        [DllImport(&quot;libc&quot;,
+            EntryPoint = &quot;execv&quot;,
+            CallingConvention = CallingConvention.Cdecl,
+            CharSet = CharSet.Ansi,
+            SetLastError = true)]
+        private static extern int Exec(string path, string?[] args);
+ 
+        /// &lt;summary&gt;
+        /// The `readlink` POSIX syscall we use to read the symlink from /proc/self/exe
+        /// to get the executable path of pwsh on Linux.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;pathname&quot;&gt;The path to the symlink to read.&lt;/param&gt;
+        /// &lt;param name=&quot;buf&quot;&gt;Pointer to a buffer to fill with the result.&lt;/param&gt;
+        /// &lt;param name=&quot;size&quot;&gt;The size of the buffer we have supplied.&lt;/param&gt;
+        /// &lt;returns&gt;The number of bytes placed in the buffer.&lt;/returns&gt;
+        [DllImport(&quot;libc&quot;,
+            EntryPoint = &quot;readlink&quot;,
+            CallingConvention = CallingConvention.Cdecl,
+            CharSet = CharSet.Ansi,
+            SetLastError = true)]
+        private static extern IntPtr ReadLink(string pathname, IntPtr buf, UIntPtr size);
+ 
+        /// &lt;summary&gt;
+        /// The `getpid` POSIX syscall we use to quickly get the current process PID on macOS.
+        /// &lt;/summary&gt;
+        /// &lt;returns&gt;The pid of the current process.&lt;/returns&gt;
+        [DllImport(&quot;libc&quot;,
+            EntryPoint = &quot;getpid&quot;,
+            CallingConvention = CallingConvention.Cdecl,
+            CharSet = CharSet.Ansi,
+            SetLastError = true)]
+        private static extern int GetPid();
+ 
+        /// &lt;summary&gt;
+        /// The `setenv` POSIX syscall used to set an environment variable in the process.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;name&quot;&gt;The name of the environment variable.&lt;/param&gt;
+        /// &lt;param name=&quot;value&quot;&gt;The value of the environment variable.&lt;/param&gt;
+        /// &lt;param name=&quot;overwrite&quot;&gt;If true, will overwrite an existing environment variable of the same name.&lt;/param&gt;
+        /// &lt;returns&gt;0 if successful, -1 on error. errno indicates the reason for failure.&lt;/returns&gt;
+        [DllImport(&quot;libc&quot;,
+            EntryPoint = &quot;setenv&quot;,
+            CallingConvention = CallingConvention.Cdecl,
+            CharSet = CharSet.Ansi,
+            SetLastError = true)]
+        private static extern int SetEnv(string name, string value, bool overwrite);
+ 
+        /// &lt;summary&gt;
+        /// The `sysctl` BSD sycall used to get system information on macOS.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;mib&quot;&gt;The Management Information Base name, used to query information.&lt;/param&gt;
+        /// &lt;param name=&quot;mibLength&quot;&gt;The length of the MIB name.&lt;/param&gt;
+        /// &lt;param name=&quot;oldp&quot;&gt;The object passed out of sysctl (may be null)&lt;/param&gt;
+        /// &lt;param name=&quot;oldlenp&quot;&gt;The size of the object passed out of sysctl.&lt;/param&gt;
+        /// &lt;param name=&quot;newp&quot;&gt;The object passed in to sysctl.&lt;/param&gt;
+        /// &lt;param name=&quot;newlenp&quot;&gt;The length of the object passed in to sysctl.&lt;/param&gt;
+        /// &lt;returns&gt;&lt;/returns&gt;
+        [DllImport(&quot;libc&quot;,
+            EntryPoint = &quot;sysctl&quot;,
+            CallingConvention = CallingConvention.Cdecl,
+            CharSet = CharSet.Ansi,
+            SetLastError = true)]
+        private static extern unsafe int SysCtl(int *mib, int mibLength, void *oldp, int *oldlenp, IntPtr newp, int newlenp);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

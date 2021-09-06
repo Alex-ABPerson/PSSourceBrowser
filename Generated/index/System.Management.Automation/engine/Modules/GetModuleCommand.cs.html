@@ -1,0 +1,619 @@
+﻿<!DOCTYPE html>
+<html><head><title>GetModuleCommand.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(610);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/Modules/GetModuleCommand.cs" target="_top">engine\Modules\GetModuleCommand.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Management</span>.<span class="i">Infrastructure</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<span class="c">//</span>
+<span class="c">// Now define the set of commands for manipulating modules.</span>
+<span class="c">//</span>
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Implements a cmdlet that gets the list of loaded modules...</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="../../utils/Verbs.cs.html#d056c4b8c99405e5" class="t t">VerbsCommon</a>.<a href="../../utils/Verbs.cs.html#7ee9f5441476f642" class="i field">Get</a>, <span class="s">&quot;Module&quot;</span>, <span class="i">DefaultParameterSetName</span> = <a href="#8ad76a38fc80a3b7" class="i field">ParameterSet_Loaded</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkID=2096696&quot;</span>)]
+    [<span class="i">OutputType</span>(<b>typeof</b>(<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>))]
+    <b>public sealed class</b> <a id="6f6537067f4dfc41" href="../../R/6f6537067f4dfc41.html" target="n" data-glyph="0,0" class="t t"><span id="6d2e53003ec4b651">GetModuleCommand</span></a> : <a href="ModuleCmdletBase.cs.html#0479f5f00c7dafc1" class="t t">ModuleCmdletBase</a>, <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Cmdlet parameters
+ 
+        <b>private const string</b> <a id="8ad76a38fc80a3b7" href="../../R/8ad76a38fc80a3b7.html" target="n" data-glyph="10,1" class="i field">ParameterSet_Loaded</a> = <span class="s">&quot;Loaded&quot;</span>;
+        <b>private const string</b> <a id="61885351a3ea6253" href="../../R/61885351a3ea6253.html" target="n" data-glyph="10,1" class="i field">ParameterSet_AvailableLocally</a> = <span class="s">&quot;Available&quot;</span>;
+        <b>private const string</b> <a id="cf6b61b7ca41308d" href="../../R/cf6b61b7ca41308d.html" target="n" data-glyph="10,1" class="i field">ParameterSet_AvailableInPsrpSession</a> = <span class="s">&quot;PsSession&quot;</span>;
+        <b>private const string</b> <a id="618c1a32080d7487" href="../../R/618c1a32080d7487.html" target="n" data-glyph="10,1" class="i field">ParameterSet_AvailableInCimSession</a> = <span class="s">&quot;CimSession&quot;</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter specifies the current pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#8ad76a38fc80a3b7" class="i field">ParameterSet_Loaded</a>, <a href="../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>, <a href="../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>, <a href="../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>, <a href="../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>,
+            <span class="i">Justification</span> = <span class="s">&quot;Cmdlets use arrays for parameters.&quot;</span>)]
+        <b>public string</b>[] <a id="01c6f31ce6581762" href="../../R/01c6f31ce6581762.html" target="n" data-glyph="102,1" class="i property">Name</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter specifies the current pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#8ad76a38fc80a3b7" class="i field">ParameterSet_Loaded</a>, <a href="../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>, <a href="../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>, <a href="../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>, <a href="../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>)]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>,
+            <span class="i">Justification</span> = <span class="s">&quot;Cmdlets use arrays for parameters.&quot;</span>)]
+        <b>public</b> <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>[] <a id="57fd187611985629" href="../../R/57fd187611985629.html" target="n" data-glyph="102,1" class="i property">FullyQualifiedName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If specified, all loaded modules should be returned, otherwise only the visible</span>
+        <span class="c">///</span><span class="c"> modules should be returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#8ad76a38fc80a3b7" class="i field">ParameterSet_Loaded</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>)]
+        <b>public</b> <a href="../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="f2f782d162c7e632" href="../../R/f2f782d162c7e632.html" target="n" data-glyph="102,1" class="i property">All</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If specified, then Get-Module will return the set of available modules...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>, <a href="../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>)]
+        <b>public</b> <a href="../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="533eca00353f1ca1" href="../../R/533eca00353f1ca1.html" target="n" data-glyph="102,1" class="i property">ListAvailable</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If specified, then Get-Module will return the set of available modules which supports the specified PowerShell edition...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>)]
+        [<span class="i">ArgumentCompleter</span>(<b>typeof</b>(<a href="#b12f76bbc173377d" class="t t">PSEditionArgumentCompleter</a>))]
+        <b>public string</b> <a id="b17a41d1d1965238" href="../../R/b17a41d1d1965238.html" target="n" data-glyph="102,1" class="i property">PSEdition</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When set, CompatiblePSEditions checking is disabled for modules in the System32 (Windows PowerShell) module directory.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>)]
+        <b>public</b> <a href="../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="ce795207fcdffb83" href="../../R/ce795207fcdffb83.html" target="n" data-glyph="102,1" class="i property">SkipEditionCheck</a>
+        {
+            <b>get</b> { <b>return</b> (<a href="../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a>)<a href="ModuleCmdletBase.cs.html#c870fc509e9d03a5" class="i property">BaseSkipEditionCheck</a>; }
+ 
+            <b>set</b> { <a href="ModuleCmdletBase.cs.html#c870fc509e9d03a5" class="i property">BaseSkipEditionCheck</a> = <b>value</b>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If specified, then Get-Module refreshes the internal cmdlet analysis cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>)]
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>)]
+        <b>public</b> <a href="../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="3deb26441483fc86" href="../../R/3deb26441483fc86.html" target="n" data-glyph="102,1" class="i property">Refresh</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If specified, then Get-Module will attempt to discover PowerShell modules on a remote computer using the specified session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>, <a href="../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>)]
+        [<span class="i">ValidateNotNull</span>]
+        <b>public</b> <a href="../remoting/client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <a id="e10b6b7ba0ab2225" href="../../R/e10b6b7ba0ab2225.html" target="n" data-glyph="102,1" class="i property">PSSession</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If specified, then Get-Module will attempt to discover PS-CIM modules on a remote computer using the specified session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>, <a href="../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>)]
+        [<span class="i">ValidateNotNull</span>]
+        <b>public</b> <span class="i">CimSession</span> <a id="37be9035d6757649" href="../../R/37be9035d6757649.html" target="n" data-glyph="102,1" class="i property">CimSession</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> For interoperability with 3rd party CIM servers, user can specify custom resource URI.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>, <a href="../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>false</b>)]
+        [<span class="i">ValidateNotNull</span>]
+        <b>public</b> <span class="i">Uri</span> <a id="7bee12d1a93de8ea" href="../../R/7bee12d1a93de8ea.html" target="n" data-glyph="102,1" class="i property">CimResourceUri</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> For interoperability with 3rd party CIM servers, user can specify custom namespace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>, <a href="../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>false</b>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        <b>public string</b> <a id="c5a02a2d897c57f6" href="../../R/c5a02a2d897c57f6.html" target="n" data-glyph="102,1" class="i property">CimNamespace</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Cmdlet parameters
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Remote discovery
+ 
+        <b>private</b> <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="adcad57df9f1d162" href="../../R/adcad57df9f1d162.html" target="n" data-glyph="76,1" class="i method">GetAvailableViaPsrpSessionCore</a>(<b>string</b>[] <span id="r0 rd" class="r0 r">moduleNames</span>, <a href="../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r1 rd" class="r1 r">remoteRunspace</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r1 r">remoteRunspace</span> != <b>null</b>, <span class="s">&quot;Caller should verify remoteRunspace != null&quot;</span>);
+ 
+            <b>using</b> (<a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="k">var</a> <span id="r2 rd" class="r2 r">powerShell</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="../hostifaces/PowerShell.cs.html#40345bc4625ff918" class="i method">Create</a>())
+            {
+                <span class="r2 r">powerShell</span>.<a href="../hostifaces/PowerShell.cs.html#ccf57242c9d46642" class="i property">Runspace</a> = <span class="r1 r">remoteRunspace</span>;
+                <span class="r2 r">powerShell</span>.<a href="../hostifaces/PowerShell.cs.html#9cc79c297f6cced9" class="i method">AddCommand</a>(<span class="s">&quot;Get-Module&quot;</span>);
+                <span class="r2 r">powerShell</span>.<a href="../hostifaces/PowerShell.cs.html#40674f99a3618f4b" class="i method">AddParameter</a>(<span class="s">&quot;ListAvailable&quot;</span>, <b>true</b>);
+ 
+                <b>if</b> (<a href="#3deb26441483fc86" class="i property">Refresh</a>.<a href="../MshCmdlet.cs.html#e9c777a85700d3da" class="i property">IsPresent</a>)
+                {
+                    <span class="r2 r">powerShell</span>.<a href="../hostifaces/PowerShell.cs.html#40674f99a3618f4b" class="i method">AddParameter</a>(<span class="s">&quot;Refresh&quot;</span>, <b>true</b>);
+                }
+ 
+                <b>if</b> (<span class="r0 r">moduleNames</span> != <b>null</b>)
+                {
+                    <span class="r2 r">powerShell</span>.<a href="../hostifaces/PowerShell.cs.html#40674f99a3618f4b" class="i method">AddParameter</a>(<span class="s">&quot;Name&quot;</span>, <span class="r0 r">moduleNames</span>);
+                }
+ 
+                <b>string</b> <span id="r3 rd" class="r3 r">errorMessageTemplate</span> = <b>string</b>.<span class="i">Format</span>(
+                    <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                    <span class="i">Modules</span>.<span class="i">RemoteDiscoveryRemotePsrpCommandFailed</span>,
+                    <span class="s">&quot;Get-Module&quot;</span>);
+                <b>foreach</b> (
+                    <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r4 rd" class="r4 r">outputObject</span> <b>in</b>
+                        <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#f394b222fb6b3761" class="i method">InvokePowerShell</a>(<span class="r2 r">powerShell</span>, <a href="#6f6537067f4dfc41" class="k">this</a>, <span class="r3 r">errorMessageTemplate</span>,
+                                                               <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#a5e29f985518ccdf" class="i property">CancellationToken</a>))
+                {
+                    <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r5 rd" class="r5 r">moduleInfo</span> = <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#50249f257fc7acf7" class="i method">RehydratePSModuleInfo</a>(<span class="r4 r">outputObject</span>);
+                    <b>yield</b> <b>return</b> <span class="r5 r">moduleInfo</span>;
+                }
+            }
+        }
+ 
+        <b>private static</b> <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <a id="ccfb668b00e432da" href="../../R/ccfb668b00e432da.html" target="n" data-glyph="76,1" class="i method">GetModuleInfoForRemoteModuleWithoutManifest</a>(<a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#b5270f565e4adb8f" class="t t">CimModule</a> <span id="r6 rd" class="r6 r">cimModule</span>)
+        {
+            <b>return</b> <b>new</b> <a href="PSModuleInfo.cs.html#59ece63f8f427775" class="t constructor">PSModuleInfo</a>(<span class="r6 r">cimModule</span>.<a href="RemoteDiscoveryHelper.cs.html#b1ff4be69e452ccc" class="i property">ModuleName</a>, <b>null</b>, <b>null</b>);
+        }
+ 
+        <b>private</b> <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <a id="1bb1d26336c6e2d7" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ConvertCimModuleInfoToPSModuleInfo</a>(<a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#b5270f565e4adb8f" class="t t">CimModule</a> <span id="r7 rd" class="r7 r">cimModule</span>,
+                                                                <b>string</b> <span id="r8 rd" class="r8 r">computerName</span>)
+        {
+            <b>try</b>
+            {
+                <b>bool</b> <span id="r9 rd" class="r9 r">containedErrors</span> = <b>false</b>;
+ 
+                <b>if</b> (<span class="r7 r">cimModule</span>.<a href="RemoteDiscoveryHelper.cs.html#ce5161a2a2d89c39" class="i property">MainManifest</a> == <b>null</b>)
+                {
+                    <b>return</b> <a href="#ccfb668b00e432da" class="i method">GetModuleInfoForRemoteModuleWithoutManifest</a>(<span class="r7 r">cimModule</span>);
+                }
+ 
+                <b>string</b> <span id="r10 rd" class="r10 r">temporaryModuleManifestPath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(
+                    <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#6d70ded5da8a377d" class="i method">GetModulePath</a>(<span class="r7 r">cimModule</span>.<a href="RemoteDiscoveryHelper.cs.html#b1ff4be69e452ccc" class="i property">ModuleName</a>, <b>null</b>, <span class="r8 r">computerName</span>,
+                                                        <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="../CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>),
+                    <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r7 r">cimModule</span>.<a href="RemoteDiscoveryHelper.cs.html#b1ff4be69e452ccc" class="i property">ModuleName</a>));
+ 
+                <span class="i">Hashtable</span> <span id="r11 rd" class="r11 r">mainData</span> = <b>null</b>;
+                <b>if</b> (!<span class="r9 r">containedErrors</span>)
+                {
+                    <span class="r11 r">mainData</span> = <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#2108befa6ee79738" class="i method">ConvertCimModuleFileToManifestHashtable</a>(
+                        <span class="r7 r">cimModule</span>.<a href="RemoteDiscoveryHelper.cs.html#ce5161a2a2d89c39" class="i property">MainManifest</a>,
+                        <span class="r10 r">temporaryModuleManifestPath</span>,
+                        <a href="#6f6537067f4dfc41" class="k">this</a>,
+                        <b>ref</b> <span class="r9 r">containedErrors</span>);
+                    <b>if</b> (<span class="r11 r">mainData</span> == <b>null</b>)
+                    {
+                        <b>return</b> <a href="#ccfb668b00e432da" class="i method">GetModuleInfoForRemoteModuleWithoutManifest</a>(<span class="r7 r">cimModule</span>);
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r9 r">containedErrors</span>)
+                {
+                    <span class="r11 r">mainData</span> = <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#02a819e4e7e3bbed" class="i method">RewriteManifest</a>(<span class="r11 r">mainData</span>);
+                }
+ 
+                <span class="i">Hashtable</span> <span id="r12 rd" class="r12 r">localizedData</span> = <span class="r11 r">mainData</span>; <span class="c">// TODO/FIXME - this needs full path support from the provider</span>
+ 
+                <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r13 rd" class="r13 r">moduleInfo</span> = <b>null</b>;
+                <b>if</b> (!<span class="r9 r">containedErrors</span>)
+                {
+                    <a href="ModuleCmdletBase.cs.html#2b4569e86558d3e1" class="t t">ImportModuleOptions</a> <span id="r14 rd" class="r14 r">throwAwayOptions</span> = <b>new</b> <span class="t">ImportModuleOptions</span>();
+                    <span class="r13 r">moduleInfo</span> = <a href="ModuleCmdletBase.cs.html#3305195da9c4dde3" class="i method">LoadModuleManifest</a>(
+                        <span class="r10 r">temporaryModuleManifestPath</span>,
+                        <b>null</b>, <span class="c">// scriptInfo</span>
+                        <span class="r11 r">mainData</span>,
+                        <span class="r12 r">localizedData</span>,
+                        0 <span class="c">/* - don&#39;t write errors, don&#39;t load elements, don&#39;t return null on first error */</span>,
+                        <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="ModuleCmdletBase.cs.html#a3007191d0abebfa" class="i property">BaseMinimumVersion</a>,
+                        <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="ModuleCmdletBase.cs.html#e9f6992e3534b73f" class="i property">BaseMaximumVersion</a>,
+                        <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="ModuleCmdletBase.cs.html#c4cac778c669ec13" class="i property">BaseRequiredVersion</a>,
+                        <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="ModuleCmdletBase.cs.html#d3b88fd228891169" class="i property">BaseGuid</a>,
+                        <b>ref</b> <span class="r14 r">throwAwayOptions</span>,
+                        <b>ref</b> <span class="r9 r">containedErrors</span>);
+                }
+ 
+                <b>if</b> ((<span class="r13 r">moduleInfo</span> == <b>null</b>) || <span class="r9 r">containedErrors</span>)
+                {
+                    <span class="r13 r">moduleInfo</span> = <a href="#ccfb668b00e432da" class="i method">GetModuleInfoForRemoteModuleWithoutManifest</a>(<span class="r7 r">cimModule</span>);
+                }
+ 
+                <b>return</b> <span class="r13 r">moduleInfo</span>;
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r15 rd" class="r15 r">e</span>)
+            {
+                <a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r16 rd" class="r16 r">errorRecord</span> = <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#fb063eb9b792dbb8" class="i method">GetErrorRecordForProcessingOfCimModule</a>(<span class="r15 r">e</span>, <span class="r7 r">cimModule</span>.<a href="RemoteDiscoveryHelper.cs.html#b1ff4be69e452ccc" class="i property">ModuleName</a>);
+                <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r16 r">errorRecord</span>);
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <b>private</b> <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="cb5c4b1e78f478e1" href="../../R/cb5c4b1e78f478e1.html" target="n" data-glyph="76,1" class="i method">GetAvailableViaCimSessionCore</a>(<span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r17 rd" class="r17 r">moduleNames</span>,
+                                                                        <span class="i">CimSession</span> <span id="r18 rd" class="r18 r">cimSession</span>, <span class="i">Uri</span> <span id="r19 rd" class="r19 r">resourceUri</span>,
+                                                                        <b>string</b> <span id="r20 rd" class="r20 r">cimNamespace</span>)
+        {
+            <span class="i">IEnumerable</span>&lt;<a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#b5270f565e4adb8f" class="t t">CimModule</a>&gt; <span id="r21 rd" class="r21 r">remoteModules</span> = <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#b74aa1f011faf71c" class="i method">GetCimModules</a>(
+                <span class="r18 r">cimSession</span>,
+                <span class="r19 r">resourceUri</span>,
+                <span class="r20 r">cimNamespace</span>,
+                <span class="r17 r">moduleNames</span>,
+                <b>true</b> <span class="c">/* onlyManifests */</span>,
+                <a href="#6f6537067f4dfc41" class="k">this</a>,
+                <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#a5e29f985518ccdf" class="i property">CancellationToken</a>);
+ 
+            <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r22 rd" class="r22 r">remoteModuleInfos</span> = <span class="r21 r">remoteModules</span>
+                .<span class="i">Select</span>(<span id="r23 rd" class="r23 r">cimModule</span> =&gt; <a href="#6f6537067f4dfc41" class="k">this</a>.<span class="i">ConvertCimModuleInfoToPSModuleInfo</span>(<span class="r23 r">cimModule</span>, <span class="r18 r">cimSession</span>.<span class="i">ComputerName</span>))
+                .<span class="i">Where</span>(<b>static</b> <span id="r24 rd" class="r24 r">moduleInfo</span> =&gt; <span class="r24 r">moduleInfo</span> != <b>null</b>);
+ 
+            <b>return</b> <span class="r22 r">remoteModuleInfos</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Remote discovery
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Cancellation support
+ 
+        <b>private readonly</b> <span class="i">CancellationTokenSource</span> <a id="071e788ea97c61c4" href="../../R/071e788ea97c61c4.html" target="n" data-glyph="46,1" class="i field">_cancellationTokenSource</a> = <b>new</b> <span class="i">CancellationTokenSource</span>();
+ 
+        <b>private</b> <span class="i">CancellationToken</span> <a id="a5e29f985518ccdf" href="../../R/a5e29f985518ccdf.html" target="n" data-glyph="106,1" class="i property">CancellationToken</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#071e788ea97c61c4" class="i field">_cancellationTokenSource</a>.<span class="i">Token</span>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When overridden in the derived class, interrupts currently</span>
+        <span class="c">///</span><span class="c"> running code within the command. It should interrupt BeginProcessing,</span>
+        <span class="c">///</span><span class="c"> ProcessRecord, and EndProcessing.</span>
+        <span class="c">///</span><span class="c"> Default implementation in the base class just returns.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="fd8c8d292cc8aae4" href="../../R/fd8c8d292cc8aae4.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <a href="#071e788ea97c61c4" class="i field">_cancellationTokenSource</a>.<span class="i">Cancel</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable Members
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="911b292880c4f040" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#b4a5a3a2afb3d19f" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#6f6537067f4dfc41" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="b4a5a3a2afb3d19f" href="../../R/b4a5a3a2afb3d19f.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r25 rd" class="r25 r">disposing</span>)
+        {
+            <b>if</b> (<a href="#a723d0036cb98e9d" class="i field">_disposed</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r25 r">disposing</span>)
+            {
+                <a href="#071e788ea97c61c4" class="i field">_cancellationTokenSource</a>.<span class="i">Dispose</span>();
+            }
+ 
+            <a href="#a723d0036cb98e9d" class="i field">_disposed</a> = <b>true</b>;
+        }
+ 
+        <b>private bool</b> <a id="a723d0036cb98e9d" href="../../R/a723d0036cb98e9d.html" target="n" data-glyph="46,1" class="i field">_disposed</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <b>private void</b> <a id="b3d1e0f03fb328d6" href="../../R/b3d1e0f03fb328d6.html" target="n" data-glyph="76,1" class="i method">AssertListAvailableMode</a>()
+        {
+            <b>if</b> (!<a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#533eca00353f1ca1" class="i property">ListAvailable</a>.<a href="../MshCmdlet.cs.html#e9c777a85700d3da" class="i property">IsPresent</a>)
+            {
+                <b>string</b> <span id="r26 rd" class="r26 r">errorMessage</span> = <span class="i">Modules</span>.<span class="i">RemoteDiscoveryWorksOnlyInListAvailableMode</span>;
+                <span class="i">ArgumentException</span> <span id="r27 rd" class="r27 r">argumentException</span> = <b>new</b> <span class="i">ArgumentException</span>(<span class="r26 r">errorMessage</span>);
+                <a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r28 rd" class="r28 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(
+                    <span class="r27 r">argumentException</span>,
+                    <span class="s">&quot;RemoteDiscoveryWorksOnlyInListAvailableMode&quot;</span>,
+                    <a href="../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                    <b>null</b>);
+                <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(<span class="r28 r">errorRecord</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Write out the specified modules...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="9345789e38be0e1a" href="../../R/9345789e38be0e1a.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <span class="c">// Name and FullyQualifiedName should not be specified at the same time.</span>
+            <span class="c">// Throw out terminating error if this is the case.</span>
+            <b>if</b> ((<a href="#01c6f31ce6581762" class="i property">Name</a> != <b>null</b>) &amp;&amp; (<a href="#57fd187611985629" class="i property">FullyQualifiedName</a> != <b>null</b>))
+            {
+                <b>string</b> <span id="r29 rd" class="r29 r">errMsg</span> = <a href="../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">SessionStateStrings</span>.<span class="i">GetContent_TailAndHeadCannotCoexist</span>, <span class="s">&quot;Name&quot;</span>, <span class="s">&quot;FullyQualifiedName&quot;</span>);
+                <a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r30 rd" class="r30 r">error</span> = <b>new</b> <span class="t">ErrorRecord</span>(<b>new</b> <span class="i">InvalidOperationException</span>(<span class="r29 r">errMsg</span>), <span class="s">&quot;NameAndFullyQualifiedNameCannotBeSpecifiedTogether&quot;</span>, <a href="../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <b>null</b>);
+                <a href="../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(<span class="r30 r">error</span>);
+            }
+ 
+            <span class="c">// -SkipEditionCheck only makes sense for -ListAvailable (otherwise the module is already loaded)</span>
+            <b>if</b> (<a href="#ce795207fcdffb83" class="i property">SkipEditionCheck</a> &amp;&amp; !<a href="#533eca00353f1ca1" class="i property">ListAvailable</a>)
+            {
+                <a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r31 rd" class="r31 r">error</span> = <b>new</b> <span class="t">ErrorRecord</span>(
+                    <b>new</b> <span class="i">InvalidOperationException</span>(<span class="i">Modules</span>.<span class="i">SkipEditionCheckNotSupportedWithoutListAvailable</span>),
+                    <b>nameof</b>(<span class="i">Modules</span>.<span class="i">SkipEditionCheckNotSupportedWithoutListAvailable</span>),
+                    <a href="../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <span class="i">targetObject</span>: <b>null</b>);
+ 
+                <a href="../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(<span class="r31 r">error</span>);
+            }
+ 
+            <b>var</b> <span id="r32 rd" class="r32 r">strNames</span> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+            <b>if</b> (<a href="#01c6f31ce6581762" class="i property">Name</a> != <b>null</b>)
+            {
+                <span class="r32 r">strNames</span>.<span class="i">AddRange</span>(<a href="#01c6f31ce6581762" class="i property">Name</a>);
+            }
+ 
+            <b>var</b> <span id="r33 rd" class="r33 r">moduleSpecTable</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+            <b>if</b> (<a href="#57fd187611985629" class="i property">FullyQualifiedName</a> != <b>null</b>)
+            {
+                <b>for</b> (<b>int</b> <span id="r34 rd" class="r34 r">modSpecIndex</span> = 0; <span class="r34 r">modSpecIndex</span> &lt; <a href="#57fd187611985629" class="i property">FullyQualifiedName</a>.<span class="i">Length</span>; <span class="r34 r">modSpecIndex</span>++)
+                {
+                    <a href="#57fd187611985629" class="i property">FullyQualifiedName</a>[<span class="r34 r">modSpecIndex</span>] = <a href="#57fd187611985629" class="i property">FullyQualifiedName</a>[<span class="r34 r">modSpecIndex</span>].<a href="ModuleSpecification.cs.html#d6b1ec71af1547a9" class="i method">WithNormalizedName</a>(<a href="../CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>, <a href="../CommandBase.cs.html#5078d443148de142" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#3390cfbbdcffb036" class="i property">Path</a>.<a href="../PathInterfaces.cs.html#91ffa5f8fc6b1308" class="i property">CurrentLocation</a>.<a href="../../namespaces/PathInfo.cs.html#de00cd47bf0cf721" class="i property">Path</a>);
+                }
+ 
+                <span class="r33 r">moduleSpecTable</span> = <a href="#57fd187611985629" class="i property">FullyQualifiedName</a>.<span class="i">ToDictionary</span>(<b>static</b> <span id="r35 rd" class="r35 r">moduleSpecification</span> =&gt; <span class="r35 r">moduleSpecification</span>.<span class="i">Name</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <span class="r32 r">strNames</span>.<span class="i">AddRange</span>(<a href="#57fd187611985629" class="i property">FullyQualifiedName</a>.<span class="i">Select</span>(<b>static</b> <span id="r36 rd" class="r36 r">spec</span> =&gt; <span class="r36 r">spec</span>.<span class="i">Name</span>));
+            }
+ 
+            <b>string</b>[] <span id="r37 rd" class="r37 r">names</span> = <span class="r32 r">strNames</span>.<span class="i">Count</span> &gt; 0 ? <span class="r32 r">strNames</span>.<span class="i">ToArray</span>() : <b>null</b>;
+ 
+            <b>if</b> (<a href="../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>.<span class="i">Equals</span>(<a href="#8ad76a38fc80a3b7" class="i field">ParameterSet_Loaded</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <span class="i">AssertNameDoesNotResolveToAPath</span>(<span class="r37 r">names</span>,
+                                                <span class="i">Modules</span>.<span class="i">ModuleDiscoveryForLoadedModulesWorksOnlyForUnQualifiedNames</span>,
+                                                <span class="s">&quot;ModuleDiscoveryForLoadedModulesWorksOnlyForUnQualifiedNames&quot;</span>);
+                <span class="i">GetLoadedModules</span>(<span class="r37 r">names</span>, <span class="r33 r">moduleSpecTable</span>, <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#f2f782d162c7e632" class="i property">All</a>);
+            }
+            <b>else</b> <b>if</b> (<a href="../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>.<span class="i">Equals</span>(<a href="#61885351a3ea6253" class="i field">ParameterSet_AvailableLocally</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <b>if</b> (<a href="#533eca00353f1ca1" class="i property">ListAvailable</a>.<a href="../MshCmdlet.cs.html#e9c777a85700d3da" class="i property">IsPresent</a>)
+                {
+                    <span class="i">GetAvailableLocallyModules</span>(<span class="r37 r">names</span>, <span class="r33 r">moduleSpecTable</span>, <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#f2f782d162c7e632" class="i property">All</a>);
+                }
+                <b>else</b>
+                {
+                    <span class="i">AssertNameDoesNotResolveToAPath</span>(<span class="r37 r">names</span>,
+                                                    <span class="i">Modules</span>.<span class="i">ModuleDiscoveryForLoadedModulesWorksOnlyForUnQualifiedNames</span>,
+                                                    <span class="s">&quot;ModuleDiscoveryForLoadedModulesWorksOnlyForUnQualifiedNames&quot;</span>);
+                    <span class="i">GetLoadedModules</span>(<span class="r37 r">names</span>, <span class="r33 r">moduleSpecTable</span>, <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#f2f782d162c7e632" class="i property">All</a>);
+                }
+            }
+            <b>else</b> <b>if</b> (<a href="../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>.<span class="i">Equals</span>(<a href="#cf6b61b7ca41308d" class="i field">ParameterSet_AvailableInPsrpSession</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <a href="#b3d1e0f03fb328d6" class="i method">AssertListAvailableMode</a>();
+                <span class="i">AssertNameDoesNotResolveToAPath</span>(<span class="r37 r">names</span>,
+                                                <span class="i">Modules</span>.<span class="i">RemoteDiscoveryWorksOnlyForUnQualifiedNames</span>,
+                                                <span class="s">&quot;RemoteDiscoveryWorksOnlyForUnQualifiedNames&quot;</span>);
+ 
+                <span class="i">GetAvailableViaPsrpSession</span>(<span class="r37 r">names</span>, <span class="r33 r">moduleSpecTable</span>, <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#e10b6b7ba0ab2225" class="i property">PSSession</a>);
+            }
+            <b>else</b> <b>if</b> (<a href="../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>.<span class="i">Equals</span>(<a href="#618c1a32080d7487" class="i field">ParameterSet_AvailableInCimSession</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <a href="#b3d1e0f03fb328d6" class="i method">AssertListAvailableMode</a>();
+                <span class="i">AssertNameDoesNotResolveToAPath</span>(<span class="r37 r">names</span>,
+                                                <span class="i">Modules</span>.<span class="i">RemoteDiscoveryWorksOnlyForUnQualifiedNames</span>,
+                                                <span class="s">&quot;RemoteDiscoveryWorksOnlyForUnQualifiedNames&quot;</span>);
+ 
+                <span class="i">GetAvailableViaCimSession</span>(<span class="r37 r">names</span>, <span class="r33 r">moduleSpecTable</span>, <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#37be9035d6757649" class="i property">CimSession</a>,
+                                          <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#7bee12d1a93de8ea" class="i property">CimResourceUri</a>, <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="#c5a02a2d897c57f6" class="i property">CimNamespace</a>);
+            }
+            <b>else</b>
+            {
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;Unrecognized parameter set&quot;</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="2d576c08f45f7e4a" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">AssertNameDoesNotResolveToAPath</a>(<b>string</b>[] <span id="r38 rd" class="r38 r">names</span>, <b>string</b> <span id="r39 rd" class="r39 r">stringFormat</span>, <b>string</b> <span id="r40 rd" class="r40 r">resourceId</span>)
+        {
+            <b>if</b> (<span class="r38 r">names</span> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r41 rd" class="r41 r">n</span> <b>in</b> <span class="r38 r">names</span>)
+                {
+                    <b>if</b> (<span class="r41 r">n</span>.<span class="i">Contains</span>(<a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#88fdd102fa325178" class="i field">DefaultPathSeparator</a>) || <span class="r41 r">n</span>.<span class="i">Contains</span>(<a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#f2548f0f61690656" class="i field">AlternatePathSeparator</a>))
+                    {
+                        <b>string</b> <span id="r42 rd" class="r42 r">errorMessage</span> = <a href="../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<a href="../../utils/StringUtil.cs.html#6dd43165d0b5d92f" class="i method">Format</a>(<span class="r39 r">stringFormat</span>, <span class="r41 r">n</span>);
+                        <b>var</b> <span id="r43 rd" class="r43 r">argumentException</span> = <b>new</b> <span class="i">ArgumentException</span>(<span class="r42 r">errorMessage</span>);
+                        <a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="k">var</a> <span id="r44 rd" class="r44 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(
+                            <span class="r43 r">argumentException</span>,
+                            <span class="r40 r">resourceId</span>,
+                            <a href="../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <span class="r41 r">n</span>);
+                        <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(<span class="r44 r">errorRecord</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>private void</b> <a id="014645016c2f3cfd" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetAvailableViaCimSession</a>(<span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r45 rd" class="r45 r">names</span>, <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r46 rd" class="r46 r">moduleSpecTable</span>,
+                                               <span class="i">CimSession</span> <span id="r47 rd" class="r47 r">cimSession</span>, <span class="i">Uri</span> <span id="r48 rd" class="r48 r">resourceUri</span>, <b>string</b> <span id="r49 rd" class="r49 r">cimNamespace</span>)
+        {
+            <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r50 rd" class="r50 r">remoteModules</span> = <a href="#cb5c4b1e78f478e1" class="i method">GetAvailableViaCimSessionCore</a>(<span class="r45 r">names</span>, <span class="r47 r">cimSession</span>, <span class="r48 r">resourceUri</span>, <span class="r49 r">cimNamespace</span>);
+ 
+            <b>foreach</b> (<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r51 rd" class="r51 r">remoteModule</span> <b>in</b> <a href="#14fb5ae90ca51a36" class="i method">FilterModulesForEditionAndSpecification</a>(<span class="r50 r">remoteModules</span>, <span class="r46 r">moduleSpecTable</span>))
+            {
+                <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#2e7e30e27a6c26be" class="i method">AssociatePSModuleInfoWithSession</a>(<span class="r51 r">remoteModule</span>, <span class="r47 r">cimSession</span>, <span class="r48 r">resourceUri</span>,
+                                                                       <span class="r49 r">cimNamespace</span>);
+                <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<span class="r51 r">remoteModule</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="0401985e376c17ca" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetAvailableViaPsrpSession</a>(<b>string</b>[] <span id="r52 rd" class="r52 r">names</span>, <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r53 rd" class="r53 r">moduleSpecTable</span>, <a href="../remoting/client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r54 rd" class="r54 r">session</span>)
+        {
+            <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r55 rd" class="r55 r">remoteModules</span> = <a href="#adcad57df9f1d162" class="i method">GetAvailableViaPsrpSessionCore</a>(<span class="r52 r">names</span>, <span class="r54 r">session</span>.<a href="../remoting/client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>);
+ 
+            <b>foreach</b> (<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r56 rd" class="r56 r">remoteModule</span> <b>in</b> <a href="#14fb5ae90ca51a36" class="i method">FilterModulesForEditionAndSpecification</a>(<span class="r55 r">remoteModules</span>, <span class="r53 r">moduleSpecTable</span>))
+            {
+                <a href="RemoteDiscoveryHelper.cs.html#83e28a85267ced48" class="t t">RemoteDiscoveryHelper</a>.<a href="RemoteDiscoveryHelper.cs.html#7b616eadea52e1f0" class="i method">AssociatePSModuleInfoWithSession</a>(<span class="r56 r">remoteModule</span>, <span class="r54 r">session</span>);
+                <a href="#6f6537067f4dfc41" class="k">this</a>.<a href="../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<span class="r56 r">remoteModule</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="c5ab831517faef82" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetAvailableLocallyModules</a>(<b>string</b>[] <span id="r57 rd" class="r57 r">names</span>, <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r58 rd" class="r58 r">moduleSpecTable</span>, <b>bool</b> <span id="r59 rd" class="r59 r">all</span>)
+        {
+            <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r60 rd" class="r60 r">modules</span> = <a href="ModuleCmdletBase.cs.html#c18fe484b0438291" class="i method">GetModule</a>(<span class="r57 r">names</span>, <span class="r59 r">all</span>, <a href="#3deb26441483fc86" class="i property">Refresh</a>);
+            <b>foreach</b> (<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r61 rd" class="r61 r">module</span> <b>in</b> <a href="#14fb5ae90ca51a36" class="i method">FilterModulesForEditionAndSpecification</a>(<span class="r60 r">modules</span>, <span class="r58 r">moduleSpecTable</span>))
+            {
+                <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="k">var</a> <span id="r62 rd" class="r62 r">psModule</span> = <b>new</b> <a href="../MshObject.cs.html#3ee1d75e736c4afc" class="t constructor">PSObject</a>(<span class="r61 r">module</span>);
+                <span class="r62 r">psModule</span>.<a href="../MshObject.cs.html#86c0a84d554979ba" class="i property">TypeNames</a>.<span class="i">Insert</span>(0, <span class="s">&quot;ModuleInfoGrouping&quot;</span>);
+                <a href="../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<span class="r62 r">psModule</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="a7ac32cf39868212" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetLoadedModules</a>(<b>string</b>[] <span id="r63 rd" class="r63 r">names</span>, <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r64 rd" class="r64 r">moduleSpecTable</span>, <b>bool</b> <span id="r65 rd" class="r65 r">all</span>)
+        {
+            <b>var</b> <span id="r66 rd" class="r66 r">modulesToWrite</span> = <a href="../CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#2d3edf63c7afa4b2" class="i property">Modules</a>.<a href="ModuleIntrinsics.cs.html#1c52622ea6eacb86" class="i method">GetModules</a>(<span class="r63 r">names</span>, <span class="r65 r">all</span>);
+ 
+            <b>foreach</b> (<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r67 rd" class="r67 r">moduleInfo</span> <b>in</b> <span class="i">FilterModulesForEditionAndSpecification</span>(<span class="r66 r">modulesToWrite</span>, <span class="r64 r">moduleSpecTable</span>))
+            {
+                <a href="../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<span class="r67 r">moduleInfo</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Filter an enumeration of PowerShell modules based on the required PowerShell edition</span>
+        <span class="c">///</span><span class="c"> and the module specification constraints set for each module (if any).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r68 r">modules</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The modules to filter through.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">moduleSpecificationTable</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Module constraints, keyed by module name, to filter modules of that name by.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">All modules from the original input that meet both any module edition and module specification constraints provided.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="14fb5ae90ca51a36" href="../../R/14fb5ae90ca51a36.html" target="n" data-glyph="76,1" class="i method">FilterModulesForEditionAndSpecification</a>(
+            <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r68 rd" class="r68 r">modules</span>,
+            <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r69 rd" class="r69 r">moduleSpecificationTable</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+            <span class="c">// Edition check only applies to Windows System32 module path</span>
+            <b>if</b> (!<a href="#ce795207fcdffb83" class="i property">SkipEditionCheck</a> &amp;&amp; <a href="#533eca00353f1ca1" class="i property">ListAvailable</a> &amp;&amp; !<a href="#f2f782d162c7e632" class="i property">All</a>)
+            {
+                <span class="r68 r">modules</span> = <span class="r68 r">modules</span>.<span class="i">Where</span>(<b>static</b> <span id="r70 rd" class="r70 r">module</span> =&gt; <span class="r70 r">module</span>.<span class="i">IsConsideredEditionCompatible</span>);
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#b17a41d1d1965238" class="i property">PSEdition</a>))
+            {
+                <span class="r68 r">modules</span> = <span class="r68 r">modules</span>.<span class="i">Where</span>(<span id="r71 rd" class="r71 r">module</span> =&gt; <span class="r71 r">module</span>.<span class="i">CompatiblePSEditions</span>.<span class="i">Contains</span>(<a href="#b17a41d1d1965238" class="i property">PSEdition</a>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>));
+            }
+ 
+            <b>if</b> (<span class="r69 r">moduleSpecificationTable</span> != <b>null</b> &amp;&amp; <span class="r69 r">moduleSpecificationTable</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <span class="r68 r">modules</span> = <a href="#ef7f4e07660f2861" class="i method">FilterModulesForSpecificationMatch</a>(<span class="r68 r">modules</span>, <span class="r69 r">moduleSpecificationTable</span>);
+            }
+ 
+            <b>return</b> <span class="r68 r">modules</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Take an enumeration of modules and only return those that match a specification</span>
+        <span class="c">///</span><span class="c"> in the given specification table, or have no corresponding entry in the specification table.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r72 r">modules</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The modules to filter by specification match.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r73 r">moduleSpecificationTable</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The specification lookup table to filter the modules on.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The modules that match their corresponding table entry, or which have no table entry.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="ef7f4e07660f2861" href="../../R/ef7f4e07660f2861.html" target="n" data-glyph="76,1" class="i method">FilterModulesForSpecificationMatch</a>(
+            <span class="i">IEnumerable</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r72 rd" class="r72 r">modules</span>,
+            <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r73 rd" class="r73 r">moduleSpecificationTable</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r73 r">moduleSpecificationTable</span> != <b>null</b>, <span class="s">$&quot;</span><span class="s">Caller to verify that </span>{<b>nameof</b>(<span class="r73 r">moduleSpecificationTable</span>)}<span class="s"> is not null</span><span class="s">&quot;</span>);
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r73 r">moduleSpecificationTable</span>.<span class="i">Count</span> != 0, <span class="s">$&quot;</span><span class="s">Caller to verify that </span>{<b>nameof</b>(<span class="r73 r">moduleSpecificationTable</span>)}<span class="s"> is not empty</span><span class="s">&quot;</span>);
+ 
+            <b>foreach</b> (<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r74 rd" class="r74 r">module</span> <b>in</b> <span class="r72 r">modules</span>)
+            {
+                <span class="i">IEnumerable</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r75 rd" class="r75 r">candidateModuleSpecs</span> = <a href="#32196e08a034277d" class="i method">GetCandidateModuleSpecs</a>(<span class="r73 r">moduleSpecificationTable</span>, <span class="r74 r">module</span>);
+ 
+                <span class="c">// Modules with table entries only get returned if they match them</span>
+                <span class="c">// We skip the name check since modules have already been prefiltered base on the moduleSpec path/name</span>
+                <b>foreach</b> (<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a> <span id="r76 rd" class="r76 r">moduleSpec</span> <b>in</b> <span class="r75 r">candidateModuleSpecs</span>)
+                {
+                    <b>if</b> (<a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#d23a7b8d60e511ec" class="i method">IsModuleMatchingModuleSpec</a>(<span class="r74 r">module</span>, <span class="r76 r">moduleSpec</span>, <span class="r77 r">skipNameCheck</span>: <b>true</b>))
+                    {
+                        <b>yield</b> <b>return</b> <span class="r74 r">module</span>;
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Take a dictionary of module specifications and return those that potentially match the module</span>
+        <span class="c">///</span><span class="c"> passed in as a parameter (checks on names and paths).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r78 r">moduleSpecTable</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module specifications to filter candidates from.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">module</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module to find candidates for from the module specification table.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The module specifications matching the module based on name, path and subpath.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">IEnumerable</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <a id="32196e08a034277d" href="../../R/32196e08a034277d.html" target="n" data-glyph="76,1" class="i method">GetCandidateModuleSpecs</a>(
+            <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <span id="r78 rd" class="r78 r">moduleSpecTable</span>,
+            <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r79 rd" class="r79 r">module</span>)
+        {
+            <b>const</b> <a href="../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a> <span id="r80 rd" class="r80 r">options</span> = <a href="../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../regex.cs.html#2d0521a6986208d3" class="i field">IgnoreCase</a> | <a href="../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../regex.cs.html#c83c96a47a1cc99d" class="i field">CultureInvariant</a>;
+            <b>foreach</b> (<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a> <span id="r81 rd" class="r81 r">moduleSpec</span> <b>in</b> <span class="r78 r">moduleSpecTable</span>.<span class="i">Values</span>)
+            {
+                <a href="../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a> <span id="r82 rd" class="r82 r">namePattern</span> = <a href="../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a>.<a href="../regex.cs.html#03cc3ceece086129" class="i method">Get</a>(<span class="r81 r">moduleSpec</span>.<a href="ModuleSpecification.cs.html#148bbf163788664b" class="i property">Name</a>, <span class="r80 r">options</span>);
+                <b>if</b> (<span class="r82 r">namePattern</span>.<a href="../regex.cs.html#02e7d1c913f3c256" class="i method">IsMatch</a>(<span class="r79 r">module</span>.<a href="PSModuleInfo.cs.html#19beded88c944eb9" class="i property">Name</a>) || <span class="r81 r">moduleSpec</span>.<a href="ModuleSpecification.cs.html#148bbf163788664b" class="i property">Name</a> == <span class="r79 r">module</span>.<a href="PSModuleInfo.cs.html#82fc7c994af5e4ca" class="i property">Path</a> || <span class="r79 r">module</span>.<a href="PSModuleInfo.cs.html#82fc7c994af5e4ca" class="i property">Path</a>.<span class="i">Contains</span>(<span class="r81 r">moduleSpec</span>.<a href="ModuleSpecification.cs.html#148bbf163788664b" class="i property">Name</a>))
+                {
+                    <b>yield</b> <b>return</b> <span class="r81 r">moduleSpec</span>;
+                }
+            }
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> PSEditionArgumentCompleter for PowerShell Edition names.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public class</b> <a id="b12f76bbc173377d" href="../../R/b12f76bbc173377d.html" target="n" data-glyph="0,0" class="t t"><span id="a313b39792aeab65">PSEditionArgumentCompleter</span></a> : <a href="../CommandCompletion/ExtensibleCompletion.cs.html#196446d42608eb20" class="t t">IArgumentCompleter</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> CompleteArgument.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<a href="../CommandCompletion/CompletionResult.cs.html#a4c553f80d9e648c" class="t t">CompletionResult</a>&gt; <a id="4b27bebefebc8a47" href="../../R/4b27bebefebc8a47.html" target="n" data-glyph="72,1" class="i method">CompleteArgument</a>(<b>string</b> <span id="r83 rd" class="r83 r">commandName</span>, <b>string</b> <span id="r84 rd" class="r84 r">parameterName</span>, <b>string</b> <span id="r85 rd" class="r85 r">wordToComplete</span>, <a href="../parser/ast.cs.html#a310aaa1e0374ddd" class="t t">CommandAst</a> <span id="r86 rd" class="r86 r">commandAst</span>, <span class="i">IDictionary</span> <span id="r87 rd" class="r87 r">fakeBoundParameters</span>)
+        {
+            <a href="../regex.cs.html#d450e739ff28e660" class="k">var</a> <span id="r88 rd" class="r88 r">wordToCompletePattern</span> = <a href="../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a>.<a href="../regex.cs.html#03cc3ceece086129" class="i method">Get</a>(<b>string</b>.<span class="i">IsNullOrWhiteSpace</span>(<span class="r85 r">wordToComplete</span>) ? <span class="s">&quot;*&quot;</span> : <span class="r85 r">wordToComplete</span> + <span class="s">&quot;*&quot;</span>, <a href="../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../regex.cs.html#2d0521a6986208d3" class="i field">IgnoreCase</a>);
+ 
+            <b>foreach</b> (<b>var</b> <span id="r89 rd" class="r89 r">edition</span> <b>in</b> <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#6bc43a213c3de3ea" class="i field">AllowedEditionValues</a>)
+            {
+                <b>if</b> (<span class="r88 r">wordToCompletePattern</span>.<a href="../regex.cs.html#02e7d1c913f3c256" class="i method">IsMatch</a>(<span class="r89 r">edition</span>))
+                {
+                    <b>yield</b> <b>return</b> <b>new</b> <a href="../CommandCompletion/CompletionResult.cs.html#ca2afdd6b4929db6" class="t constructor">CompletionResult</a>(<span class="r89 r">edition</span>, <span class="r89 r">edition</span>, <a href="../CommandCompletion/CompletionResult.cs.html#3cfd90a9cdb70973" class="t t">CompletionResultType</a>.<a href="../CommandCompletion/CompletionResult.cs.html#c2d33fde95710648" class="i field">Text</a>, <span class="r89 r">edition</span>);
+                }
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

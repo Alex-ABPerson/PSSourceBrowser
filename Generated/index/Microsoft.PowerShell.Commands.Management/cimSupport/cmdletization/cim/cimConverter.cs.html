@@ -1,0 +1,696 @@
+﻿<!DOCTYPE html>
+<html><head><title>cimConverter.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(687);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management/cimSupport/cmdletization/cim/cimConverter.cs" target="_top">cimSupport\cmdletization\cim\cimConverter.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management" target="_top">src\Microsoft.PowerShell.Commands.Management\Microsoft.PowerShell.Commands.Management.csproj</a> (Microsoft.PowerShell.Commands.Management)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i">System</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Diagnostics</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Net</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Net</span>.<span class="i">Mail</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Net</span>.<span class="i">NetworkInformation</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Security</span>.<span class="i">AccessControl</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Security</span>.<span class="i">Cryptography</span>.<span class="i">X509Certificates</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Xml</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Management</span>.<span class="i">Infrastructure</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>.<span class="i">Diagnostics</span>;
+ 
+<span class="c">// TODO/FIXME: Move this class to src/cimSupport/other directory (to map to the namespace it lives in and functionality it implements [cmdletization independent])</span>
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Cim</span>
+{
+    <b>internal class</b> <a id="437d822c62e693b7" href="../../../R/437d822c62e693b7.html" target="n" data-glyph="2,0" class="t t"><span id="af23513f9886b12b">CimSensitiveValueConverter</span></a> : <span class="i">IDisposable</span>
+    {
+        <b>private sealed class</b> <a id="9b3a9c76ceb97fde" href="../../../R/9b3a9c76ceb97fde.html" target="n" data-glyph="4,1" class="t t">SensitiveString</a> : <span class="i">IDisposable</span>
+        {
+            <b>private</b> <span class="i">GCHandle</span> <a id="b7268c6692819ce5" href="../../../R/b7268c6692819ce5.html" target="n" data-glyph="46,2" class="i field">_gcHandle</a>;
+            <b>private string</b> <a id="1359ec0ad33fe1be" href="../../../R/1359ec0ad33fe1be.html" target="n" data-glyph="46,2" class="i field">_string</a>;
+ 
+            <b>public string</b> <a id="8be4f48519469cbe" href="../../../R/8be4f48519469cbe.html" target="n" data-glyph="102,2" class="i property">Value</a> { <b>get</b> { <b>return</b> <a href="#1359ec0ad33fe1be" class="i field">_string</a>; } }
+ 
+            <b>internal</b> <a id="95ef1a3d19a80743" href="../../../R/../../0000000000.html" target="n" data-glyph="74,2" class="t constructor">SensitiveString</a>(<b>int</b> <span id="r0 rd" class="r0 r">numberOfCharacters</span>)
+            {
+                <a href="#1359ec0ad33fe1be" class="i field">_string</a> = <b>new</b> <b>string</b>(<span class="s">&#39;\0&#39;</span>, <span class="r0 r">numberOfCharacters</span>);
+ 
+                <span class="i">Debug</span>.<span class="i">Assert</span>(
+                    <b>string</b>.<span class="i">IsInterned</span>(<a href="#1359ec0ad33fe1be" class="i field">_string</a>) == <b>null</b>,
+                    <span class="s">&quot;We will overwrite string contents - we can&#39;t / shouldn&#39;t do this for interned strings.&quot;</span>);
+ 
+                <span class="c">/* The string is pinned (while still being filled with insignificant data)
+                 * to prevent copying of sensitive data by garbage collection.
+                 * This allows the sensitive data to be cleaned-up from SensitiveString.Dispose method.
+                 */</span>
+                <a href="#b7268c6692819ce5" class="i field">_gcHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<a href="#1359ec0ad33fe1be" class="i field">_string</a>, <span class="i">GCHandleType</span>.<span class="i">Pinned</span>);
+            }
+ 
+            <b>private unsafe void</b> <a id="7417023e425c0c08" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">Copy</a>(<b>char</b>* <span id="r1 rd" class="r1 r">source</span>, <b>int</b> <span id="r2 rd" class="r2 r">offset</span>, <b>int</b> <span id="r3 rd" class="r3 r">charsToCopy</span>)
+            {
+                <b>if</b> ((<span class="r2 r">offset</span> &lt; 0) || (<span class="r2 r">offset</span> &gt;= <a href="#1359ec0ad33fe1be" class="i field">_string</a>.<span class="i">Length</span>))
+                {
+                    <b>throw</b> <b>new</b> <span class="i">ArgumentOutOfRangeException</span>(<b>nameof</b>(<span class="r2 r">offset</span>));
+                }
+ 
+                <b>if</b> (<span class="r2 r">offset</span> + <span class="r3 r">charsToCopy</span> &gt; <a href="#1359ec0ad33fe1be" class="i field">_string</a>.<span class="i">Length</span>)
+                {
+                    <b>throw</b> <b>new</b> <span class="i">ArgumentOutOfRangeException</span>(<b>nameof</b>(<span class="r3 r">charsToCopy</span>));
+                }
+ 
+                <b>fixed</b> (<b>char</b>* <span id="r4 rd" class="r4 r">target</span> = <a href="#1359ec0ad33fe1be" class="i field">_string</a>)
+                {
+                    <b>for</b> (<b>int</b> <span id="r5 rd" class="r5 r">i</span> = 0; <span class="r5 r">i</span> &lt; <span class="r3 r">charsToCopy</span>; <span class="r5 r">i</span>++)
+                    {
+                        <span class="r4 r">target</span>[<span class="r2 r">offset</span> + <span class="r5 r">i</span>] = <span class="r1 r">source</span>[<span class="r5 r">i</span>];
+                    }
+                }
+            }
+ 
+            <b>internal void</b> <a id="fb5634110b30c1d7" href="../../../R/fb5634110b30c1d7.html" target="n" data-glyph="74,2" class="i method">Copy</a>(<b>string</b> <span id="r6 rd" class="r6 r">source</span>, <b>int</b> <span id="r7 rd" class="r7 r">offset</span>)
+            {
+                <b>unsafe</b>
+                {
+                    <b>fixed</b> (<b>char</b>* <span id="r8 rd" class="r8 r">sourcePointer</span> = <span class="r6 r">source</span>)
+                    {
+                        <span class="i">Copy</span>(<span class="r8 r">sourcePointer</span>, <span class="r7 r">offset</span>, <span class="r6 r">source</span>.<span class="i">Length</span>);
+                    }
+                }
+            }
+ 
+            <b>internal void</b> <a id="0f4813e5bf0f0cd5" href="../../../R/0f4813e5bf0f0cd5.html" target="n" data-glyph="74,2" class="i method">Copy</a>(<span class="i">SecureString</span> <span id="r9 rd" class="r9 r">source</span>, <b>int</b> <span id="r10 rd" class="r10 r">offset</span>)
+            {
+                <span class="i">IntPtr</span> <span id="r11 rd" class="r11 r">plainTextString</span> = <span class="i">Marshal</span>.<span class="i">SecureStringToCoTaskMemUnicode</span>(<span class="r9 r">source</span>);
+                <b>try</b>
+                {
+                    <b>unsafe</b>
+                    {
+                        <span class="i">Copy</span>((<b>char</b>*)<span class="r11 r">plainTextString</span>, <span class="r10 r">offset</span>, <span class="r9 r">source</span>.<span class="i">Length</span>);
+                    }
+                }
+                <b>finally</b>
+                {
+                    <span class="i">Marshal</span>.<span class="i">ZeroFreeCoTaskMemUnicode</span>(<span class="r11 r">plainTextString</span>);
+                }
+            }
+ 
+            ~<a id="24bd975052a36c32" href="../../../R/../../0000000000.html" target="n" data-glyph="75,2" class="t method">SensitiveString</a>()
+            {
+                <a href="#87884c638b82caac" class="i method">Dispose</a>(<b>false</b>);
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public void</b> <a id="c7d17b8d2528fa67" href="../../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">Dispose</a>()
+            {
+                <a href="#9b3a9c76ceb97fde" class="k">this</a>.<a href="#87884c638b82caac" class="i method">Dispose</a>(<b>true</b>);
+                <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#9b3a9c76ceb97fde" class="k">this</a>);
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>private void</b> <a id="87884c638b82caac" href="../../../R/87884c638b82caac.html" target="n" data-glyph="76,2" class="i method">Dispose</a>(<b>bool</b> <span id="r12 rd" class="r12 r">disposing</span>)
+            {
+                <b>if</b> (<a href="#1359ec0ad33fe1be" class="i field">_string</a> == <b>null</b>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <span class="c">/* this clobbers sensitive data */</span>
+                <a href="#fb5634110b30c1d7" class="i method">Copy</a>(<b>new</b> <b>string</b>(<span class="s">&#39;\0&#39;</span>, <a href="#1359ec0ad33fe1be" class="i field">_string</a>.<span class="i">Length</span>), 0);
+ 
+                <span class="c">/* this allows garbage collector to move and/or free the string */</span>
+                <a href="#b7268c6692819ce5" class="i field">_gcHandle</a>.<span class="i">Free</span>();
+                <a href="#1359ec0ad33fe1be" class="i field">_string</a> = <b>null</b>;
+            }
+        }
+ 
+        <b>private readonly</b> <span class="i">List</span>&lt;<span class="i">IDisposable</span>&gt; <a id="5e115beca96d379d" href="../../../R/5e115beca96d379d.html" target="n" data-glyph="46,1" class="i field">_trackedDisposables</a> = <b>new</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="aeaa31449017b246" href="../../../R/aeaa31449017b246.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#437d822c62e693b7" class="k">this</a>.<a href="#098143c62ae01ddc" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#437d822c62e693b7" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="098143c62ae01ddc" href="../../../R/098143c62ae01ddc.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r13 rd" class="r13 r">disposing</span>)
+        {
+            <b>lock</b> (<a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r14 rd" class="r14 r">d</span> <b>in</b> <a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>)
+                {
+                    <span class="r14 r">d</span>.<span class="i">Dispose</span>();
+                }
+ 
+                <a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>.<span class="i">Clear</span>();
+            }
+        }
+ 
+        <b>private const string</b> <a id="1e1772445aacb91a" href="../../../R/1e1772445aacb91a.html" target="n" data-glyph="10,1" class="i field">PSCredentialDelimiter</a> = <span class="s">&quot;:&quot;</span>;
+ 
+        <b>internal object</b> <a id="0b13b8235a0fc4ea" href="../../../R/0b13b8235a0fc4ea.html" target="n" data-glyph="74,1" class="i method">ConvertFromDotNetToCim</a>(<b>object</b> <span id="r15 rd" class="r15 r">dotNetObject</span>)
+        {
+            <b>if</b> (<span class="r15 r">dotNetObject</span> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <span class="i">PSObject</span> <span id="r16 rd" class="r16 r">psObject</span> = <span class="i">PSObject</span>.<span class="i">AsPSObject</span>(<span class="r15 r">dotNetObject</span>);
+            <span class="i">Type</span> <span id="r17 rd" class="r17 r">dotNetType</span> = <span class="r16 r">psObject</span>.<span class="i">BaseObject</span>.<span class="i">GetType</span>();
+            <b>if</b> (<b>typeof</b>(<span class="i">PSCredential</span>).<span class="i">IsAssignableFrom</span>(<span class="r17 r">dotNetType</span>))
+            {
+                <b>var</b> <span id="r18 rd" class="r18 r">credential</span> = (<span class="i">PSCredential</span>)(<span class="r16 r">psObject</span>.<span class="i">BaseObject</span>);
+ 
+                <b>string</b> <span id="r19 rd" class="r19 r">escapedUsername</span> = <span class="r18 r">credential</span>.<span class="i">UserName</span>;
+                <span class="r19 r">escapedUsername</span> = <span class="r19 r">escapedUsername</span>.<span class="i">Replace</span>(<span class="s">&quot;\\&quot;</span>, <span class="s">&quot;\\\\&quot;</span>); <span class="c">// Esc backslashes</span>
+                <span class="r19 r">escapedUsername</span> = <span class="r19 r">escapedUsername</span>.<span class="i">Replace</span>(<a href="#1e1772445aacb91a" class="i field">PSCredentialDelimiter</a>, <span class="s">&quot;\\&quot;</span> + <a href="#1e1772445aacb91a" class="i field">PSCredentialDelimiter</a>);
+ 
+                <a href="#9b3a9c76ceb97fde" class="k">var</a> <span id="r20 rd" class="r20 r">sensitiveString</span> = <b>new</b> <span class="t">SensitiveString</span>(<span class="r19 r">escapedUsername</span>.<span class="i">Length</span> + <a href="#1e1772445aacb91a" class="i field">PSCredentialDelimiter</a>.<span class="i">Length</span> + <span class="r18 r">credential</span>.<span class="i">Password</span>.<span class="i">Length</span>);
+                <b>lock</b> (<a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>) { <a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>.<span class="i">Add</span>(<span class="r20 r">sensitiveString</span>); }
+ 
+                <span class="r20 r">sensitiveString</span>.<a href="#fb5634110b30c1d7" class="i method">Copy</a>(<span class="r19 r">escapedUsername</span>, 0);
+                <span class="r20 r">sensitiveString</span>.<span class="i">Copy</span>(<a href="#1e1772445aacb91a" class="i field">PSCredentialDelimiter</a>, <span class="r19 r">escapedUsername</span>.<span class="i">Length</span>);
+                <span class="r20 r">sensitiveString</span>.<span class="i">Copy</span>(<span class="r18 r">credential</span>.<span class="i">Password</span>, <span class="r19 r">escapedUsername</span>.<span class="i">Length</span> + <a href="#1e1772445aacb91a" class="i field">PSCredentialDelimiter</a>.<span class="i">Length</span>);
+                <b>return</b> <span class="r20 r">sensitiveString</span>.<a href="#8be4f48519469cbe" class="i property">Value</a>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">SecureString</span>).<span class="i">IsAssignableFrom</span>(<span class="r17 r">dotNetType</span>))
+            {
+                <span class="i">SecureString</span> <span id="r21 rd" class="r21 r">secureString</span> = (<span class="i">SecureString</span>)<span class="r16 r">psObject</span>.<span class="i">BaseObject</span>;
+                <a href="#9b3a9c76ceb97fde" class="k">var</a> <span id="r22 rd" class="r22 r">sensitiveString</span> = <b>new</b> <span class="t">SensitiveString</span>(<span class="r21 r">secureString</span>.<span class="i">Length</span>);
+                <b>lock</b> (<a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>) { <a href="#5e115beca96d379d" class="i field">_trackedDisposables</a>.<span class="i">Add</span>(<span class="r22 r">sensitiveString</span>); }
+ 
+                <span class="r22 r">sensitiveString</span>.<a href="#0f4813e5bf0f0cd5" class="i method">Copy</a>(<span class="r21 r">secureString</span>, 0);
+                <b>return</b> <span class="r22 r">sensitiveString</span>.<a href="#8be4f48519469cbe" class="i property">Value</a>;
+            }
+ 
+            <b>if</b> (<span class="r17 r">dotNetType</span>.<span class="i">IsArray</span>)
+            {
+                <span class="i">Type</span> <span id="r23 rd" class="r23 r">dotNetElementType</span> = <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="#d2e872c067e74985" class="i method">GetElementType</a>(<span class="r17 r">dotNetType</span>);
+                <b>if</b> (<span class="r23 r">dotNetElementType</span> != <b>null</b>)
+                {
+                    <b>var</b> <span id="r24 rd" class="r24 r">dotNetArray</span> = (<span class="i">Array</span>)<span class="r16 r">psObject</span>.<span class="i">BaseObject</span>;
+                    <span class="i">Type</span> <span id="r25 rd" class="r25 r">cimElementType</span> = <a href="#636a753980a5e36a" class="i method">GetCimType</a>(<span class="r23 r">dotNetElementType</span>);
+                    <span class="i">Array</span> <span id="r26 rd" class="r26 r">cimArray</span> = <span class="i">Array</span>.<span class="i">CreateInstance</span>(<span class="r25 r">cimElementType</span>, <span class="r24 r">dotNetArray</span>.<span class="i">Length</span>);
+                    <b>for</b> (<b>int</b> <span id="r27 rd" class="r27 r">i</span> = 0; <span class="r27 r">i</span> &lt; <span class="r26 r">cimArray</span>.<span class="i">Length</span>; <span class="r27 r">i</span>++)
+                    {
+                        <b>object</b> <span id="r28 rd" class="r28 r">cimElement</span> = <span class="i">ConvertFromDotNetToCim</span>(<span class="r24 r">dotNetArray</span>.<span class="i">GetValue</span>(<span class="r27 r">i</span>));
+                        <span class="r26 r">cimArray</span>.<span class="i">SetValue</span>(<span class="r28 r">cimElement</span>, <span class="r27 r">i</span>);
+                    }
+ 
+                    <b>return</b> <span class="r26 r">cimArray</span>;
+                }
+            }
+ 
+            <b>return</b> <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="#66412b49186d9810" class="i method">ConvertFromDotNetToCim</a>(<span class="r15 r">dotNetObject</span>);
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="636a753980a5e36a" href="../../../R/636a753980a5e36a.html" target="n" data-glyph="74,1" class="i method">GetCimType</a>(<span class="i">Type</span> <span id="r29 rd" class="r29 r">dotNetType</span>)
+        {
+            <b>if</b> (<span class="r29 r">dotNetType</span> == <b>typeof</b>(<span class="i">SecureString</span>))
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>if</b> (<span class="r29 r">dotNetType</span> == <b>typeof</b>(<span class="i">PSCredential</span>))
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>return</b> <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="#7b06808ff5d00141" class="i method">GetCimType</a>(<span class="r29 r">dotNetType</span>);
+        }
+    }
+ 
+    <b>internal static class</b> <a id="77ff34e79c7129cc" href="../../../R/77ff34e79c7129cc.html" target="n" data-glyph="2,0" class="t t">CimValueConverter</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">PSInvalidCastException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The only kind of exception this method can throw.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static object</b> <a id="66412b49186d9810" href="../../../R/66412b49186d9810.html" target="n" data-glyph="74,1" class="i method">ConvertFromDotNetToCim</a>(<b>object</b> <span id="r30 rd" class="r30 r">dotNetObject</span>)
+        {
+            <b>if</b> (<span class="r30 r">dotNetObject</span> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <span class="i">PSObject</span> <span id="r31 rd" class="r31 r">psObject</span> = <span class="i">PSObject</span>.<span class="i">AsPSObject</span>(<span class="r30 r">dotNetObject</span>);
+            <span class="i">Type</span> <span id="r32 rd" class="r32 r">dotNetType</span> = <span class="r31 r">psObject</span>.<span class="i">BaseObject</span>.<span class="i">GetType</span>();
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(
+                !(<span class="r32 r">dotNetType</span>.<span class="i">GetTypeInfo</span>().<span class="i">IsGenericType</span> &amp;&amp; <span class="r32 r">dotNetType</span>.<span class="i">GetGenericTypeDefinition</span>() == <b>typeof</b>(<span class="i">Nullable</span>&lt;&gt;)),
+                <span class="s">&quot;GetType on a boxed object should never return Nullable&lt;T&gt;&quot;</span>);
+ 
+            <b>if</b> (<span class="i">LanguagePrimitives</span>.<span class="i">IsCimIntrinsicScalarType</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>return</b> <span class="r31 r">psObject</span>.<span class="i">BaseObject</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">CimInstance</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>return</b> <span class="r31 r">psObject</span>.<span class="i">BaseObject</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PSReference</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <span class="i">PSReference</span> <span id="r33 rd" class="r33 r">psReference</span> = (<span class="i">PSReference</span>)<span class="r31 r">psObject</span>.<span class="i">BaseObject</span>;
+                <b>if</b> (<span class="r33 r">psReference</span>.<span class="i">Value</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+                <b>else</b>
+                {
+                    <span class="i">PSObject</span> <span id="r34 rd" class="r34 r">innerPso</span> = <span class="i">PSObject</span>.<span class="i">AsPSObject</span>(<span class="r33 r">psReference</span>.<span class="i">Value</span>);
+                    <b>return</b> <span class="i">ConvertFromDotNetToCim</span>(<span class="r34 r">innerPso</span>.<span class="i">BaseObject</span>);
+                }
+            }
+ 
+            <b>if</b> (<span class="r32 r">dotNetType</span>.<span class="i">IsArray</span>)
+            {
+                <span class="i">Type</span> <span id="r35 rd" class="r35 r">dotNetElementType</span> = <a href="#d2e872c067e74985" class="i method">GetElementType</a>(<span class="r32 r">dotNetType</span>);
+                <b>if</b> (<span class="r35 r">dotNetElementType</span> != <b>null</b>)
+                {
+                    <b>var</b> <span id="r36 rd" class="r36 r">dotNetArray</span> = (<span class="i">Array</span>)<span class="r31 r">psObject</span>.<span class="i">BaseObject</span>;
+                    <span class="i">Type</span> <span id="r37 rd" class="r37 r">cimElementType</span> = <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="#7b06808ff5d00141" class="i method">GetCimType</a>(<span class="r35 r">dotNetElementType</span>);
+                    <span class="i">Array</span> <span id="r38 rd" class="r38 r">cimArray</span> = <span class="i">Array</span>.<span class="i">CreateInstance</span>(<span class="r37 r">cimElementType</span>, <span class="r36 r">dotNetArray</span>.<span class="i">Length</span>);
+                    <b>for</b> (<b>int</b> <span id="r39 rd" class="r39 r">i</span> = 0; <span class="r39 r">i</span> &lt; <span class="r38 r">cimArray</span>.<span class="i">Length</span>; <span class="r39 r">i</span>++)
+                    {
+                        <b>object</b> <span id="r40 rd" class="r40 r">cimElement</span> = <span class="i">ConvertFromDotNetToCim</span>(<span class="r36 r">dotNetArray</span>.<span class="i">GetValue</span>(<span class="r39 r">i</span>));
+                        <span class="r38 r">cimArray</span>.<span class="i">SetValue</span>(<span class="r40 r">cimElement</span>, <span class="r39 r">i</span>);
+                    }
+ 
+                    <b>return</b> <span class="r38 r">cimArray</span>;
+                }
+            }
+ 
+            <span class="i">Type</span> <span id="r41 rd" class="r41 r">convertibleCimType</span> = <a href="#19d7c51e4a5fdffa" class="i method">GetConvertibleCimType</a>(<span class="r32 r">dotNetType</span>);
+            <b>if</b> (<span class="r41 r">convertibleCimType</span> != <b>null</b>)
+            {
+                <b>object</b> <span id="r42 rd" class="r42 r">cimIntrinsicValue</span> = <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r30 r">dotNetObject</span>, <span class="r41 r">convertibleCimType</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r42 r">cimIntrinsicValue</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">ObjectSecurity</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>string</b> <span id="r43 rd" class="r43 r">cimIntrinsicValue</span> = <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>.<a href="/Microsoft.PowerShell.Security/A.html#310a1f126fc0ee1a" class="t t">SecurityDescriptorCommandsBase</a>.<span class="i">GetSddl</span>(<span class="r31 r">psObject</span>);
+                <b>return</b> <span class="r43 r">cimIntrinsicValue</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">X509Certificate2</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>var</b> <span id="r44 rd" class="r44 r">cert</span> = (<span class="i">X509Certificate2</span>)(<span class="r31 r">psObject</span>.<span class="i">BaseObject</span>);
+                <b>byte</b>[] <span id="r45 rd" class="r45 r">cimIntrinsicValue</span> = <span class="r44 r">cert</span>.<span class="i">RawData</span>;
+                <b>return</b> <span class="r45 r">cimIntrinsicValue</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">X500DistinguishedName</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>var</b> <span id="r46 rd" class="r46 r">x500name</span> = (<span class="i">X500DistinguishedName</span>)(<span class="r31 r">psObject</span>.<span class="i">BaseObject</span>);
+                <b>byte</b>[] <span id="r47 rd" class="r47 r">cimIntrinsicValue</span> = <span class="r46 r">x500name</span>.<span class="i">RawData</span>;
+                <b>return</b> <span class="r47 r">cimIntrinsicValue</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PhysicalAddress</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>object</b> <span id="r48 rd" class="r48 r">cimIntrinsicValue</span> = <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r30 r">dotNetObject</span>, <b>typeof</b>(<b>string</b>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r48 r">cimIntrinsicValue</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">IPEndPoint</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>object</b> <span id="r49 rd" class="r49 r">cimIntrinsicValue</span> = <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r30 r">dotNetObject</span>, <b>typeof</b>(<b>string</b>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r49 r">cimIntrinsicValue</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">WildcardPattern</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>var</b> <span id="r50 rd" class="r50 r">wildcardPattern</span> = (<span class="i">WildcardPattern</span>)(<span class="r31 r">psObject</span>.<span class="i">BaseObject</span>);
+                <b>return</b> <span class="r50 r">wildcardPattern</span>.<span class="i">ToWql</span>();
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">XmlDocument</span>).<span class="i">IsAssignableFrom</span>(<span class="r32 r">dotNetType</span>))
+            {
+                <b>var</b> <span id="r51 rd" class="r51 r">xmlDocument</span> = (<span class="i">XmlDocument</span>)(<span class="r31 r">psObject</span>.<span class="i">BaseObject</span>);
+                <b>string</b> <span id="r52 rd" class="r52 r">cimIntrinsicValue</span> = <span class="r51 r">xmlDocument</span>.<span class="i">OuterXml</span>;
+                <b>return</b> <span class="r52 r">cimIntrinsicValue</span>;
+            }
+ 
+            <span class="c">// unrecognized type = throw invalid cast exception</span>
+            <b>throw</b> <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<span class="i">GetInvalidCastException</span>(
+                <b>null</b>, <span class="c">/* inner exception */</span>
+                <span class="s">&quot;InvalidDotNetToCimCast&quot;</span>,
+                <span class="r30 r">dotNetObject</span>,
+                <span class="i">CmdletizationResources</span>.<span class="i">CimConversion_CimIntrinsicValue</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">PSInvalidCastException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The only kind of exception this method can throw.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static object</b> <a id="3ba3715d2c5bec7b" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ConvertFromCimToDotNet</a>(<b>object</b> <span id="r53 rd" class="r53 r">cimObject</span>, <span class="i">Type</span> <span id="r54 rd" class="r54 r">expectedDotNetType</span>)
+        {
+            <b>if</b> (<span class="r54 r">expectedDotNetType</span> == <b>null</b>) { <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r54 r">expectedDotNetType</span>)); }
+ 
+            <b>if</b> (<span class="r53 r">cimObject</span> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>if</b> (<span class="r54 r">expectedDotNetType</span>.<span class="i">GetTypeInfo</span>().<span class="i">IsGenericType</span> &amp;&amp; <span class="r54 r">expectedDotNetType</span>.<span class="i">GetGenericTypeDefinition</span>() == <b>typeof</b>(<span class="i">Nullable</span>&lt;&gt;))
+            {
+                <span class="r54 r">expectedDotNetType</span> = <span class="r54 r">expectedDotNetType</span>.<span class="i">GetGenericArguments</span>()[0];
+            }
+ 
+            <b>if</b> (<span class="i">LanguagePrimitives</span>.<span class="i">IsCimIntrinsicScalarType</span>(<span class="r54 r">expectedDotNetType</span>))
+            {
+                <b>return</b> <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <span class="r54 r">expectedDotNetType</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+            }
+ 
+            <b>if</b> (<span class="r54 r">expectedDotNetType</span> == <b>typeof</b>(<span class="i">CimInstance</span>))
+            {
+                <b>return</b> <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <span class="r54 r">expectedDotNetType</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+            }
+ 
+            <b>if</b> (<span class="r54 r">expectedDotNetType</span>.<span class="i">IsArray</span>)
+            {
+                <span class="i">Type</span> <span id="r55 rd" class="r55 r">dotNetElementType</span> = <a href="#d2e872c067e74985" class="i method">GetElementType</a>(<span class="r54 r">expectedDotNetType</span>);
+                <b>if</b> (<span class="r55 r">dotNetElementType</span> != <b>null</b>)
+                {
+                    <b>var</b> <span id="r56 rd" class="r56 r">cimArray</span> = (<span class="i">Array</span>)<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<span class="i">Array</span>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                    <span class="i">Array</span> <span id="r57 rd" class="r57 r">dotNetArray</span> = <span class="i">Array</span>.<span class="i">CreateInstance</span>(<span class="r55 r">dotNetElementType</span>, <span class="r56 r">cimArray</span>.<span class="i">Length</span>);
+                    <b>for</b> (<b>int</b> <span id="r58 rd" class="r58 r">i</span> = 0; <span class="r58 r">i</span> &lt; <span class="r57 r">dotNetArray</span>.<span class="i">Length</span>; <span class="r58 r">i</span>++)
+                    {
+                        <b>object</b> <span id="r59 rd" class="r59 r">dotNetElement</span> = <span class="i">ConvertFromCimToDotNet</span>(<span class="r56 r">cimArray</span>.<span class="i">GetValue</span>(<span class="r58 r">i</span>), <span class="r55 r">dotNetElementType</span>);
+                        <span class="r57 r">dotNetArray</span>.<span class="i">SetValue</span>(<span class="r59 r">dotNetElement</span>, <span class="r58 r">i</span>);
+                    }
+ 
+                    <b>return</b> <span class="r57 r">dotNetArray</span>;
+                }
+            }
+ 
+            <span class="i">Type</span> <span id="r60 rd" class="r60 r">convertibleCimType</span> = <a href="#19d7c51e4a5fdffa" class="i method">GetConvertibleCimType</a>(<span class="r54 r">expectedDotNetType</span>);
+            <b>if</b> (<span class="r60 r">convertibleCimType</span> != <b>null</b>)
+            {
+                <b>object</b> <span id="r61 rd" class="r61 r">cimIntrinsicValue</span> = <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <span class="r60 r">convertibleCimType</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>object</b> <span id="r62 rd" class="r62 r">dotNetObject</span> = <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r61 r">cimIntrinsicValue</span>, <span class="r54 r">expectedDotNetType</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r62 r">dotNetObject</span>;
+            }
+ 
+            <span class="i">Func</span>&lt;<span class="i">Func</span>&lt;<b>object</b>&gt;, <b>object</b>&gt; <span id="r63 rd" class="r63 r">exceptionSafeReturn</span> = (<span class="i">Func</span>&lt;<b>object</b>&gt; <span id="r64 rd" class="r64 r">innerAction</span>) =&gt;
+            {
+                <b>try</b>
+                {
+                    <b>return</b> <span class="r64 r">innerAction</span>();
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r65 rd" class="r65 r">e</span>)
+                {
+                    <b>throw</b> <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<span class="i">GetInvalidCastException</span>(
+                        <span class="r65 r">e</span>,
+                        <span class="s">&quot;InvalidCimToDotNetCast&quot;</span>,
+                        <span class="r53 r">cimObject</span>,
+                        <span class="r54 r">expectedDotNetType</span>.<span class="i">FullName</span>);
+                }
+            };
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">ObjectSecurity</span>).<span class="i">IsAssignableFrom</span>(<span class="r54 r">expectedDotNetType</span>))
+            {
+                <b>var</b> <span id="r66 rd" class="r66 r">sddl</span> = (<b>string</b>)<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<b>string</b>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r63 r">exceptionSafeReturn</span>(<b>delegate</b>
+                                               {
+                                                   <b>var</b> <span id="r67 rd" class="r67 r">objectSecurity</span> = (<span class="i">ObjectSecurity</span>)<span class="i">Activator</span>.<span class="i">CreateInstance</span>(<span class="r54 r">expectedDotNetType</span>);
+                                                   <span class="r67 r">objectSecurity</span>.<span class="i">SetSecurityDescriptorSddlForm</span>(<span class="r66 r">sddl</span>);
+                                                   <b>return</b> <span class="r67 r">objectSecurity</span>;
+                                               });
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">X509Certificate2</span>) == <span class="r54 r">expectedDotNetType</span>)
+            {
+                <b>var</b> <span id="r68 rd" class="r68 r">cimIntrinsicValue</span> = (<b>byte</b>[])<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<b>byte</b>[]), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r63 r">exceptionSafeReturn</span>(<b>delegate</b>
+                                               {
+                                                   <b>return</b> <b>new</b> <span class="i">X509Certificate2</span>(<span class="r68 r">cimIntrinsicValue</span>);
+                                               });
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">X500DistinguishedName</span>) == <span class="r54 r">expectedDotNetType</span>)
+            {
+                <b>var</b> <span id="r69 rd" class="r69 r">cimIntrinsicValue</span> = (<b>byte</b>[])<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<b>byte</b>[]), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r63 r">exceptionSafeReturn</span>(<b>delegate</b>
+                                               {
+                                                   <b>return</b> <b>new</b> <span class="i">X500DistinguishedName</span>(<span class="r69 r">cimIntrinsicValue</span>);
+                                               });
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PhysicalAddress</span>) == <span class="r54 r">expectedDotNetType</span>)
+            {
+                <b>var</b> <span id="r70 rd" class="r70 r">cimIntrinsicValue</span> = (<b>string</b>)<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<b>string</b>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r63 r">exceptionSafeReturn</span>(<b>delegate</b>
+                                               {
+                                                   <b>return</b> <span class="i">PhysicalAddress</span>.<span class="i">Parse</span>(<span class="r70 r">cimIntrinsicValue</span>);
+                                               });
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">IPEndPoint</span>) == <span class="r54 r">expectedDotNetType</span>)
+            {
+                <b>var</b> <span id="r71 rd" class="r71 r">cimIntrinsicValue</span> = (<b>string</b>)<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<b>string</b>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r63 r">exceptionSafeReturn</span>(<b>delegate</b>
+                                               {
+                                                   <b>int</b> <span id="r72 rd" class="r72 r">indexOfLastColon</span> = <span class="r71 r">cimIntrinsicValue</span>.<span class="i">LastIndexOf</span>(<span class="s">&#39;:&#39;</span>);
+                                                   <b>int</b> <span id="r73 rd" class="r73 r">port</span> = <b>int</b>.<span class="i">Parse</span>(<span class="r71 r">cimIntrinsicValue</span>.<span class="i">AsSpan</span>(<span class="r72 r">indexOfLastColon</span> + 1), <span class="i">NumberStyles</span>.<span class="i">Integer</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                                                   <span class="i">IPAddress</span> <span id="r74 rd" class="r74 r">address</span> = <span class="i">IPAddress</span>.<span class="i">Parse</span>(<span class="r71 r">cimIntrinsicValue</span>.<span class="i">AsSpan</span>(0, <span class="r72 r">indexOfLastColon</span>));
+                                                   <b>return</b> <b>new</b> <span class="i">IPEndPoint</span>(<span class="r74 r">address</span>, <span class="r73 r">port</span>);
+                                               });
+            }
+ 
+            <span class="c">// WildcardPattern is only supported as an &quot;in&quot; parameter - we do not support the reverse translation (i.e. from &quot;a%&quot; to &quot;a*&quot;)</span>
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">XmlDocument</span>) == <span class="r54 r">expectedDotNetType</span>)
+            {
+                <b>var</b> <span id="r75 rd" class="r75 r">cimIntrinsicValue</span> = (<b>string</b>)<span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r53 r">cimObject</span>, <b>typeof</b>(<b>string</b>), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                <b>return</b> <span class="r63 r">exceptionSafeReturn</span>(<b>delegate</b>
+                                               {
+                                                   <span class="i">XmlDocument</span> <span id="r76 rd" class="r76 r">doc</span> = <span class="i">InternalDeserializer</span>.<span class="i">LoadUnsafeXmlDocument</span>(
+                                                       <span class="r75 r">cimIntrinsicValue</span>,
+                                                       <b>true</b>, <span class="c">/* preserve non elements: whitespace, processing instructions, comments, etc. */</span>
+                                                       <b>null</b>); <span class="c">/* default maxCharactersInDocument */</span>
+                                                   <b>return</b> <span class="r76 r">doc</span>;
+                                               });
+            }
+ 
+            <span class="c">// unrecognized type = throw invalid cast exception</span>
+            <b>throw</b> <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<span class="i">GetInvalidCastException</span>(
+                <b>null</b>, <span class="c">/* inner exception */</span>
+                <span class="s">&quot;InvalidCimToDotNetCast&quot;</span>,
+                <span class="r53 r">cimObject</span>,
+                <span class="r54 r">expectedDotNetType</span>.<span class="i">FullName</span>);
+        }
+ 
+        <b>internal static</b> <span class="i">CimType</span> <a id="c25a89e98964d6bc" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">GetCimTypeEnum</a>(<span class="i">Type</span> <span id="r77 rd" class="r77 r">dotNetType</span>)
+        {
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r77 r">dotNetType</span> != <b>null</b>, <span class="s">&quot;Caller should make sure that dotNetType != null&quot;</span>);
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PSReference</span>).<span class="i">IsAssignableFrom</span>(<span class="r77 r">dotNetType</span>))
+            {
+                <b>return</b> <span class="i">CimType</span>.<span class="i">Reference</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PSReference</span>[]).<span class="i">IsAssignableFrom</span>(<span class="r77 r">dotNetType</span>))
+            {
+                <b>return</b> <span class="i">CimType</span>.<span class="i">ReferenceArray</span>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <span class="i">CimConverter</span>.<span class="i">GetCimType</span>(<span class="r77 r">dotNetType</span>);
+            }
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="7b06808ff5d00141" href="../../../R/7b06808ff5d00141.html" target="n" data-glyph="74,1" class="i method">GetCimType</a>(<span class="i">Type</span> <span id="r78 rd" class="r78 r">dotNetType</span>)
+        {
+            <b>if</b> (<span class="r78 r">dotNetType</span>.<span class="i">IsArray</span>)
+            {
+                <b>return</b> <a href="#7b06808ff5d00141" class="i method">GetCimType</a>(<a href="#d2e872c067e74985" class="i method">GetElementType</a>(<span class="r78 r">dotNetType</span>)).<span class="i">MakeArrayType</span>();
+            }
+ 
+            <b>if</b> (<span class="r78 r">dotNetType</span>.<span class="i">GetTypeInfo</span>().<span class="i">IsGenericType</span> &amp;&amp; <span class="r78 r">dotNetType</span>.<span class="i">GetGenericTypeDefinition</span>() == <b>typeof</b>(<span class="i">Nullable</span>&lt;&gt;))
+            {
+                <b>return</b> <span class="i">GetCimType</span>(<span class="r78 r">dotNetType</span>.<span class="i">GetGenericArguments</span>()[0]);
+            }
+ 
+            <b>if</b> (<span class="i">LanguagePrimitives</span>.<span class="i">IsCimIntrinsicScalarType</span>(<span class="r78 r">dotNetType</span>))
+            {
+                <b>return</b> <span class="r78 r">dotNetType</span>;
+            }
+ 
+            <b>if</b> (<span class="r78 r">dotNetType</span> == <b>typeof</b>(<span class="i">CimInstance</span>))
+            {
+                <b>return</b> <span class="r78 r">dotNetType</span>;
+            }
+ 
+            <b>if</b> (<span class="r78 r">dotNetType</span> == <b>typeof</b>(<span class="i">PSReference</span>))
+            {
+                <b>return</b> <span class="r78 r">dotNetType</span>;
+            }
+ 
+            <span class="i">Type</span> <span id="r79 rd" class="r79 r">result</span> = <a href="#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="#19d7c51e4a5fdffa" class="i method">GetConvertibleCimType</a>(<span class="r78 r">dotNetType</span>);
+            <b>if</b> (<span class="r79 r">result</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r79 r">result</span>;
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">ObjectSecurity</span>).<span class="i">IsAssignableFrom</span>(<span class="r78 r">dotNetType</span>))
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">X509Certificate2</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>byte</b>[]);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">X500DistinguishedName</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>byte</b>[]);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PhysicalAddress</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">IPEndPoint</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">WildcardPattern</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">XmlDocument</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>if</b> (<b>typeof</b>(<span class="i">PSCredential</span>) == <span class="r78 r">dotNetType</span>)
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<b>false</b>, <span class="s">&quot;.NET Type that is not supported in a .NET &lt;-&gt; CIM conversion&quot;</span>);
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns a type of CIM representation if conversion from/to CIM can be done purely with LanguagePrimitives.ConvertTo.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">dotNetType</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">Type</span> <a id="19d7c51e4a5fdffa" href="../../../R/19d7c51e4a5fdffa.html" target="n" data-glyph="76,1" class="i method">GetConvertibleCimType</a>(<span class="i">Type</span> <span id="r80 rd" class="r80 r">dotNetType</span>)
+        {
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(
+                !(<span class="r80 r">dotNetType</span>.<span class="i">GetTypeInfo</span>().<span class="i">IsGenericType</span> &amp;&amp; <span class="r80 r">dotNetType</span>.<span class="i">GetGenericTypeDefinition</span>() == <b>typeof</b>(<span class="i">Nullable</span>&lt;&gt;)),
+                <span class="s">&quot;Caller should strip out Nullable&lt;T&gt; before calling CimValueConverter.GetConvertibleCimType&quot;</span>);
+ 
+            <b>if</b> (<span class="r80 r">dotNetType</span>.<span class="i">GetTypeInfo</span>().<span class="i">IsEnum</span>)
+            {
+                <b>return</b> <span class="i">Enum</span>.<span class="i">GetUnderlyingType</span>(<span class="r80 r">dotNetType</span>);
+            }
+ 
+            <b>if</b> (<span class="r80 r">dotNetType</span> == <b>typeof</b>(<span class="i">SwitchParameter</span>))
+            {
+                <b>return</b> <b>typeof</b>(<b>bool</b>);
+            }
+ 
+            <b>if</b> (<span class="r80 r">dotNetType</span> == <b>typeof</b>(<span class="i">Guid</span>) ||
+                <span class="r80 r">dotNetType</span> == <b>typeof</b>(<span class="i">Uri</span>) || <span class="c">// TODO/FIXME - CliXml does some magic around relative URIs - do we want to duplicate this?</span>
+                <span class="r80 r">dotNetType</span> == <b>typeof</b>(<span class="i">Version</span>) ||
+                <span class="r80 r">dotNetType</span> == <b>typeof</b>(<span class="i">IPAddress</span>) ||
+                <span class="r80 r">dotNetType</span> == <b>typeof</b>(<span class="i">MailAddress</span>))
+            {
+                <b>return</b> <b>typeof</b>(<b>string</b>);
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="d2e872c067e74985" href="../../../R/d2e872c067e74985.html" target="n" data-glyph="74,1" class="i method">GetElementType</a>(<span class="i">Type</span> <span id="r81 rd" class="r81 r">arrayType</span>)
+        {
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r81 r">arrayType</span> != <b>null</b>, <span class="s">&quot;Caller should verify arrayType != null&quot;</span>);
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r81 r">arrayType</span>.<span class="i">IsArray</span>, <span class="s">&quot;Caller should verify arrayType.IsArray&quot;</span>);
+ 
+            <span class="c">// MOF syntax from Appendix A of DSP0004 doesn&#39;t allow expressing</span>
+            <span class="c">// of 1) nested arrays and 2) multi-dimensional arrays</span>
+            <span class="c">// (see production for &quot;array&quot; and how this production is used in</span>
+            <span class="c">//  other productions like &quot;propertyDeclaration&quot; or &quot;parameter&quot;)</span>
+            <b>if</b> (<span class="r81 r">arrayType</span>.<span class="i">GetArrayRank</span>() != 1)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <span class="i">Type</span> <span id="r82 rd" class="r82 r">elementType</span> = <span class="r81 r">arrayType</span>.<span class="i">GetElementType</span>();
+            <b>if</b> (<span class="r82 r">elementType</span>.<span class="i">IsArray</span>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>return</b> <span class="r82 r">elementType</span>;
+        }
+ 
+        <b>internal static</b> <span class="i">PSInvalidCastException</span> <a id="692dc5bd8467667e" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">GetInvalidCastException</a>(
+            <span class="i">Exception</span> <span id="r83 rd" class="r83 r">innerException</span>,
+            <b>string</b> <span id="r84 rd" class="r84 r">errorId</span>,
+            <b>object</b> <span id="r85 rd" class="r85 r">sourceValue</span>,
+            <b>string</b> <span id="r86 rd" class="r86 r">descriptionOfTargetType</span>)
+        {
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r84 r">errorId</span>), <span class="s">&quot;Caller should verify !string.IsNullOrEmpty(errorId)&quot;</span>);
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r85 r">sourceValue</span> != <b>null</b>, <span class="s">&quot;Caller should verify sourceValue != null&quot;</span>);
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r86 r">descriptionOfTargetType</span>), <span class="s">&quot;Caller should verify !string.IsNullOrEmpty(descriptionOfTargetType)&quot;</span>);
+ 
+            <b>throw</b> <b>new</b> <span class="i">PSInvalidCastException</span>(
+                <span class="r84 r">errorId</span>,
+                <span class="r83 r">innerException</span>,
+                <span class="i">ExtendedTypeSystem</span>.<span class="i">InvalidCastException</span>,
+                <span class="r85 r">sourceValue</span>,
+                <span class="i">PSObject</span>.<span class="i">AsPSObject</span>(<span class="r85 r">sourceValue</span>).<span class="i">BaseObject</span>.<span class="i">GetType</span>().<span class="i">FullName</span>,
+                <span class="r86 r">descriptionOfTargetType</span>);
+        }
+ 
+        [<span class="i">Conditional</span>(<span class="s">&quot;DEBUG&quot;</span>)]
+        <b>internal static void</b> <a id="41911896f531b8e0" href="../../../R/41911896f531b8e0.html" target="n" data-glyph="74,1" class="i method">AssertIntrinsicCimValue</a>(<b>object</b> <span id="r87 rd" class="r87 r">value</span>)
+        {
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r87 r">value</span> != <b>null</b>, <span class="s">&quot;Caller should verify value != null&quot;</span>);
+            <span class="i">Type</span> <span id="r88 rd" class="r88 r">type</span> = <span class="r87 r">value</span>.<span class="i">GetType</span>();
+            <a href="#deed7afe56399c70" class="i method">AssertIntrinsicCimType</a>(<span class="r88 r">type</span>);
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(!<b>typeof</b>(<span class="i">PSReference</span>).<span class="i">IsAssignableFrom</span>(<span class="r88 r">type</span>) &amp;&amp; <b>typeof</b>(<span class="i">PSReference</span>[]) != <span class="r88 r">type</span>,
+                       <span class="s">&quot;PSReference cannot be used as a CIM *value* (PSReference is only ok as a type)&quot;</span>);
+        }
+ 
+        [<span class="i">Conditional</span>(<span class="s">&quot;DEBUG&quot;</span>)]
+        <b>internal static void</b> <a id="deed7afe56399c70" href="../../../R/deed7afe56399c70.html" target="n" data-glyph="74,1" class="i method">AssertIntrinsicCimType</a>(<span class="i">Type</span> <span id="r89 rd" class="r89 r">type</span>)
+        {
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r89 r">type</span> != <b>null</b>, <span class="s">&quot;Caller should verify type != null&quot;</span>);
+            <span class="i">Dbg</span>.<span class="i">Assert</span>(
+                <span class="i">LanguagePrimitives</span>.<span class="i">IsCimIntrinsicScalarType</span>(<span class="r89 r">type</span>) ||
+                (<span class="r89 r">type</span>.<span class="i">IsArray</span> &amp;&amp; <span class="i">LanguagePrimitives</span>.<span class="i">IsCimIntrinsicScalarType</span>(<span class="r89 r">type</span>.<span class="i">GetElementType</span>())) ||
+                <b>typeof</b>(<span class="i">CimInstance</span>).<span class="i">IsAssignableFrom</span>(<span class="r89 r">type</span>) ||
+                <b>typeof</b>(<span class="i">PSReference</span>).<span class="i">IsAssignableFrom</span>(<span class="r89 r">type</span>) ||
+                <span class="r89 r">type</span> == <b>typeof</b>(<span class="i">CimInstance</span>[]) ||
+                <span class="r89 r">type</span> == <b>typeof</b>(<span class="i">PSReference</span>[]),
+                <span class="s">&quot;Caller should verify that type is an intrinsic CIM type&quot;</span>);
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

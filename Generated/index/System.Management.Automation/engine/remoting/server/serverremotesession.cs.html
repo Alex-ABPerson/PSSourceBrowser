@@ -1,0 +1,1186 @@
+﻿<!DOCTYPE html>
+<html><head><title>serverremotesession.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(1177);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/server/serverremotesession.cs" target="_top">engine\remoting\server\serverremotesession.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Server</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> By design, on the server side, each remote connection is represented by</span>
+    <span class="c">///</span><span class="c"> a ServerRemoteSession object, which contains one instance of this class.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This class holds 4 pieces of information.</span>
+    <span class="c">///</span><span class="c"> 1. Client capability: This is the capability received during the negotiation process.</span>
+    <span class="c">///</span><span class="c"> 2. Server capability: This comes from default parameters.</span>
+    <span class="c">///</span><span class="c"> 3. Client configuration: This holds the remote session related configuration parameters that</span>
+    <span class="c">///</span><span class="c">    the client sent to the server. This parameters can be changed and resent after the connection</span>
+    <span class="c">///</span><span class="c">    is established.</span>
+    <span class="c">///</span><span class="c"> 4. Server configuration: this holds the server sider configuration parameters.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> All these together define the connection level parameters.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="3c434d2f9b8d8285" href="../../../R/3c434d2f9b8d8285.html" target="n" data-glyph="2,0" class="t t">ServerRemoteSessionContext</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The constructor instantiates a server capability object and a server configuration</span>
+        <span class="c">///</span><span class="c"> using default values.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="9533399c2c79ee10" href="../../../R/9533399c2c79ee10.html" target="n" data-glyph="74,1" class="t constructor">ServerRemoteSessionContext</a>()
+        {
+            <a href="#582b6374083ee65b" class="i property">ServerCapability</a> = <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#410d0e97ea446fd9" class="t t">RemoteSessionCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#122c7d39b2c7c1c1" class="i method">CreateServerCapability</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property represents the capability that the server receives from the client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#410d0e97ea446fd9" class="t t">RemoteSessionCapability</a> <a id="3840fb6b96425feb" href="../../../R/3840fb6b96425feb.html" target="n" data-glyph="104,1" class="i property">ClientCapability</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property is the server capability generated on the server side.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#410d0e97ea446fd9" class="t t">RemoteSessionCapability</a> <a id="582b6374083ee65b" href="../../../R/582b6374083ee65b.html" target="n" data-glyph="104,1" class="i property">ServerCapability</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if negotiation from client is succeeded...in which case ClientCapability</span>
+        <span class="c">///</span><span class="c"> is the capability that server agreed with.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="5252a2ca5a35c97e" href="../../../R/../../0000000000.html" target="n" data-glyph="104,1" class="i property">IsNegotiationSucceeded</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class is designed to be the server side controller of a remote connection.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> It contains a static entry point that the PowerShell server process will get into</span>
+    <span class="c">///</span><span class="c"> the server mode. At this entry point, a runspace configuration is passed in. This runspace</span>
+    <span class="c">///</span><span class="c"> configuration is used to instantiate a server side runspace.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This class controls a remote connection by using a Session data structure handler, which</span>
+    <span class="c">///</span><span class="c"> in turn contains a Finite State Machine, and a transport mechanism.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="2224dac53a001a7b" href="../../../R/2224dac53a001a7b.html" target="n" data-glyph="2,0" class="t t">ServerRemoteSession</a> : <a href="../common/remotesession.cs.html#0b946ed667e0070a" class="t t">RemoteSession</a>
+    {
+        [<span class="i">TraceSourceAttribute</span>(<span class="s">&quot;ServerRemoteSession&quot;</span>, <span class="s">&quot;ServerRemoteSession&quot;</span>)]
+        <b>private static readonly</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="5906b889ba1e7248" href="../../../R/5906b889ba1e7248.html" target="n" data-glyph="46,1" class="i field">s_trace</a> = <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#697b06ec70e3c537" class="i method">GetTracer</a>(<span class="s">&quot;ServerRemoteSession&quot;</span>, <span class="s">&quot;ServerRemoteSession&quot;</span>);
+ 
+        <b>private readonly</b> <a href="../fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a> <a id="aaab2f50c7196a6c" href="../../../R/aaab2f50c7196a6c.html" target="n" data-glyph="46,1" class="i field">_senderInfo</a>;
+        <b>private readonly string</b> <a id="b9f7e606f20f8acf" href="../../../R/b9f7e606f20f8acf.html" target="n" data-glyph="46,1" class="i field">_configProviderId</a>;
+        <b>private readonly string</b> <a id="af474ca02993c28c" href="../../../R/af474ca02993c28c.html" target="n" data-glyph="46,1" class="i field">_initParameters</a>;
+        <b>private string</b> <a id="59f6d9fca502a28c" href="../../../R/59f6d9fca502a28c.html" target="n" data-glyph="46,1" class="i field">_initScriptForOutOfProcRS</a>;
+        <b>private</b> <a href="../fanin/InitialSessionStateProvider.cs.html#e35ba0e017aa5d6d" class="t t">PSSessionConfiguration</a> <a id="2bd2b0d6cb7fcd02" href="../../../R/2bd2b0d6cb7fcd02.html" target="n" data-glyph="46,1" class="i field">_sessionConfigProvider</a>;
+ 
+        <span class="c">// used to apply quotas on command and session transportmanagers.</span>
+        <b>private int</b>? <a id="3ab2b0fe91369334" href="../../../R/3ab2b0fe91369334.html" target="n" data-glyph="46,1" class="i field">_maxRecvdObjectSize</a>;
+        <b>private int</b>? <a id="d794137d65fee0f8" href="../../../R/d794137d65fee0f8.html" target="n" data-glyph="46,1" class="i field">_maxRecvdDataSizeCommand</a>;
+ 
+        <b>private</b> <a href="ServerRunspacePoolDriver.cs.html#a13c57c874abb0c5" class="t t">ServerRunspacePoolDriver</a> <a id="87f176fd246e8861" href="../../../R/87f176fd246e8861.html" target="n" data-glyph="46,1" class="i field">_runspacePoolDriver</a>;
+        <b>private readonly</b> <a href="../../../utils/CryptoUtils.cs.html#e11543478fd30f75" class="t t">PSRemotingCryptoHelperServer</a> <a id="f524c09ae1d62b82" href="../../../R/f524c09ae1d62b82.html" target="n" data-glyph="46,1" class="i field">_cryptoHelper</a>;
+ 
+        <span class="c">// Specifies an optional endpoint configuration for out-of-proc session use.</span>
+        <span class="c">// Creates a pushed remote runspace session created with this configuration name.</span>
+        <b>private string</b> <a id="4ecbac137cd8e9f8" href="../../../R/4ecbac137cd8e9f8.html" target="n" data-glyph="46,1" class="i field">_configurationName</a>;
+ 
+        <span class="c">// Specifies an initial location of the powershell session.</span>
+        <b>private string</b> <a id="4817ea7b3b3b63b9" href="../../../R/4817ea7b3b3b63b9.html" target="n" data-glyph="46,1" class="i field">_initialLocation</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Events
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Raised when session is closed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">EventHandler</span>&lt;<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a>&gt; <a id="6099ecc17f08cd65" href="../../../R/6099ecc17f08cd65.html" target="n" data-glyph="44,1" class="i field">Closed</a>;
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This constructor instantiates a ServerRemoteSession object and</span>
+        <span class="c">///</span><span class="c"> a ServerRemoteSessionDataStructureHandler object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">senderInfo</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Details about the user creating this session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">configurationProviderId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The resource URI for which this session is being created</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">initializationParameters</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initialization Parameters xml passed by WSMan API. This data is read from the config</span>
+        <span class="c">///</span><span class="c"> xml.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">transportManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The transport manager this session should use to send/receive data</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="ad9fa29cdbbe8380" href="../../../R/ad9fa29cdbbe8380.html" target="n" data-glyph="74,1" class="t constructor">ServerRemoteSession</a>(<a href="../fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a> <span id="r0 rd" class="r0 r">senderInfo</span>,
+            <b>string</b> <span id="r1 rd" class="r1 r">configurationProviderId</span>,
+            <b>string</b> <span id="r2 rd" class="r2 r">initializationParameters</span>,
+            <a href="../fanin/BaseTransportManager.cs.html#18630eb940dac0a0" class="t t">AbstractServerSessionTransportManager</a> <span id="r3 rd" class="r3 r">transportManager</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r3 r">transportManager</span> != <b>null</b>, <span class="s">&quot;transportManager cannot be null.&quot;</span>);
+ 
+            <span class="c">// let input,output and error from native commands redirect as we have</span>
+            <span class="c">// to send (or receive) them back to client for action.</span>
+            <a href="../../NativeCommandProcessor.cs.html#27173c2526d1ef9a" class="t t">NativeCommandProcessor</a>.<a href="../../NativeCommandProcessor.cs.html#20e4f9ea3187f2d9" class="i property">IsServerSide</a> = <b>true</b>;
+            <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a> = <span class="r0 r">senderInfo</span>;
+            <a href="#b9f7e606f20f8acf" class="i field">_configProviderId</a> = <span class="r1 r">configurationProviderId</span>;
+            <a href="#af474ca02993c28c" class="i field">_initParameters</a> = <span class="r2 r">initializationParameters</span>;
+            <a href="#f524c09ae1d62b82" class="i field">_cryptoHelper</a> = (<a href="../../../utils/CryptoUtils.cs.html#e11543478fd30f75" class="t t">PSRemotingCryptoHelperServer</a>)<span class="r3 r">transportManager</span>.<a href="../fanin/BaseTransportManager.cs.html#30975a92e0bc8f5d" class="i property">CryptoHelper</a>;
+            <a href="#f524c09ae1d62b82" class="i field">_cryptoHelper</a>.<a href="../../../utils/CryptoUtils.cs.html#2053e749f9fa257a" class="i property">Session</a> = <a href="#2224dac53a001a7b" class="k">this</a>;
+ 
+            <a href="#6e51a9cf15d63f71" class="i property">Context</a> = <b>new</b> <a href="#9533399c2c79ee10" class="t constructor">ServerRemoteSessionContext</a>();
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a> = <b>new</b> <a href="serverremotingprotocolimplementation.cs.html#2c4ed0a2ab4f0c63" class="t constructor">ServerRemoteSessionDSHandlerImpl</a>(<a href="#2224dac53a001a7b" class="k">this</a>, <span class="r3 r">transportManager</span>);
+            <a href="../common/remotesession.cs.html#6bddfe4d3d69f1d6" class="i property">BaseSessionDataStructureHandler</a> = <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>;
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#a307def61d19d9e3" class="i">CreateRunspacePoolReceived</a> += <span class="i">HandleCreateRunspacePool</span>;
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#befbe0c17e5b269f" class="i">NegotiationReceived</a> += <span class="i">HandleNegotiationReceived</span>;
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#2c9362682643ed1f" class="i">SessionClosing</a> += <span class="i">HandleSessionDSHandlerClosing</span>;
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#8c6ce91e416389f9" class="i">PublicKeyReceived</a> += <span class="i">HandlePublicKeyReceived</span>;
+            <span class="r3 r">transportManager</span>.<a href="../fanin/BaseTransportManager.cs.html#2fd00aae4537bede" class="i">Closing</a> += <span class="i">HandleResourceClosing</span>;
+ 
+            <span class="c">// update the quotas from sessionState..start with default size..and</span>
+            <span class="c">// when Custom Session Configuration is loaded (during runspace creation) update this.</span>
+            <span class="r3 r">transportManager</span>.<a href="../fanin/BaseTransportManager.cs.html#766c6c998b78695f" class="i property">ReceivedDataCollection</a>.<a href="../fanin/PriorityCollection.cs.html#24de42a1b1c1d4b9" class="i property">MaximumReceivedObjectSize</a> =
+                <a href="../fanin/BaseTransportManager.cs.html#9ccd7ea4a824f9d8" class="t t">BaseTransportManager</a>.<a href="../fanin/BaseTransportManager.cs.html#f93a293eb909c256" class="i field">MaximumReceivedObjectSize</a>;
+ 
+            <span class="c">// session transport manager can receive unlimited data..however each object is limited</span>
+            <span class="c">// by maxRecvdObjectSize. this is to allow clients to use a session for an unlimited time..</span>
+            <span class="c">// also the messages that can be sent to a session are limited and very controlled.</span>
+            <span class="c">// However a command transport manager can be restricted to receive only a fixed amount of data</span>
+            <span class="c">// controlled by maxRecvdDataSizeCommand..This is because commands can accept any number of input</span>
+            <span class="c">// objects</span>
+            <span class="r3 r">transportManager</span>.<a href="../fanin/BaseTransportManager.cs.html#766c6c998b78695f" class="i property">ReceivedDataCollection</a>.<a href="../fanin/PriorityCollection.cs.html#7a540327df6a2e2d" class="i property">MaximumReceivedDataSize</a> = <b>null</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Constructors
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Creation Factory
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates a server remote session for the supplied </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">configurationProviderId</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> and </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">transportManager</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">senderInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">configurationProviderId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">initializationParameters</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initialization Parameters xml passed by WSMan API. This data is read from the config</span>
+        <span class="c">///</span><span class="c"> xml.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">transportManager</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">configurationName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Optional configuration endpoint name for OutOfProc sessions.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">initialLocation</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Optional configuration initial location of the powershell session.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> InitialSessionState provider with </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">configurationProviderId</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> does</span>
+        <span class="c">///</span><span class="c"> not exist on the remote server.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">/*
+                  &lt;InitializationParameters&gt;
+                    &lt;Param Name=&quot;PSVersion&quot; Value=&quot;2.0&quot; /&gt;
+                    &lt;Param Name=&quot;ApplicationBase&quot; Value=&quot;&lt;folder path&gt;&quot; /&gt;
+                    ...
+                  &lt;/InitializationParameters&gt;
+        */</span>
+        <b>internal static</b> <a href="#2224dac53a001a7b" class="t t">ServerRemoteSession</a> <a id="28b246ab77078e6c" href="../../../R/28b246ab77078e6c.html" target="n" data-glyph="74,1" class="i method">CreateServerRemoteSession</a>(
+            <a href="../fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a> <span id="r6 rd" class="r6 r">senderInfo</span>,
+            <b>string</b> <span id="r4 rd" class="r4 r">configurationProviderId</span>,
+            <b>string</b> <span id="r7 rd" class="r7 r">initializationParameters</span>,
+            <a href="../fanin/BaseTransportManager.cs.html#18630eb940dac0a0" class="t t">AbstractServerSessionTransportManager</a> <span id="r5 rd" class="r5 r">transportManager</span>,
+            <b>string</b> <span id="r8 rd" class="r8 r">configurationName</span> = <b>null</b>,
+            <b>string</b> <span id="r9 rd" class="r9 r">initialLocation</span> = <b>null</b>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(
+                (<span class="r6 r">senderInfo</span> != <b>null</b>) &amp;&amp; (<span class="r6 r">senderInfo</span>.<a href="../fanin/PSPrincipal.cs.html#ac3b737833cbe3e1" class="i property">UserInfo</a> != <b>null</b>),
+                <span class="s">&quot;senderInfo and userInfo cannot be null.&quot;</span>);
+ 
+            <a href="#5906b889ba1e7248" class="i field">s_trace</a>.<a href="../../../utils/StructuredTraceSource.cs.html#25b8416175e53218" class="i method">WriteLine</a>(<span class="s">&quot;Finding InitialSessionState provider for id : {0}&quot;</span>, <span class="r4 r">configurationProviderId</span>);
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r4 r">configurationProviderId</span>))
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#eafc61f0708da78f" class="i method">NewInvalidOperationException</a>(<span class="s">&quot;RemotingErrorIdStrings.NonExistentInitialSessionStateProvider&quot;</span>, <span class="r4 r">configurationProviderId</span>);
+            }
+ 
+            <b>const string</b> <span id="r10 rd" class="r10 r">shellPrefix</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Client</span>.<a href="../fanin/WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="../fanin/WSManNativeAPI.cs.html#f383edcf61712f90" class="i field">ResourceURIPrefix</a>;
+            <b>int</b> <span id="r11 rd" class="r11 r">index</span> = <span class="r4 r">configurationProviderId</span>.<span class="i">IndexOf</span>(<span class="r10 r">shellPrefix</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>);
+            <span class="r6 r">senderInfo</span>.<a href="../fanin/PSPrincipal.cs.html#6eab5e435b27241d" class="i property">ConfigurationName</a> = (<span class="r11 r">index</span> == 0) ? <span class="r4 r">configurationProviderId</span>.<span class="i">Substring</span>(<span class="r10 r">shellPrefix</span>.<span class="i">Length</span>) : <b>string</b>.<span class="i">Empty</span>;
+            <a href="#2224dac53a001a7b" class="t t">ServerRemoteSession</a> <span id="r12 rd" class="r12 r">result</span> = <b>new</b> <a href="#ad9fa29cdbbe8380" class="t constructor">ServerRemoteSession</a>(
+                <span class="r6 r">senderInfo</span>,
+                <span class="r4 r">configurationProviderId</span>,
+                <span class="r7 r">initializationParameters</span>,
+                <span class="r5 r">transportManager</span>)
+            {
+                <a href="#4ecbac137cd8e9f8" class="i field">_configurationName</a> = <span class="r8 r">configurationName</span>,
+                <a href="#4817ea7b3b3b63b9" class="i field">_initialLocation</a> = <span class="r9 r">initialLocation</span>
+            };
+ 
+            <span class="c">// start state machine.</span>
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r13 rd" class="r13 r">startEventArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4a7b290f602ecbe6" class="i field">CreateSession</a>);
+            <span class="r12 r">result</span>.<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r13 r">startEventArg</span>);
+ 
+            <b>return</b> <span class="r12 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Used by OutOfProcessServerMediator to create a remote session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">senderInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">initializationScriptForOutOfProcessRunspace</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">transportManager</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">configurationName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">initialLocation</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="#2224dac53a001a7b" class="t t">ServerRemoteSession</a> <a id="eecd0f3a9029cacc" href="../../../R/eecd0f3a9029cacc.html" target="n" data-glyph="74,1" class="i method">CreateServerRemoteSession</a>(
+            <a href="../fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a> <span id="r14 rd" class="r14 r">senderInfo</span>,
+            <b>string</b> <span id="r15 rd" class="r15 r">initializationScriptForOutOfProcessRunspace</span>,
+            <a href="../fanin/BaseTransportManager.cs.html#18630eb940dac0a0" class="t t">AbstractServerSessionTransportManager</a> <span id="r16 rd" class="r16 r">transportManager</span>,
+            <b>string</b> <span id="r17 rd" class="r17 r">configurationName</span>,
+            <b>string</b> <span id="r18 rd" class="r18 r">initialLocation</span>)
+        {
+            <a href="#2224dac53a001a7b" class="t t">ServerRemoteSession</a> <span id="r19 rd" class="r19 r">result</span> = <span class="i">CreateServerRemoteSession</span>(
+                <span class="r14 r">senderInfo</span>,
+                <span class="s">&quot;Microsoft.PowerShell&quot;</span>,
+                <b>string</b>.<span class="i">Empty</span>,
+                <span class="r16 r">transportManager</span>,
+                <span class="i">configurationName</span>: <span class="r17 r">configurationName</span>,
+                <span class="i">initialLocation</span>: <span class="r18 r">initialLocation</span>);
+            <span class="r19 r">result</span>.<a href="#59f6d9fca502a28c" class="i field">_initScriptForOutOfProcRS</a> = <span class="r15 r">initializationScriptForOutOfProcessRunspace</span>;
+            <b>return</b> <span class="r19 r">result</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This indicates the remote session object is Client, Server or Listener.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#45c72046001f69b8" class="t t">RemotingDestination</a> <a id="0406cb042ecfcf4c" href="../../../R/0406cb042ecfcf4c.html" target="n" data-glyph="104,1" class="i property">MySelf</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#45c72046001f69b8" class="t t">RemotingDestination</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#061ac750e6d280da" class="i field">Server</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the data dispatcher for the whole remote connection.</span>
+        <span class="c">///</span><span class="c"> This dispatcher is registered with the server side input queue&#39;s InputDataReady event.</span>
+        <span class="c">///</span><span class="c"> When the input queue has received data from client, it calls the InputDataReady listeners.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This dispatcher distinguishes the negotiation packet as a special case. For all other data,</span>
+        <span class="c">///</span><span class="c"> it dispatches the data through Finite State Machines DoMessageReceived handler by raising the event</span>
+        <span class="c">///</span><span class="c"> MessageReceived. The FSM&#39;s DoMessageReceived handler further dispatches to the receiving</span>
+        <span class="c">///</span><span class="c"> components: such as runspace or pipeline which have their own data dispatching methods.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter is not used by the method, in this implementation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">dataEventArg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the remote data received from client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">dataEventArg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">dataEventArg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> does not contain remote data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the destination of the data is not for server.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="db437c4706c3a5ec" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DispatchInputQueueData</a>(<b>object</b> <span id="r20 rd" class="r20 r">sender</span>, <a href="../common/misc.cs.html#5953d27b0d5ec137" class="t t">RemoteDataEventArgs</a> <span id="r21 rd" class="r21 r">dataEventArg</span>)
+        {
+            <b>if</b> (<span class="r21 r">dataEventArg</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r21 r">dataEventArg</span>));
+            }
+ 
+            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r22 rd" class="r22 r">rcvdData</span> = <span class="r21 r">dataEventArg</span>.<a href="../common/misc.cs.html#38ed693bebe3d7fd" class="i property">ReceivedData</a>;
+ 
+            <b>if</b> (<span class="r22 r">rcvdData</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r21 r">dataEventArg</span>));
+            }
+ 
+            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#45c72046001f69b8" class="t t">RemotingDestination</a> <span id="r23 rd" class="r23 r">destination</span> = <span class="r22 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#36fad9981dff9219" class="i property">Destination</a>;
+ 
+            <b>if</b> ((<span class="r23 r">destination</span> &amp; <a href="#0406cb042ecfcf4c" class="i property">MySelf</a>) != <a href="#0406cb042ecfcf4c" class="i property">MySelf</a>)
+            {
+                <span class="c">// this packet is not target for me.</span>
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RemotingDestinationNotForMe</span>, <a href="#0406cb042ecfcf4c" class="i property">MySelf</a>, <span class="r23 r">destination</span>);
+            }
+ 
+            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1d73dff2a8d6a0bf" class="t t">RemotingTargetInterface</a> <span id="r24 rd" class="r24 r">targetInterface</span> = <span class="r22 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#6975a2b0635b9f80" class="i property">TargetInterface</a>;
+            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a> <span id="r25 rd" class="r25 r">dataType</span> = <span class="r22 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#97d7621b092d013f" class="i property">DataType</a>;
+ 
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r26 rd" class="r26 r">messageReceivedArg</span> = <b>null</b>;
+ 
+            <b>switch</b> (<span class="r24 r">targetInterface</span>)
+            {
+                <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1d73dff2a8d6a0bf" class="t t">RemotingTargetInterface</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#8b83aadf9f585adb" class="i field">Session</a>:
+                    {
+                        <b>switch</b> (<span class="r25 r">dataType</span>)
+                        {
+                            <span class="c">// TODO: Directly calling an event handler in StateMachine bypassing the StateMachine&#39;s</span>
+                            <span class="c">// loop of ProcessEvents()..This is needed as connection is already established and the</span>
+                            <span class="c">// following message does not change state. An ideal solution would be to process</span>
+                            <span class="c">// non-session messages in this class rather than by StateMachine.</span>
+                            <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1c4da1106c7e03cd" class="i field">CreateRunspacePool</a>:
+                                <span class="r26 r">messageReceivedArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#f2d9ed322eacd8a5" class="i field">MessageReceived</a>);
+                                <b>if</b> (<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#5ba7f606ba4de815" class="i method">CanByPassRaiseEvent</a>(<span class="r26 r">messageReceivedArg</span>))
+                                {
+                                    <span class="r26 r">messageReceivedArg</span>.<a href="../common/misc.cs.html#e9c4fdd9598903ad" class="i property">RemoteData</a> = <span class="r22 r">rcvdData</span>;
+                                    <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#3ca6a46007b46430" class="i method">DoMessageReceived</a>(<a href="#2224dac53a001a7b" class="k">this</a>, <span class="r26 r">messageReceivedArg</span>);
+                                }
+                                <b>else</b>
+                                {
+                                    <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r26 r">messageReceivedArg</span>);
+                                }
+ 
+                                <b>break</b>;
+ 
+                            <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#cba3be6717291b3e" class="i field">CloseSession</a>:
+                                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#92ef005f85120374" class="i method">RaiseDataReceivedEvent</a>(<span class="r21 r">dataEventArg</span>);
+                                <b>break</b>;
+ 
+                            <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6b685d32d77b181a" class="i field">SessionCapability</a>:
+                                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#92ef005f85120374" class="i method">RaiseDataReceivedEvent</a>(<span class="r21 r">dataEventArg</span>);
+                                <b>break</b>;
+ 
+                            <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#44a91e5fd10c9b8c" class="i field">PublicKey</a>:
+                                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#92ef005f85120374" class="i method">RaiseDataReceivedEvent</a>(<span class="r21 r">dataEventArg</span>);
+                                <b>break</b>;
+ 
+                            <b>default</b>:
+                                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;Should never reach here&quot;</span>);
+                                <b>break</b>;
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <span class="c">// TODO: Directly calling an event handler in StateMachine bypassing the StateMachine&#39;s</span>
+                <span class="c">// loop of ProcessEvents()..This is needed as connection is already established and the</span>
+                <span class="c">// following message does not change state. An ideal solution would be to process</span>
+                <span class="c">// non-session messages in this class rather than by StateMachine.</span>
+                <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1d73dff2a8d6a0bf" class="t t">RemotingTargetInterface</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#405ccc8b1bd2a170" class="i field">RunspacePool</a>:
+                <b>case</b> <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1d73dff2a8d6a0bf" class="t t">RemotingTargetInterface</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#f4078f88b2ce5495" class="i field">PowerShell</a>:
+                    <span class="c">// GETBACK</span>
+                    <span class="r26 r">messageReceivedArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#f2d9ed322eacd8a5" class="i field">MessageReceived</a>);
+                    <b>if</b> (<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#5ba7f606ba4de815" class="i method">CanByPassRaiseEvent</a>(<span class="r26 r">messageReceivedArg</span>))
+                    {
+                        <span class="r26 r">messageReceivedArg</span>.<a href="../common/misc.cs.html#e9c4fdd9598903ad" class="i property">RemoteData</a> = <span class="r22 r">rcvdData</span>;
+                        <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#3ca6a46007b46430" class="i method">DoMessageReceived</a>(<a href="#2224dac53a001a7b" class="k">this</a>, <span class="r26 r">messageReceivedArg</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r26 r">messageReceivedArg</span>);
+                    }
+ 
+                    <b>break</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Have received a public key from the other side</span>
+        <span class="c">///</span><span class="c"> Import or take other action based on the state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">event arguments which contains the</span>
+        <span class="c">///</span><span class="c"> remote public key</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="4f74f7c67c1e2881" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandlePublicKeyReceived</a>(<b>object</b> <span id="r27 rd" class="r27 r">sender</span>, <a href="../common/misc.cs.html#16d1e16a7ed9f8cc" class="t t">RemoteDataEventArgs</a>&lt;<b>string</b>&gt; <span id="r28 rd" class="r28 r">eventArgs</span>)
+        {
+            <b>if</b> (<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#a3913bab426d5a5d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a> ||
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#a3913bab426d5a5d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#0a8b75005471414a" class="i field">EstablishedAndKeyRequested</a> || <span class="c">// this is only for legacy clients</span>
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#a3913bab426d5a5d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5445341d5fb28384" class="i field">EstablishedAndKeyExchanged</a>)
+            {
+                <b>string</b> <span id="r29 rd" class="r29 r">remotePublicKey</span> = <span class="r28 r">eventArgs</span>.<a href="../common/misc.cs.html#0896dbbd394ce2e6" class="i property">Data</a>;
+ 
+                <b>bool</b> <span id="r30 rd" class="r30 r">ret</span> = <a href="#f524c09ae1d62b82" class="i field">_cryptoHelper</a>.<a href="../../../utils/CryptoUtils.cs.html#c34a0b8976ad1d15" class="i method">ImportRemotePublicKey</a>(<span class="r29 r">remotePublicKey</span>);
+ 
+                <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r31 rd" class="r31 r">args</span> = <b>null</b>;
+                <b>if</b> (!<span class="r30 r">ret</span>)
+                {
+                    <span class="c">// importing remote public key failed</span>
+                    <span class="c">// set state to closed</span>
+                    <span class="r31 r">args</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#993bc35e49621837" class="i field">KeyReceiveFailed</a>);
+ 
+                    <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r31 r">args</span>);
+                }
+ 
+                <span class="r31 r">args</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#62bb8381c4c20c9a" class="i field">KeyReceived</a>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r31 r">args</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Start the key exchange process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="2e7a7767def6960d" href="../../../R/2e7a7767def6960d.html" target="n" data-glyph="74,1" class="i method">StartKeyExchange</a>()
+        {
+            <b>if</b> (<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#a3913bab426d5a5d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>)
+            {
+                <span class="c">// send using data structure handler</span>
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#04b190630062ea87" class="i method">SendRequestForPublicKey</a>();
+ 
+                <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r32 rd" class="r32 r">eventArgs</span> =
+                    <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#e49fef7a4c185afd" class="i field">KeyRequested</a>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r32 r">eventArgs</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Complete the Key exchange process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="cbb2d692c012f3a7" href="../../../R/cbb2d692c012f3a7.html" target="n" data-glyph="74,1" class="i method">CompleteKeyExchange</a>()
+        {
+            <a href="#f524c09ae1d62b82" class="i field">_cryptoHelper</a>.<a href="../../../utils/CryptoUtils.cs.html#7796a9d103b11aea" class="i method">CompleteKeyExchange</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Send an encrypted session key to the client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="8b5d5603b39c4e61" href="../../../R/8b5d5603b39c4e61.html" target="n" data-glyph="74,1" class="i method">SendEncryptedSessionKey</a>()
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#a3913bab426d5a5d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#eaa2a7383a2a2830" class="i field">EstablishedAndKeyReceived</a>,
+                <span class="s">&quot;Sever must be in EstablishedAndKeyReceived state before you can attempt to send encrypted session key&quot;</span>);
+ 
+            <b>string</b> <span id="r33 rd" class="r33 r">encryptedSessionKey</span> = <b>null</b>;
+            <b>bool</b> <span id="r34 rd" class="r34 r">ret</span> = <a href="#f524c09ae1d62b82" class="i field">_cryptoHelper</a>.<a href="../../../utils/CryptoUtils.cs.html#3e4047d83e4cfb54" class="i method">ExportEncryptedSessionKey</a>(<b>out</b> <span class="r33 r">encryptedSessionKey</span>);
+ 
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r35 rd" class="r35 r">args</span> = <b>null</b>;
+            <b>if</b> (!<span class="r34 r">ret</span>)
+            {
+                <span class="r35 r">args</span> =
+                    <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#cc67049edf010533" class="i field">KeySendFailed</a>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r35 r">args</span>);
+            }
+ 
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#b427862b0dadc86c" class="i method">SendEncryptedSessionKey</a>(<span class="r33 r">encryptedSessionKey</span>);
+ 
+            <span class="c">// complete the key exchange process</span>
+            <a href="#cbb2d692c012f3a7" class="i method">CompleteKeyExchange</a>();
+ 
+            <span class="r35 r">args</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#c2c61753a02af001" class="i field">KeySent</a>);
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r35 r">args</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Overrides
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property returns the ServerRemoteSessionContext object created inside</span>
+        <span class="c">///</span><span class="c"> this object&#39;s constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="#3c434d2f9b8d8285" class="t t">ServerRemoteSessionContext</a> <a id="6e51a9cf15d63f71" href="../../../R/6e51a9cf15d63f71.html" target="n" data-glyph="104,1" class="i property">Context</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property returns the ServerRemoteSessionDataStructureHandler object created inside</span>
+        <span class="c">///</span><span class="c"> this object&#39;s constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="serverremotingprotocol.cs.html#46e2a023d30a6061" class="t t">ServerRemoteSessionDataStructureHandler</a> <a id="022715d770afd477" href="../../../R/022715d770afd477.html" target="n" data-glyph="104,1" class="i property">SessionDataStructureHandler</a> { <b>get</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private/Internal Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Let the session clear its resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">reasonForClose</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="2f1213b4f545365e" href="../../../R/2f1213b4f545365e.html" target="n" data-glyph="74,1" class="i method">Close</a>(<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r36 rd" class="r36 r">reasonForClose</span>)
+        {
+            <a href="#6099ecc17f08cd65" class="i field">Closed</a>.<span class="i">SafeInvoke</span>(<a href="#2224dac53a001a7b" class="k">this</a>, <span class="r36 r">reasonForClose</span>);
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a> != <b>null</b>)
+                <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#e53bfede6ec58c5e" class="i field">Closed</a> -= <span class="i">HandleResourceClosing</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExecutesConnect. expects client capability and connect_runspacepool PSRP</span>
+        <span class="c">///</span><span class="c"> messages in connectData.</span>
+        <span class="c">///</span><span class="c"> If negotiation is successful and max and min runspaces in connect_runspacepool</span>
+        <span class="c">///</span><span class="c"> match the associated runspace pool parameters, it builds up server capability</span>
+        <span class="c">///</span><span class="c"> and runspace_initinfo in connectResponseData.</span>
+        <span class="c">///</span><span class="c"> This is a version of Connect that executes the whole connect algorithm in one single</span>
+        <span class="c">///</span><span class="c"> hop.</span>
+        <span class="c">///</span><span class="c"> This algorithm is being executed synchronously without associating with state machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">connectData</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">connectResponseData</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The operation is being outside the statemachine because of multiple reasons associated with design simplicity</span>
+        <span class="c">///</span><span class="c"> - Support automatic disconnect and let wsman server stack take care of connection state</span>
+        <span class="c">///</span><span class="c"> - The response data should not travel in transports output stream but as part of connect response</span>
+        <span class="c">///</span><span class="c"> - We want this operation to be synchronous</span>
+        <b>internal void</b> <a id="0ac8a1b9ee1f264c" href="../../../R/0ac8a1b9ee1f264c.html" target="n" data-glyph="74,1" class="i method">ExecuteConnect</a>(<b>byte</b>[] <span id="r37 rd" class="r37 r">connectData</span>, <b>out byte</b>[] <span id="r38 rd" class="r38 r">connectResponseData</span>)
+        {
+            <span class="r38 r">connectResponseData</span> = <b>null</b>;
+            <a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <span id="r39 rd" class="r39 r">fragmentor</span> = <b>new</b> <span class="t">Fragmentor</span>(<b>int</b>.<span class="i">MaxValue</span>, <b>null</b>);
+            <a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <span id="r40 rd" class="r40 r">defragmentor</span> = <span class="r39 r">fragmentor</span>;
+ 
+            <b>int</b> <span id="r41 rd" class="r41 r">totalDataLen</span> = <span class="r37 r">connectData</span>.<span class="i">Length</span>;
+ 
+            <b>if</b> (<span class="r41 r">totalDataLen</span> &lt; <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>)
+            {
+                <span class="c">// raise exception</span>
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <span class="c">// TODO: Follow up on comment from Krishna regarding having the serialization/deserialization separate for this</span>
+            <span class="c">// operation. This could be integrated as helper functions in fragmentor/serializer components</span>
+            <b>long</b> <span id="r42 rd" class="r42 r">fragmentId</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#5a6823c78b4710c8" class="i method">GetFragmentId</a>(<span class="r37 r">connectData</span>, 0);
+            <b>bool</b> <span id="r43 rd" class="r43 r">sFlag</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#7aac51626c016b38" class="i method">GetIsStartFragment</a>(<span class="r37 r">connectData</span>, 0);
+            <b>bool</b> <span id="r44 rd" class="r44 r">eFlag</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#068641096a25e033" class="i method">GetIsEndFragment</a>(<span class="r37 r">connectData</span>, 0);
+            <b>int</b> <span id="r45 rd" class="r45 r">blobLength</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#c7ce00586675b83e" class="i method">GetBlobLength</a>(<span class="r37 r">connectData</span>, 0);
+ 
+            <b>if</b> (<span class="r45 r">blobLength</span> &gt; <span class="r41 r">totalDataLen</span> - <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>)
+            {
+                <span class="c">// raise exception</span>
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <b>if</b> (!<span class="r43 r">sFlag</span> || !<span class="r44 r">eFlag</span>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <span class="c">// if session is not in expected state</span>
+            <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a> <span id="r46 rd" class="r46 r">currentState</span> = <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#a3913bab426d5a5d" class="i property">State</a>;
+            <b>if</b> (<span class="r46 r">currentState</span> != <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a> &amp;&amp;
+                <span class="r46 r">currentState</span> != <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5445341d5fb28384" class="i field">EstablishedAndKeyExchanged</a>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnServerStateValidation</span>);
+            }
+ 
+            <span class="c">// process first message</span>
+            <span class="i">MemoryStream</span> <span id="r47 rd" class="r47 r">serializedStream</span> = <b>new</b> <span class="i">MemoryStream</span>();
+            <span class="r47 r">serializedStream</span>.<span class="i">Write</span>(<span class="r37 r">connectData</span>, <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="r45 r">blobLength</span>);
+ 
+            <span class="r47 r">serializedStream</span>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r48 rd" class="r48 r">capabilityObject</span> = <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;.<span class="i">CreateFrom</span>(<span class="r47 r">serializedStream</span>, <span class="r40 r">defragmentor</span>);
+ 
+            <b>if</b> (<span class="r48 r">capabilityObject</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <b>if</b> ((<span class="r48 r">capabilityObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#36fad9981dff9219" class="i property">Destination</a> != <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#45c72046001f69b8" class="t t">RemotingDestination</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#061ac750e6d280da" class="i field">Server</a>) || (<span class="r48 r">capabilityObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#97d7621b092d013f" class="i property">DataType</a> != <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6b685d32d77b181a" class="i field">SessionCapability</a>))
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <span class="c">// process second message</span>
+            <b>int</b> <span id="r49 rd" class="r49 r">secondFragmentLength</span> = <span class="r41 r">totalDataLen</span> - <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a> - <span class="r45 r">blobLength</span>;
+            <b>if</b> (<span class="r49 r">secondFragmentLength</span> &lt; <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <b>byte</b>[] <span id="r50 rd" class="r50 r">secondFragment</span> = <b>new</b> <b>byte</b>[<span class="r49 r">secondFragmentLength</span>];
+            <span class="i">Array</span>.<span class="i">Copy</span>(<span class="r37 r">connectData</span>, <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a> + <span class="r45 r">blobLength</span>, <span class="r50 r">secondFragment</span>, 0, <span class="r49 r">secondFragmentLength</span>);
+ 
+            <span class="r42 r">fragmentId</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#5a6823c78b4710c8" class="i method">GetFragmentId</a>(<span class="r50 r">secondFragment</span>, 0);
+            <span class="r43 r">sFlag</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#7aac51626c016b38" class="i method">GetIsStartFragment</a>(<span class="r50 r">secondFragment</span>, 0);
+            <span class="r44 r">eFlag</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#068641096a25e033" class="i method">GetIsEndFragment</a>(<span class="r50 r">secondFragment</span>, 0);
+            <span class="r45 r">blobLength</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#c7ce00586675b83e" class="i method">GetBlobLength</a>(<span class="r50 r">secondFragment</span>, 0);
+ 
+            <b>if</b> (<span class="r45 r">blobLength</span> != <span class="r49 r">secondFragmentLength</span> - <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <b>if</b> (!<span class="r43 r">sFlag</span> || !<span class="r44 r">eFlag</span>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <span class="c">// process second message</span>
+            <span class="r47 r">serializedStream</span> = <b>new</b> <span class="i">MemoryStream</span>();
+            <span class="r47 r">serializedStream</span>.<span class="i">Write</span>(<span class="r50 r">secondFragment</span>, <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="r45 r">blobLength</span>);
+ 
+            <span class="r47 r">serializedStream</span>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r51 rd" class="r51 r">connectRunspacePoolObject</span> = <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;.<span class="i">CreateFrom</span>(<span class="r47 r">serializedStream</span>, <span class="r40 r">defragmentor</span>);
+ 
+            <b>if</b> (<span class="r51 r">connectRunspacePoolObject</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnServerStateValidation</span>);
+            }
+ 
+            <b>if</b> ((<span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#36fad9981dff9219" class="i property">Destination</a> != <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#45c72046001f69b8" class="t t">RemotingDestination</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#061ac750e6d280da" class="i field">Server</a>) || (<span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#97d7621b092d013f" class="i property">DataType</a> != <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#296cbb5be87abd08" class="t t">RemotingDataType</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1ed595ddb5cd0a96" class="i field">ConnectRunspacePool</a>))
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <span class="c">// We have the two objects required for validating the connect operation</span>
+            <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#410d0e97ea446fd9" class="t t">RemoteSessionCapability</a> <span id="r52 rd" class="r52 r">clientCapability</span>;
+            <b>try</b>
+            {
+                <span class="r52 r">clientCapability</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#3c9069d4f153d7e0" class="i method">GetSessionCapability</a>(<span class="r48 r">capabilityObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a>)
+            {
+                <span class="c">// this will happen if expected properties are not</span>
+                <span class="c">// received for session capability</span>
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <b>try</b>
+            {
+                <a href="#342bb67c2ca8c3ea" class="i method">RunServerNegotiationAlgorithm</a>(<span class="r52 r">clientCapability</span>, <b>true</b>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a>)
+            {
+                <b>throw</b>;
+            }
+ 
+            <span class="c">// validate client connect_runspacepool request</span>
+            <b>int</b> <span id="r53 rd" class="r53 r">clientRequestedMinRunspaces</span> = -1;
+            <b>int</b> <span id="r54 rd" class="r54 r">clientRequestedMaxRunspaces</span> = -1;
+            <b>bool</b> <span id="r55 rd" class="r55 r">clientRequestedRunspaceCount</span> = <b>false</b>;
+            <b>if</b> (<span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>.<a href="../../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a><a href="../../MshMemberInfo.cs.html#f603b32aa49d3ffa">[</a><a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#3a081a470ad31112" class="i field">MinRunspaces</a>] != <b>null</b> &amp;&amp; <span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>.<a href="../../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a><a href="../../MshMemberInfo.cs.html#f603b32aa49d3ffa">[</a><a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#07dae46e70021227" class="i field">MaxRunspaces</a>] != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <span class="r53 r">clientRequestedMinRunspaces</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d4b54f4a150af9f4" class="i method">GetMinRunspaces</a>(<span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+                    <span class="r54 r">clientRequestedMaxRunspaces</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#46661bd99bcc98ca" class="i method">GetMaxRunspaces</a>(<span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+                    <span class="r55 r">clientRequestedRunspaceCount</span> = <b>true</b>;
+                }
+                <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a>)
+                {
+                    <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+                }
+            }
+ 
+            <span class="c">// these should be positive and max should be greater than min</span>
+            <b>if</b> (<span class="r55 r">clientRequestedRunspaceCount</span> &amp;&amp;
+                (<span class="r53 r">clientRequestedMinRunspaces</span> == -1 || <span class="r54 r">clientRequestedMaxRunspaces</span> == -1 || <span class="r53 r">clientRequestedMinRunspaces</span> &gt; <span class="r54 r">clientRequestedMaxRunspaces</span>))
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnServerStateValidation</span>);
+            }
+ 
+            <span class="c">// currently only one runspace pool per session is allowed. make sure this ID in connect message is the same</span>
+            <b>if</b> (<span class="r51 r">connectRunspacePoolObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#df5fe91d15e5ba71" class="i property">RunspacePoolId</a> != <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#4bfa83b8eb92f06f" class="i property">InstanceId</a>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnInputValidation</span>);
+            }
+ 
+            <span class="c">// we currently dont support adjusting runspace count on a connect operation.</span>
+            <span class="c">// there is a potential conflict here where in the runspace pool driver is still yet to process a queued</span>
+            <span class="c">// setMax or setMinrunspaces request.</span>
+            <span class="c">// TODO: resolve this.. probably by letting the runspace pool consume all messages before we execute this.</span>
+            <b>if</b> (<span class="r55 r">clientRequestedRunspaceCount</span>
+                &amp;&amp; (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#02717dc375abd3bb" class="i property">RunspacePool</a>.<a href="../../hostifaces/RunspacePool.cs.html#849db6668a9907c9" class="i method">GetMaxRunspaces</a>() != <span class="r54 r">clientRequestedMaxRunspaces</span>)
+                &amp;&amp; (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#02717dc375abd3bb" class="i property">RunspacePool</a>.<a href="../../hostifaces/RunspacePool.cs.html#567820ee5581ac56" class="i method">GetMinRunspaces</a>() != <span class="r53 r">clientRequestedMinRunspaces</span>))
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnMismatchedRunspacePoolProperties</span>);
+            }
+ 
+            <span class="c">// all client messages are validated</span>
+            <span class="c">// now build up the server capabilities and connect response messages to be piggybacked on connect response</span>
+            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#3856dcbea775cab8" class="t t">RemoteDataObject</a> <span id="r56 rd" class="r56 r">capability</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#88b19073d823ce05" class="t t">RemotingEncoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#067db8a222272e8b" class="i method">GenerateServerSessionCapability</a>(<a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>, <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#4bfa83b8eb92f06f" class="i property">InstanceId</a>);
+            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#3856dcbea775cab8" class="t t">RemoteDataObject</a> <span id="r57 rd" class="r57 r">runspacepoolInitData</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#88b19073d823ce05" class="t t">RemotingEncoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#23653f121b65e173" class="i method">GenerateRunspacePoolInitData</a>(<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#4bfa83b8eb92f06f" class="i property">InstanceId</a>,
+                                                                                               <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#02717dc375abd3bb" class="i property">RunspacePool</a>.<a href="../../hostifaces/RunspacePool.cs.html#849db6668a9907c9" class="i method">GetMaxRunspaces</a>(),
+                                                                                               <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#02717dc375abd3bb" class="i property">RunspacePool</a>.<a href="../../hostifaces/RunspacePool.cs.html#567820ee5581ac56" class="i method">GetMinRunspaces</a>());
+ 
+            <span class="c">// having this stream operating separately will result in out of sync fragment Ids. but this is still OK</span>
+            <span class="c">// as this is executed only when connecting from a new client that does not have any previous fragments context.</span>
+            <span class="c">// no problem even if fragment Ids in this response and the sessiontransport stream clash (interfere) and its guaranteed</span>
+            <span class="c">// that the fragments in connect response are always complete (enclose a complete object).</span>
+            <a href="../common/fragmentor.cs.html#d3a26c96b56add5c" class="t t">SerializedDataStream</a> <span id="r58 rd" class="r58 r">stream</span> = <b>new</b> <span class="t">SerializedDataStream</span>(4 * 1024); <span class="c">//Each message with fragment headers cannot cross 4k</span>
+            <span class="r58 r">stream</span>.<a href="../common/fragmentor.cs.html#17e95516c787a8e6" class="i method">Enter</a>();
+            <span class="r56 r">capability</span>.<span class="i">Serialize</span>(<span class="r58 r">stream</span>, <span class="r39 r">fragmentor</span>);
+            <span class="r58 r">stream</span>.<a href="../common/fragmentor.cs.html#16d1058832f85660" class="i method">Exit</a>();
+            <span class="r58 r">stream</span>.<a href="../common/fragmentor.cs.html#17e95516c787a8e6" class="i method">Enter</a>();
+            <span class="r57 r">runspacepoolInitData</span>.<span class="i">Serialize</span>(<span class="r58 r">stream</span>, <span class="r39 r">fragmentor</span>);
+            <span class="r58 r">stream</span>.<a href="../common/fragmentor.cs.html#16d1058832f85660" class="i method">Exit</a>();
+            <b>byte</b>[] <span id="r59 rd" class="r59 r">outbuffer</span> = <span class="r58 r">stream</span>.<a href="../common/fragmentor.cs.html#6742b242d9687278" class="i method">Read</a>();
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r59 r">outbuffer</span> != <b>null</b>, <span class="s">&quot;connect response data should be serialized&quot;</span>);
+            <span class="r58 r">stream</span>.<a href="../common/fragmentor.cs.html#a30a841d301fa560" class="i method">Dispose</a>();
+            <span class="c">// we are done</span>
+            <span class="r38 r">connectResponseData</span> = <span class="r59 r">outbuffer</span>;
+ 
+            <span class="c">// enqueue a connect event in state machine to let session do any other post-connect operation</span>
+            <span class="c">// Do this outside of the synchronous connect operation, as otherwise connect can easily get deadlocked</span>
+            <span class="i">ThreadPool</span>.<span class="i">QueueUserWorkItem</span>(<b>new</b> <span class="i">WaitCallback</span>(
+                (<b>object</b> <span id="r60 rd" class="r60 r">state</span>) =&gt;
+                {
+                    <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r61 rd" class="r61 r">startEventArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#7d3be51cf5873639" class="i field">ConnectSession</a>);
+                    <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r61 r">startEventArg</span>);
+                }));
+ 
+            <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#8c8ba41ef94b9086" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#8ef9d48af13dd214" class="i method">ProcessConnect</a>();
+            <b>return</b>;
+        }
+ 
+        <span class="c">// pass on application private data when session is connected from new client</span>
+        <b>internal void</b> <a id="51f21966101b101f" href="../../../R/51f21966101b101f.html" target="n" data-glyph="74,1" class="i method">HandlePostConnect</a>()
+        {
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a> != <b>null</b>)
+            {
+                <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#571695c450993617" class="i method">SendApplicationPrivateDataToClient</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r63 r">createRunspaceEventArg</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> 1. InitialSessionState cannot be null.</span>
+        <span class="c">///</span><span class="c"> 2. Non existent InitialSessionState provider for the shellID</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="52b6aa0a512338c0" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleCreateRunspacePool</a>(<b>object</b> <span id="r62 rd" class="r62 r">sender</span>, <a href="../common/misc.cs.html#5953d27b0d5ec137" class="t t">RemoteDataEventArgs</a> <span id="r63 rd" class="r63 r">createRunspaceEventArg</span>)
+        {
+            <b>if</b> (<span class="r63 r">createRunspaceEventArg</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r63 r">createRunspaceEventArg</span>));
+            }
+ 
+            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r64 rd" class="r64 r">rcvdData</span> = <span class="r63 r">createRunspaceEventArg</span>.<a href="../common/misc.cs.html#38ed693bebe3d7fd" class="i property">ReceivedData</a>;
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r64 r">rcvdData</span> != <b>null</b>, <span class="s">&quot;rcvdData must be non-null&quot;</span>);
+ 
+            <span class="c">// set the PSSenderInfo sent in the first packets</span>
+            <span class="c">// This is used by the initial session state configuration providers like Exchange.</span>
+            <b>if</b> (<a href="#6e51a9cf15d63f71" class="i property">Context</a> != <b>null</b>)
+            {
+                <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#c495b1f3e6e5123e" class="i property">ClientTimeZone</a> = <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#3840fb6b96425feb" class="i property">ClientCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#dcfe23b27a67c301" class="i property">TimeZone</a>;
+            }
+ 
+            <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#fbb9c1201251c818" class="i property">ApplicationArguments</a> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#f773dc8c88277cb3" class="i method">GetApplicationArguments</a>(<span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+ 
+            <span class="c">// Get Initial Session State from custom session config suppliers</span>
+            <span class="c">// like Exchange.</span>
+            <a href="../fanin/InitialSessionStateProvider.cs.html#88c11924f622f7f5" class="t t">ConfigurationDataFromXML</a> <span id="r65 rd" class="r65 r">configurationData</span> =
+                <a href="../fanin/InitialSessionStateProvider.cs.html#e35ba0e017aa5d6d" class="t t">PSSessionConfiguration</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#7896c81980caddc5" class="i method">LoadEndPointConfiguration</a>(<a href="#b9f7e606f20f8acf" class="i field">_configProviderId</a>,
+                    <a href="#af474ca02993c28c" class="i field">_initParameters</a>);
+            <span class="c">// used by Out-Of-Proc (IPC) runspace.</span>
+            <span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#7e90765aaa5c5332" class="i field">InitializationScriptForOutOfProcessRunspace</a> = <a href="#59f6d9fca502a28c" class="i field">_initScriptForOutOfProcRS</a>;
+            <span class="c">// start with data from configuration XML and then override with data</span>
+            <span class="c">// from EndPointConfiguration type.</span>
+            <a href="#3ab2b0fe91369334" class="i field">_maxRecvdObjectSize</a> = <span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#74fc90d6066465d0" class="i field">MaxReceivedObjectSizeMB</a>;
+            <a href="#d794137d65fee0f8" class="i field">_maxRecvdDataSizeCommand</a> = <span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#2265619ef294f59e" class="i field">MaxReceivedCommandSizeMB</a>;
+ 
+            <a href="../fanin/InitialSessionStateProvider.cs.html#fc3ecbf6d041a5ca" class="t t">DISCPowerShellConfiguration</a> <span id="r66 rd" class="r66 r">discProvider</span> = <b>null</b>;
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#b8bc67c861410599" class="i field">ConfigFilePath</a>))
+            {
+                <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a> = <span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#a7514971aab3101e" class="i method">CreateEndPointConfigurationInstance</a>();
+            }
+            <b>else</b>
+            {
+                <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">WindowsPrincipal</span> <span id="r67 rd" class="r67 r">windowsPrincipal</span> = <b>new</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">WindowsPrincipal</span>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#ac3b737833cbe3e1" class="i property">UserInfo</a>.<a href="../fanin/PSPrincipal.cs.html#40a4d8ad922f211f" class="i property">WindowsIdentity</a>);
+ 
+                <span class="i">Func</span>&lt;<b>string</b>, <b>bool</b>&gt; <span id="r68 rd" class="r68 r">validator</span> = (<span id="r69 rd" class="r69 r">role</span>) =&gt; <span class="r67 r">windowsPrincipal</span>.<span class="i">IsInRole</span>(<span class="r69 r">role</span>);
+ 
+                <span class="r66 r">discProvider</span> = <b>new</b> <a href="../fanin/InitialSessionStateProvider.cs.html#13640ca6a221c25b" class="t constructor">DISCPowerShellConfiguration</a>(<span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#b8bc67c861410599" class="i field">ConfigFilePath</a>, <span class="r68 r">validator</span>);
+                <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a> = <span class="r66 r">discProvider</span>;
+            }
+ 
+            <span class="c">// exchange of ApplicationArguments and ApplicationPrivateData is be done as early as possible</span>
+            <span class="c">// (i.e. to let the _sessionConfigProvider bail out if it can&#39;t comply with client&#39;s versioning request)</span>
+            <a href="../../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a> <span id="r70 rd" class="r70 r">applicationPrivateData</span> = <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#d1de4b4ff469b321" class="i method">GetApplicationPrivateData</a>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>);
+ 
+            <a href="../../InitialSessionState.cs.html#b17f88d4755d5fd7" class="t t">InitialSessionState</a> <span id="r71 rd" class="r71 r">rsSessionStateToUse</span> = <b>null</b>;
+ 
+            <b>if</b> (<span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#3a0e4593360e8467" class="i field">SessionConfigurationData</a> != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <span class="r71 r">rsSessionStateToUse</span> =
+                        <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#b5a64b1eebc0b23e" class="i method">GetInitialSessionState</a>(<span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#3a0e4593360e8467" class="i field">SessionConfigurationData</a>, <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>, <a href="#b9f7e606f20f8acf" class="i field">_configProviderId</a>);
+                }
+                <b>catch</b> (<span class="i">NotImplementedException</span>)
+                {
+                    <span class="r71 r">rsSessionStateToUse</span> = <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#4de9a02b9d072544" class="i method">GetInitialSessionState</a>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>);
+                }
+            }
+            <b>else</b>
+            {
+                <span class="r71 r">rsSessionStateToUse</span> = <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#4de9a02b9d072544" class="i method">GetInitialSessionState</a>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>);
+            }
+ 
+            <b>if</b> (<span class="r71 r">rsSessionStateToUse</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">InitialSessionStateNull</span>, <a href="#b9f7e606f20f8acf" class="i field">_configProviderId</a>);
+            }
+ 
+            <span class="r71 r">rsSessionStateToUse</span>.<a href="../../InitialSessionState.cs.html#259e8aa509ac9e00" class="i property">ThrowOnRunspaceOpenError</a> = <b>true</b>;
+ 
+            <span class="c">// this might throw if the sender info is already present</span>
+            <span class="r71 r">rsSessionStateToUse</span>.<a href="../../InitialSessionState.cs.html#fb98d8254252d236" class="i property">Variables</a>.<a href="../../InitialSessionState.cs.html#048e6fba5da66395" class="i method">Add</a>(
+                <b>new</b> <a href="../../InitialSessionState.cs.html#9be00875f9b1020d" class="t constructor">SessionStateVariableEntry</a>(<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#26dfe90bf75ed7ad" class="i field">SenderInfoPreferenceVariable</a>,
+                <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>,
+                <span class="i n">Remoting</span>.<a href="../common/remotingexceptions.cs.html#53047fc052e9b445" class="t t">PSRemotingErrorInvariants</a>.<span class="i">FormatResourceString</span>(
+                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">PSSenderInfoDescription</span>),
+                <a href="../../ShellVariable.cs.html#8d6fb934c02e4185" class="t t">ScopedItemOptions</a>.<a href="../../ShellVariable.cs.html#be05356d33c4ce88" class="i field">ReadOnly</a>));
+ 
+            <span class="c">// check if the current scenario is Win7(client) to Win8(server). Add back the PSv2 version TabExpansion</span>
+            <span class="c">// function if necessary.</span>
+            <span class="i">Version</span> <span id="r72 rd" class="r72 r">psClientVersion</span> = <b>null</b>;
+            <b>if</b> (<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#fbb9c1201251c818" class="i property">ApplicationArguments</a> != <b>null</b> &amp;&amp; <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#fbb9c1201251c818" class="i property">ApplicationArguments</a>.<span class="i">ContainsKey</span>(<span class="s">&quot;PSversionTable&quot;</span>))
+            {
+                <a href="../../serialization.cs.html#04756020c00714fe" class="k">var</a> <span id="r73 rd" class="r73 r">value</span> = <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../../MshObject.cs.html#8ae71f08053e5ae1" class="i method">Base</a>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#fbb9c1201251c818" class="i property">ApplicationArguments</a><a href="../../serialization.cs.html#ef1aa37a4f65ba77">[</a><span class="s">&quot;PSversionTable&quot;</span>]) <b>as</b> <a href="../../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a>;
+                <b>if</b> (<span class="r73 r">value</span> != <b>null</b>)
+                {
+                    <b>if</b> (<span class="r73 r">value</span>.<span class="i">ContainsKey</span>(<span class="s">&quot;WSManStackVersion&quot;</span>))
+                    {
+                        <b>var</b> <span id="r74 rd" class="r74 r">wsmanStackVersion</span> = <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../../MshObject.cs.html#8ae71f08053e5ae1" class="i method">Base</a>(<span class="r73 r">value</span><a href="../../serialization.cs.html#ef1aa37a4f65ba77">[</a><span class="s">&quot;WSManStackVersion&quot;</span>]) <b>as</b> <span class="i">Version</span>;
+                        <b>if</b> (<span class="r74 r">wsmanStackVersion</span> != <b>null</b> &amp;&amp; <span class="r74 r">wsmanStackVersion</span>.<span class="i">Major</span> &lt; 3)
+                        {
+                            <span class="c">// The client side is PSv2. This is the Win7 to Win8 scenario. We need to add the PSv2</span>
+                            <span class="c">// TabExpansion function back in to keep the tab expansion functionable on the client side.</span>
+                            <span class="r71 r">rsSessionStateToUse</span>.<a href="../../InitialSessionState.cs.html#2d45d0b0db0079ba" class="i property">Commands</a>.<a href="../../InitialSessionState.cs.html#048e6fba5da66395" class="i method">Add</a>(
+                                <b>new</b> <a href="../../InitialSessionState.cs.html#bc476ab00cd4640b" class="t constructor">SessionStateFunctionEntry</a>(
+                                    <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#551ddfb6b265cbfc" class="i field">PSv2TabExpansionFunction</a>,
+                                    <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#689c3486f85e6159" class="i field">PSv2TabExpansionFunctionText</a>));
+                        }
+                    }
+ 
+                    <b>if</b> (<span class="r73 r">value</span>.<span class="i">ContainsKey</span>(<span class="s">&quot;PSVersion&quot;</span>))
+                    {
+                        <span class="r72 r">psClientVersion</span> = <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../../MshObject.cs.html#8ae71f08053e5ae1" class="i method">Base</a>(<span class="r73 r">value</span><a href="../../serialization.cs.html#ef1aa37a4f65ba77">[</a><span class="s">&quot;PSVersion&quot;</span>]) <b>as</b> <span class="i">Version</span>;
+                    }
+                }
+            }
+ 
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r65 r">configurationData</span>.<a href="../fanin/InitialSessionStateProvider.cs.html#c372c2bc98d44c13" class="i field">EndPointConfigurationTypeName</a>))
+            {
+                <span class="c">// user specified a type to load for configuration..use the values from this type.</span>
+                <a href="#3ab2b0fe91369334" class="i field">_maxRecvdObjectSize</a> = <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#4aef21ff44693f82" class="i method">GetMaximumReceivedObjectSize</a>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>);
+                <a href="#d794137d65fee0f8" class="i field">_maxRecvdDataSizeCommand</a> = <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#c6b8fcbae271bd50" class="i method">GetMaximumReceivedDataSizePerCommand</a>(<a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>);
+            }
+ 
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#e7ee9b00625f37e7" class="i property">TransportManager</a>.<a href="../fanin/BaseTransportManager.cs.html#766c6c998b78695f" class="i property">ReceivedDataCollection</a>.<a href="../fanin/PriorityCollection.cs.html#24de42a1b1c1d4b9" class="i property">MaximumReceivedObjectSize</a> = <a href="#3ab2b0fe91369334" class="i field">_maxRecvdObjectSize</a>;
+            <span class="c">// MaximumReceivedDataSize is not set for session transport manager...see the constructor</span>
+            <span class="c">// for more info.</span>
+ 
+            <span class="i">Guid</span> <span id="r75 rd" class="r75 r">clientRunspacePoolId</span> = <span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#df5fe91d15e5ba71" class="i property">RunspacePoolId</a>;
+            <b>int</b> <span id="r76 rd" class="r76 r">minRunspaces</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d4b54f4a150af9f4" class="i method">GetMinRunspaces</a>(<span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+            <b>int</b> <span id="r77 rd" class="r77 r">maxRunspaces</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#46661bd99bcc98ca" class="i method">GetMaxRunspaces</a>(<span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+            <a href="../../hostifaces/Connection.cs.html#e3e452d2492397a5" class="t t">PSThreadOptions</a> <span id="r78 rd" class="r78 r">threadOptions</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#1be58c2a39fecfcf" class="i method">GetThreadOptions</a>(<span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+            <span class="i">ApartmentState</span> <span id="r79 rd" class="r79 r">apartmentState</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c6e3f1b322a08163" class="i method">GetApartmentState</a>(<span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+            <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#4fc7c4b336de518c" class="t t">HostInfo</a> <span id="r80 rd" class="r80 r">hostInfo</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#6f71f8c4cc2ac041" class="t t">RemotingDecoder</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#930a3e874da40152" class="i method">GetHostInfo</a>(<span class="r64 r">rcvdData</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#d13e5d3038741f3e" class="i property">Data</a>);
+ 
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a> != <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RunspaceAlreadyExists</span>,
+                    <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#4bfa83b8eb92f06f" class="i property">InstanceId</a>);
+            }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+            <b>bool</b> <span id="r81 rd" class="r81 r">isAdministrator</span> = <a href="#aaab2f50c7196a6c" class="i field">_senderInfo</a>.<a href="../fanin/PSPrincipal.cs.html#ac3b737833cbe3e1" class="i property">UserInfo</a>.<span class="i">IsInRole</span>(<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">WindowsBuiltInRole</span>.<span class="i">Administrator</span>);
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">            bool isAdministrator = false;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <a href="ServerRunspacePoolDriver.cs.html#a13c57c874abb0c5" class="t t">ServerRunspacePoolDriver</a> <span id="r82 rd" class="r82 r">tmpDriver</span> = <b>new</b> <a href="ServerRunspacePoolDriver.cs.html#cee8f6c1f5eb3a9a" class="t constructor">ServerRunspacePoolDriver</a>(
+                <span class="r75 r">clientRunspacePoolId</span>,
+                <span class="r76 r">minRunspaces</span>,
+                <span class="r77 r">maxRunspaces</span>,
+                <span class="r78 r">threadOptions</span>,
+                <span class="r79 r">apartmentState</span>,
+                <span class="r80 r">hostInfo</span>,
+                <span class="r71 r">rsSessionStateToUse</span>,
+                <span class="r70 r">applicationPrivateData</span>,
+                <span class="r65 r">configurationData</span>,
+                <a href="#2224dac53a001a7b" class="k">this</a>.<a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#e7ee9b00625f37e7" class="i property">TransportManager</a>,
+                <span class="r81 r">isAdministrator</span>,
+                <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>,
+                <span class="r72 r">psClientVersion</span>,
+                <a href="#4ecbac137cd8e9f8" class="i field">_configurationName</a>,
+                <a href="#4817ea7b3b3b63b9" class="i field">_initialLocation</a>);
+ 
+            <span class="c">// attach the necessary event handlers and start the driver.</span>
+            <span class="i">Interlocked</span>.<span class="i">Exchange</span>(<b>ref</b> <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>, <span class="r82 r">tmpDriver</span>);
+            <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#e53bfede6ec58c5e" class="i field">Closed</a> += <span class="i">HandleResourceClosing</span>;
+            <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#c5a99501baf2b762" class="i method">Start</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This handler method runs the negotiation algorithm. It decides if the negotiation is succesful,</span>
+        <span class="c">///</span><span class="c"> or fails.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r83 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r84 r">negotiationEventArg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the client negotiation capability packet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r84 r">negotiationEventArg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="1026f36088824e55" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleNegotiationReceived</a>(<b>object</b> <span id="r83 rd" class="r83 r">sender</span>, <a href="../common/misc.cs.html#5ec41d83163c4dae" class="t t">RemoteSessionNegotiationEventArgs</a> <span id="r84 rd" class="r84 r">negotiationEventArg</span>)
+        {
+            <b>if</b> (<span class="r84 r">negotiationEventArg</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r84 r">negotiationEventArg</span>));
+            }
+ 
+            <b>try</b>
+            {
+                <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#3840fb6b96425feb" class="i property">ClientCapability</a> = <span class="r84 r">negotiationEventArg</span>.<a href="../common/misc.cs.html#7270c7f298b04e51" class="i property">RemoteSessionCapability</a>;
+                <span class="c">// This will throw if there is an error running the algorithm</span>
+                <a href="#342bb67c2ca8c3ea" class="i method">RunServerNegotiationAlgorithm</a>(<span class="r84 r">negotiationEventArg</span>.<a href="../common/misc.cs.html#7270c7f298b04e51" class="i property">RemoteSessionCapability</a>, <b>false</b>);
+ 
+                <span class="c">// Send server&#39;s capability to client.</span>
+                <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r85 rd" class="r85 r">sendingNegotiationArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#ff6fa674e90841ed" class="i field">NegotiationSending</a>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r85 r">sendingNegotiationArg</span>);
+ 
+                <span class="c">// if negotiation succeeded change the state to neg. completed.</span>
+                <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r86 rd" class="r86 r">negotiationCompletedArg</span> =
+                    <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4127e12afe91cae3" class="i field">NegotiationCompleted</a>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r86 r">negotiationCompletedArg</span>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r87 rd" class="r87 r">dse</span>)
+            {
+                <span class="c">// Before setting to negotiation failed..send servers capability...that</span>
+                <span class="c">// way client can communicate differently if it wants to.</span>
+                <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r88 rd" class="r88 r">sendingNegotiationArg</span> =
+                    <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#ff6fa674e90841ed" class="i field">NegotiationSending</a>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r88 r">sendingNegotiationArg</span>);
+ 
+                <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r89 rd" class="r89 r">negotiationFailedArg</span> =
+                    <b>new</b> <span class="t">RemoteSessionStateMachineEventArgs</span>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#8dec2b368421fae5" class="i field">NegotiationFailed</a>,
+                        <span class="r87 r">dse</span>);
+                <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r89 r">negotiationFailedArg</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handle session closing event to close runspace pool drivers this session is hosting.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r91 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="ab173e280770377a" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleSessionDSHandlerClosing</a>(<b>object</b> <span id="r90 rd" class="r90 r">sender</span>, <span class="i">EventArgs</span> <span id="r91 rd" class="r91 r">eventArgs</span>)
+        {
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a> != <b>null</b>)
+            {
+                <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#610231f03882fa7f" class="i method">Close</a>();
+            }
+ 
+            <span class="c">// dispose the session configuration object..this will let them</span>
+            <span class="c">// clean their resources.</span>
+            <b>if</b> (<a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a> != <b>null</b>)
+            {
+                <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a>.<a href="../fanin/InitialSessionStateProvider.cs.html#9611ceb3ed93d125" class="i method">Dispose</a>();
+                <a href="#2bd2b0d6cb7fcd02" class="i field">_sessionConfigProvider</a> = <b>null</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This handles closing of any resource used by this session.</span>
+        <span class="c">///</span><span class="c"> Resources used are RunspacePoolDriver, TransportManager.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r92 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="f5c125199dafa0bf" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleResourceClosing</a>(<b>object</b> <span id="r92 rd" class="r92 r">sender</span>, <span class="i">EventArgs</span> <span id="r93 rd" class="r93 r">args</span>)
+        {
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r94 rd" class="r94 r">closeSessionArgs</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5f2a20db247782f7" class="i field">Close</a>);
+            <span class="r94 r">closeSessionArgs</span>.<a href="../common/misc.cs.html#e9c4fdd9598903ad" class="i property">RemoteData</a> = <b>null</b>;
+            <a href="#022715d770afd477" class="i property">SessionDataStructureHandler</a>.<a href="serverremotingprotocol.cs.html#87d3db9c1f605e2b" class="i property">StateMachine</a>.<a href="serverremotesessionstatemachine.cs.html#2518c57aaaa7fc6a" class="i method">RaiseEvent</a>(<span class="r94 r">closeSessionArgs</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the server side remote session capability negotiation algorithm.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r95 r">clientCapability</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the client capability that the server received from client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r96 r">onConnect</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the negotiation is on a connect (and not create)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The method returns true if the capability negotiation is successful.</span>
+        <span class="c">///</span><span class="c"> Otherwise, it returns false.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> 1. PowerShell server does not support the PSVersion {1} negotiated by the client.</span>
+        <span class="c">///</span><span class="c">    Make sure the client is compatible with the build {2} of PowerShell.</span>
+        <span class="c">///</span><span class="c"> 2. PowerShell server does not support the SerializationVersion {1} negotiated by the client.</span>
+        <span class="c">///</span><span class="c">    Make sure the client is compatible with the build {2} of PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="342bb67c2ca8c3ea" href="../../../R/342bb67c2ca8c3ea.html" target="n" data-glyph="76,1" class="i method">RunServerNegotiationAlgorithm</a>(<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#410d0e97ea446fd9" class="t t">RemoteSessionCapability</a> <span id="r95 rd" class="r95 r">clientCapability</span>, <b>bool</b> <span id="r96 rd" class="r96 r">onConnect</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r95 r">clientCapability</span> != <b>null</b>, <span class="s">&quot;Client capability cache must be non-null&quot;</span>);
+ 
+            <span class="i">Version</span> <span id="r97 rd" class="r97 r">clientProtocolVersion</span> = <span class="r95 r">clientCapability</span>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#e0172342f9aadac0" class="i property">ProtocolVersion</a>;
+            <span class="i">Version</span> <span id="r98 rd" class="r98 r">serverProtocolVersion</span> = <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#e0172342f9aadac0" class="i property">ProtocolVersion</a>;
+ 
+            <b>if</b> (<span class="r96 r">onConnect</span>)
+            {
+                <b>bool</b> <span id="r99 rd" class="r99 r">connectSupported</span> = <b>false</b>;
+ 
+                <span class="c">// Win10 server can support reconstruct/reconnect for all 2.x protocol versions</span>
+                <span class="c">// that support reconstruct/reconnect, Protocol 2.2+</span>
+                <span class="c">// Major protocol version differences (2.x -&gt; 3.x) are not supported.</span>
+                <span class="c">// A reconstruct can only be initiated by a client that understands disconnect (2.2+),</span>
+                <span class="c">// so we only need to check major versions from client and this server for compatibility.</span>
+                <b>if</b> (<span class="r97 r">clientProtocolVersion</span>.<span class="i">Major</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c5be07ec763d4c13" class="i field">ProtocolVersion</a>.<span class="i">Major</span>)
+                {
+                    <b>if</b> (<span class="r97 r">clientProtocolVersion</span>.<span class="i">Minor</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a>.<span class="i">Minor</span>)
+                    {
+                        <span class="c">// Report that server is Win8 version to the client</span>
+                        <span class="c">// Protocol: 2.2</span>
+                        <span class="r99 r">connectSupported</span> = <b>true</b>;
+                        <span class="r98 r">serverProtocolVersion</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a>;
+                        <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#e0172342f9aadac0" class="i property">ProtocolVersion</a> = <span class="r98 r">serverProtocolVersion</span>;
+                    }
+                    <b>else</b> <b>if</b> (<span class="r97 r">clientProtocolVersion</span>.<span class="i">Minor</span> &gt; <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a>.<span class="i">Minor</span>)
+                    {
+                        <span class="c">// All other minor versions are supported and the server returns its full capability</span>
+                        <span class="c">// Protocol: 2.3, 2.4, 2.5 ...</span>
+                        <span class="r99 r">connectSupported</span> = <b>true</b>;
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r99 r">connectSupported</span>)
+                {
+                    <span class="c">// Throw for protocol versions 2.x that don&#39;t support disconnect/reconnect.</span>
+                    <span class="c">// Protocol: &lt; 2.2</span>
+                    <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r100 rd" class="r100 r">reasonOfFailure</span> =
+                        <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerConnectFailedOnNegotiation</span>,
+                            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c416521156fef723" class="i field">PS_STARTUP_PROTOCOL_VERSION_NAME</a>,
+                            <span class="r97 r">clientProtocolVersion</span>,
+                            <a href="../../PSVersionInfo.cs.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<a href="../../PSVersionInfo.cs.html#624934150adfee0d" class="i property">GitCommitId</a>,
+                            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c5be07ec763d4c13" class="i field">ProtocolVersion</a>);
+                    <b>throw</b> <span class="r100 r">reasonOfFailure</span>;
+                }
+            }
+            <b>else</b>
+            {
+                <span class="c">// Win10 server can support Win8 client</span>
+                <b>if</b> (<span class="r97 r">clientProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a> &amp;&amp;
+                    (
+                        (<span class="r98 r">serverProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#a52fd4a38c196083" class="i field">ProtocolVersionWin10RTM</a>)
+                    ))
+                {
+                    <span class="c">// - report that server is Win8 version to the client</span>
+                    <span class="r98 r">serverProtocolVersion</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a>;
+                    <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#e0172342f9aadac0" class="i property">ProtocolVersion</a> = <span class="r98 r">serverProtocolVersion</span>;
+                }
+ 
+                <span class="c">// Win8, Win10 server can support Win7 client</span>
+                <b>if</b> (<span class="r97 r">clientProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#cdbd21e6ffe53584" class="i field">ProtocolVersionWin7RTM</a> &amp;&amp;
+                    (
+                        (<span class="r98 r">serverProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a>) ||
+                        (<span class="r98 r">serverProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#a52fd4a38c196083" class="i field">ProtocolVersionWin10RTM</a>)
+                    ))
+                {
+                    <span class="c">// - report that server is Win7 version to the client</span>
+                    <span class="r98 r">serverProtocolVersion</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#cdbd21e6ffe53584" class="i field">ProtocolVersionWin7RTM</a>;
+                    <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#e0172342f9aadac0" class="i property">ProtocolVersion</a> = <span class="r98 r">serverProtocolVersion</span>;
+                }
+ 
+                <span class="c">// Win7, Win8, Win10 server can support Win7 RC client</span>
+                <b>if</b> (<span class="r97 r">clientProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#752985e4c2adeccd" class="i field">ProtocolVersionWin7RC</a> &amp;&amp;
+                    (
+                        (<span class="r98 r">serverProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#cdbd21e6ffe53584" class="i field">ProtocolVersionWin7RTM</a>) ||
+                        (<span class="r98 r">serverProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#fd42c50dee2d8244" class="i field">ProtocolVersionWin8RTM</a>) ||
+                        (<span class="r98 r">serverProtocolVersion</span> == <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#a52fd4a38c196083" class="i field">ProtocolVersionWin10RTM</a>)
+                    ))
+                {
+                    <span class="c">// - report that server is RC version to the client</span>
+                    <span class="r98 r">serverProtocolVersion</span> = <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#752985e4c2adeccd" class="i field">ProtocolVersionWin7RC</a>;
+                    <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#e0172342f9aadac0" class="i property">ProtocolVersion</a> = <span class="r98 r">serverProtocolVersion</span>;
+                }
+ 
+                <b>if</b> (!((<span class="r97 r">clientProtocolVersion</span>.<span class="i">Major</span> == <span class="r98 r">serverProtocolVersion</span>.<span class="i">Major</span>) &amp;&amp;
+                      (<span class="r97 r">clientProtocolVersion</span>.<span class="i">Minor</span> &gt;= <span class="r98 r">serverProtocolVersion</span>.<span class="i">Minor</span>)))
+                {
+                    <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r101 rd" class="r101 r">reasonOfFailure</span> =
+                        <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerNegotiationFailed</span>,
+                            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c416521156fef723" class="i field">PS_STARTUP_PROTOCOL_VERSION_NAME</a>,
+                            <span class="r97 r">clientProtocolVersion</span>,
+                            <a href="../../PSVersionInfo.cs.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<a href="../../PSVersionInfo.cs.html#624934150adfee0d" class="i property">GitCommitId</a>,
+                            <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c5be07ec763d4c13" class="i field">ProtocolVersion</a>);
+                    <b>throw</b> <span class="r101 r">reasonOfFailure</span>;
+                }
+            }
+ 
+            <span class="c">// PSVersion Check</span>
+            <span class="i">Version</span> <span id="r102 rd" class="r102 r">clientPSVersion</span> = <span class="r95 r">clientCapability</span>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#51f8c62899f19f35" class="i property">PSVersion</a>;
+            <span class="i">Version</span> <span id="r103 rd" class="r103 r">serverPSVersion</span> = <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#51f8c62899f19f35" class="i property">PSVersion</a>;
+            <b>if</b> (!((<span class="r102 r">clientPSVersion</span>.<span class="i">Major</span> == <span class="r103 r">serverPSVersion</span>.<span class="i">Major</span>) &amp;&amp;
+                  (<span class="r102 r">clientPSVersion</span>.<span class="i">Minor</span> &gt;= <span class="r103 r">serverPSVersion</span>.<span class="i">Minor</span>)))
+            {
+                <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r104 rd" class="r104 r">reasonOfFailure</span> =
+                    <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerNegotiationFailed</span>,
+                        <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#09a93f00dbacc96b" class="i field">PSVersion</a>,
+                        <span class="r102 r">clientPSVersion</span>,
+                        <a href="../../PSVersionInfo.cs.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<a href="../../PSVersionInfo.cs.html#624934150adfee0d" class="i property">GitCommitId</a>,
+                        <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c5be07ec763d4c13" class="i field">ProtocolVersion</a>);
+                <b>throw</b> <span class="r104 r">reasonOfFailure</span>;
+            }
+ 
+            <span class="c">// SerializationVersion check</span>
+            <span class="i">Version</span> <span id="r105 rd" class="r105 r">clientSerVersion</span> = <span class="r95 r">clientCapability</span>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#4cbbb234181ff56e" class="i property">SerializationVersion</a>;
+            <span class="i">Version</span> <span id="r106 rd" class="r106 r">serverSerVersion</span> = <a href="#6e51a9cf15d63f71" class="i property">Context</a>.<a href="#582b6374083ee65b" class="i property">ServerCapability</a>.<a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#4cbbb234181ff56e" class="i property">SerializationVersion</a>;
+            <b>if</b> (!((<span class="r105 r">clientSerVersion</span>.<span class="i">Major</span> == <span class="r106 r">serverSerVersion</span>.<span class="i">Major</span>) &amp;&amp;
+                  (<span class="r105 r">clientSerVersion</span>.<span class="i">Minor</span> &gt;= <span class="r106 r">serverSerVersion</span>.<span class="i">Minor</span>)))
+            {
+                <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r107 rd" class="r107 r">reasonOfFailure</span> =
+                    <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerNegotiationFailed</span>,
+                        <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#7c9c1b0b95848ffd" class="t t">RemoteDataNameStrings</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#27d5b1b7d3362576" class="i field">SerializationVersion</a>,
+                        <span class="r105 r">clientSerVersion</span>,
+                        <a href="../../PSVersionInfo.cs.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<a href="../../PSVersionInfo.cs.html#624934150adfee0d" class="i property">GitCommitId</a>,
+                        <a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#c5be07ec763d4c13" class="i field">ProtocolVersion</a>);
+                <b>throw</b> <span class="r107 r">reasonOfFailure</span>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r108 r">clientRunspacePoolId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="ServerRunspacePoolDriver.cs.html#a13c57c874abb0c5" class="t t">ServerRunspacePoolDriver</a> <a id="2b899e3505805c4d" href="../../../R/2b899e3505805c4d.html" target="n" data-glyph="74,1" class="i method">GetRunspacePoolDriver</a>(<span class="i">Guid</span> <span id="r108 rd" class="r108 r">clientRunspacePoolId</span>)
+        {
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>if</b> (<a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>.<a href="ServerRunspacePoolDriver.cs.html#4bfa83b8eb92f06f" class="i property">InstanceId</a> == <span class="r108 r">clientRunspacePoolId</span>)
+            {
+                <b>return</b> <a href="#87f176fd246e8861" class="i field">_runspacePoolDriver</a>;
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Used by Command Session to apply quotas on the command transport manager.</span>
+        <span class="c">///</span><span class="c"> This method is here because ServerRemoteSession knows about InitialSessionState.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r109 r">cmdTransportManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Command TransportManager to apply the quota on.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="1273b5b480cff9e3" href="../../../R/1273b5b480cff9e3.html" target="n" data-glyph="74,1" class="i method">ApplyQuotaOnCommandTransportManager</a>(<a href="../fanin/BaseTransportManager.cs.html#3beeadac29de3a80" class="t t">AbstractServerTransportManager</a> <span id="r109 rd" class="r109 r">cmdTransportManager</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r109 r">cmdTransportManager</span> != <b>null</b>, <span class="s">&quot;cmdTransportManager cannot be null&quot;</span>);
+            <span class="r109 r">cmdTransportManager</span>.<a href="../fanin/BaseTransportManager.cs.html#766c6c998b78695f" class="i property">ReceivedDataCollection</a>.<a href="../fanin/PriorityCollection.cs.html#7a540327df6a2e2d" class="i property">MaximumReceivedDataSize</a> = <a href="#d794137d65fee0f8" class="i field">_maxRecvdDataSizeCommand</a>;
+            <span class="r109 r">cmdTransportManager</span>.<a href="../fanin/BaseTransportManager.cs.html#766c6c998b78695f" class="i property">ReceivedDataCollection</a>.<a href="../fanin/PriorityCollection.cs.html#24de42a1b1c1d4b9" class="i property">MaximumReceivedObjectSize</a> = <a href="#3ab2b0fe91369334" class="i field">_maxRecvdObjectSize</a>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

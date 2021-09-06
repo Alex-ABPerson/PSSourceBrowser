@@ -1,0 +1,717 @@
+﻿<!DOCTYPE html>
+<html><head><title>clientSideQuery.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(708);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management/cimSupport/cmdletization/cim/clientSideQuery.cs" target="_top">cimSupport\cmdletization\cim\clientSideQuery.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Management" target="_top">src\Microsoft.PowerShell.Commands.Management\Microsoft.PowerShell.Commands.Management.csproj</a> (Microsoft.PowerShell.Commands.Management)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i">System</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Management</span>.<span class="i">Infrastructure</span>;
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Cim</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i">System</span>.<span class="i">Management</span>.<span class="i">Automation</span>.<span class="i">Diagnostics</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Cmdletization</span>.<span class="i n">Cim</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Client-side filtering for</span>
+    <span class="c">///</span><span class="c"> 1) filtering that cannot be translated into a server-side query (i.e. when CimQuery.WildcardToWqlLikeOperand reports that it cannot translate into WQL)</span>
+    <span class="c">///</span><span class="c"> 2) detecting if all expected results have been received and giving friendly user errors otherwise (i.e. could not find process with name=&#39;foo&#39;;  details in Windows 8 Bugs: #60926)</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="27fd3c64d04b2fa2" href="../../../R/27fd3c64d04b2fa2.html" target="n" data-glyph="2,0" class="t t"><span id="7917e410aad21451">ClientSideQuery</span></a> : <span class="i">QueryBuilder</span>
+    {
+        <b>internal class</b> <a id="9bff11a49624bcec" href="../../../R/9bff11a49624bcec.html" target="n" data-glyph="2,1" class="t t">NotFoundError</a>
+        {
+            <b>public</b> <a id="9ed9d2f4f556a253" href="../../../R/9ed9d2f4f556a253.html" target="n" data-glyph="72,2" class="t constructor">NotFoundError</a>()
+            {
+                <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#fce86a911086d12f" class="i property">ErrorMessageGenerator</a> = <span class="i">GetErrorMessageForNotFound</span>;
+            }
+ 
+            <b>public</b> <a id="ec49b5e0bbbaf269" href="../../../R/ec49b5e0bbbaf269.html" target="n" data-glyph="72,2" class="t constructor">NotFoundError</a>(<b>string</b> <span id="r0 rd" class="r0 r">propertyName</span>, <b>object</b> <span id="r1 rd" class="r1 r">propertyValue</span>, <b>bool</b> <span id="r2 rd" class="r2 r">wildcardsEnabled</span>)
+            {
+                <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#58a1baded6cb1cdf" class="i property">PropertyName</a> = <span class="r0 r">propertyName</span>;
+                <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#78905fe638b02be9" class="i property">PropertyValue</a> = <span class="r1 r">propertyValue</span>;
+ 
+                <b>if</b> (<span class="r2 r">wildcardsEnabled</span>)
+                {
+                    <b>var</b> <span id="r3 rd" class="r3 r">propertyValueAsString</span> = <span class="r1 r">propertyValue</span> <b>as string</b>;
+                    <b>if</b> ((<span class="r3 r">propertyValueAsString</span> != <b>null</b>) &amp;&amp; (<span class="i">WildcardPattern</span>.<span class="i">ContainsWildcardCharacters</span>(<span class="r3 r">propertyValueAsString</span>)))
+                    {
+                        <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#fce86a911086d12f" class="i property">ErrorMessageGenerator</a> =
+                            (<span id="r4 rd" class="r4 r">queryDescription</span>, <span id="r5 rd" class="r5 r">className</span>) =&gt; <span class="i">GetErrorMessageForNotFound_ForWildcard</span>(<a href="#9bff11a49624bcec" class="k">this</a>.<a href="#58a1baded6cb1cdf" class="i property">PropertyName</a>, <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#78905fe638b02be9" class="i property">PropertyValue</a>, <span class="r5 r">className</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#fce86a911086d12f" class="i property">ErrorMessageGenerator</a> =
+                            (<span id="r6 rd" class="r6 r">queryDescription</span>, <span id="r7 rd" class="r7 r">className</span>) =&gt; <span class="i">GetErrorMessageForNotFound_ForEquality</span>(<a href="#9bff11a49624bcec" class="k">this</a>.<a href="#58a1baded6cb1cdf" class="i property">PropertyName</a>, <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#78905fe638b02be9" class="i property">PropertyValue</a>, <span class="r7 r">className</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#fce86a911086d12f" class="i property">ErrorMessageGenerator</a> =
+                        (<span id="r8 rd" class="r8 r">queryDescription</span>, <span id="r9 rd" class="r9 r">className</span>) =&gt; <span class="i">GetErrorMessageForNotFound_ForEquality</span>(<a href="#9bff11a49624bcec" class="k">this</a>.<a href="#58a1baded6cb1cdf" class="i property">PropertyName</a>, <a href="#9bff11a49624bcec" class="k">this</a>.<a href="#78905fe638b02be9" class="i property">PropertyValue</a>, <span class="r9 r">className</span>);
+                }
+            }
+ 
+            <b>public string</b> <a id="58a1baded6cb1cdf" href="../../../R/58a1baded6cb1cdf.html" target="n" data-glyph="102,2" class="i property">PropertyName</a> { <b>get</b>; }
+ 
+            <b>public object</b> <a id="78905fe638b02be9" href="../../../R/78905fe638b02be9.html" target="n" data-glyph="102,2" class="i property">PropertyValue</a> { <b>get</b>; }
+ 
+            <b>public</b> <span class="i">Func</span>&lt;<b>string</b>, <b>string</b>, <b>string</b>&gt; <a id="fce86a911086d12f" href="../../../R/fce86a911086d12f.html" target="n" data-glyph="102,2" class="i property">ErrorMessageGenerator</a> { <b>get</b>; }
+ 
+            <b>private static string</b> <a id="44eda85b64af386d" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">GetErrorMessageForNotFound</a>(<b>string</b> <span id="r10 rd" class="r10 r">queryDescription</span>, <b>string</b> <span id="r11 rd" class="r11 r">className</span>)
+            {
+                <b>string</b> <span id="r12 rd" class="r12 r">message</span> = <b>string</b>.<span class="i">Format</span>(
+                    <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="c">// queryDescription should already be in the right format - can use invariant culture here</span>
+                    <span class="i">CmdletizationResources</span>.<span class="i">CimJob_NotFound_ComplexCase</span>,
+                    <span class="r10 r">queryDescription</span>,
+                    <span class="r11 r">className</span>);
+                <b>return</b> <span class="r12 r">message</span>;
+            }
+ 
+            <b>private static string</b> <a id="aad676e90fb614d5" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">GetErrorMessageForNotFound_ForEquality</a>(<b>string</b> <span id="r13 rd" class="r13 r">propertyName</span>, <b>object</b> <span id="r14 rd" class="r14 r">propertyValue</span>, <b>string</b> <span id="r15 rd" class="r15 r">className</span>)
+            {
+                <b>string</b> <span id="r16 rd" class="r16 r">message</span> = <b>string</b>.<span class="i">Format</span>(
+                    <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="c">// queryDescription should already be in the right format - can use invariant culture here</span>
+                    <span class="i">CmdletizationResources</span>.<span class="i">CimJob_NotFound_SimpleGranularCase_Equality</span>,
+                    <span class="r13 r">propertyName</span>,
+                    <span class="r14 r">propertyValue</span>,
+                    <span class="r15 r">className</span>);
+                <b>return</b> <span class="r16 r">message</span>;
+            }
+ 
+            <b>private static string</b> <a id="4b8ac3e28bffa425" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">GetErrorMessageForNotFound_ForWildcard</a>(<b>string</b> <span id="r17 rd" class="r17 r">propertyName</span>, <b>object</b> <span id="r18 rd" class="r18 r">propertyValue</span>, <b>string</b> <span id="r19 rd" class="r19 r">className</span>)
+            {
+                <b>string</b> <span id="r20 rd" class="r20 r">message</span> = <b>string</b>.<span class="i">Format</span>(
+                    <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="c">// queryDescription should already be in the right format - can use invariant culture here</span>
+                    <span class="i">CmdletizationResources</span>.<span class="i">CimJob_NotFound_SimpleGranularCase_Wildcard</span>,
+                    <span class="r17 r">propertyName</span>,
+                    <span class="r18 r">propertyValue</span>,
+                    <span class="r19 r">className</span>);
+                <b>return</b> <span class="r20 r">message</span>;
+            }
+        }
+ 
+        <b>private abstract class</b> <a id="4b991a4bd2df2670" href="../../../R/4b991a4bd2df2670.html" target="n" data-glyph="4,1" class="t t"><span id="0adff200a8650f5f">CimInstanceFilterBase</span></a>
+        {
+            <b>protected abstract bool</b> <a id="64cda2bb52b36972" href="../../../R/64cda2bb52b36972.html" target="n" data-glyph="75,2" class="i method">IsMatchCore</a>(<span class="i">CimInstance</span> <span id="r21 rd" class="r21 r">cimInstance</span>);
+ 
+            <b>protected</b> <span class="i">BehaviorOnNoMatch</span> <a id="e806ff600d14556d" href="../../../R/e806ff600d14556d.html" target="n" data-glyph="105,2" class="i property">BehaviorOnNoMatch</a> { <b>get</b>; <b>set</b>; }
+ 
+            <b>private bool</b> <a id="10d1c3688ef1fe5c" href="../../../R/10d1c3688ef1fe5c.html" target="n" data-glyph="106,2" class="i property">HadMatches</a> { <b>get</b>; <b>set</b>; }
+ 
+            <b>public bool</b> <a id="96a600288d17862b" href="../../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">IsMatch</a>(<span class="i">CimInstance</span> <span id="r22 rd" class="r22 r">cimInstance</span>)
+            {
+                <b>bool</b> <span id="r23 rd" class="r23 r">isMatch</span> = <a href="#4b991a4bd2df2670" class="k">this</a>.<a href="#64cda2bb52b36972" class="i method">IsMatchCore</a>(<span class="r22 r">cimInstance</span>);
+                <a href="#4b991a4bd2df2670" class="k">this</a>.<a href="#10d1c3688ef1fe5c" class="i property">HadMatches</a> = <a href="#4b991a4bd2df2670" class="k">this</a>.<a href="#10d1c3688ef1fe5c" class="i property">HadMatches</a> || <span class="r23 r">isMatch</span>;
+                <b>return</b> <span class="r23 r">isMatch</span>;
+            }
+ 
+            <b>public virtual bool</b> <a id="f3e19493a24f93fa" href="../../../R/f3e19493a24f93fa.html" target="n" data-glyph="72,2" class="i method">ShouldReportErrorOnNoMatches_IfMultipleFilters</a>()
+            {
+                <b>switch</b> (<a href="#4b991a4bd2df2670" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>)
+                {
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>:
+                        <b>return</b> <b>true</b>;
+ 
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>:
+                        <b>return</b> <b>false</b>;
+ 
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>:
+                    <b>default</b>:
+                        <span class="i">Dbg</span>.<span class="i">Assert</span>(<b>false</b>, <span class="s">&quot;BehaviorOnNoMatch.Default should be handled by derived classes&quot;</span>);
+                        <b>return</b> <b>false</b>;
+                }
+            }
+ 
+            <b>public virtual</b> <span class="i">IEnumerable</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt; <a id="9acaba34d03d12fb" href="../../../R/9acaba34d03d12fb.html" target="n" data-glyph="72,2" class="i method">GetNotFoundErrors_IfThisIsTheOnlyFilter</a>()
+            {
+                <b>switch</b> (<a href="#4b991a4bd2df2670" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>)
+                {
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>:
+                        <b>if</b> (<a href="#4b991a4bd2df2670" class="k">this</a>.<a href="#10d1c3688ef1fe5c" class="i property">HadMatches</a>)
+                        {
+                            <b>return</b> <span class="i">Enumerable</span>.<span class="i">Empty</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt;();
+                        }
+                        <b>else</b>
+                        {
+                            <b>return</b> <b>new</b>[] { <b>new</b> <a href="#9ed9d2f4f556a253" class="t constructor">NotFoundError</a>() };
+                        }
+ 
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>:
+                        <b>return</b> <span class="i">Enumerable</span>.<span class="i">Empty</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt;();
+ 
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>:
+                    <b>default</b>:
+                        <span class="i">Dbg</span>.<span class="i">Assert</span>(<b>false</b>, <span class="s">&quot;BehaviorOnNoMatch.Default should be handled by derived classes&quot;</span>);
+                        <b>return</b> <span class="i">Enumerable</span>.<span class="i">Empty</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt;();
+                }
+            }
+        }
+ 
+        <b>private abstract class</b> <a id="2be0e722a8df52ae" href="../../../R/2be0e722a8df52ae.html" target="n" data-glyph="4,1" class="t t"><span id="4d49931057cc4d9c">CimInstancePropertyBasedFilter</span></a> : <a href="#4b991a4bd2df2670" class="t t">CimInstanceFilterBase</a>
+        {
+            <b>private readonly</b> <span class="i">List</span>&lt;<a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a>&gt; <a id="50bb458bd2786739" href="../../../R/50bb458bd2786739.html" target="n" data-glyph="46,2" class="i field">_propertyValueFilters</a> = <b>new</b>();
+ 
+            <b>protected</b> <span class="i">IEnumerable</span>&lt;<a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a>&gt; <a id="bea444756137ab9c" href="../../../R/bea444756137ab9c.html" target="n" data-glyph="105,2" class="i property">PropertyValueFilters</a> { <b>get</b> { <b>return</b> <a href="#50bb458bd2786739" class="i field">_propertyValueFilters</a>; } }
+ 
+            <b>protected void</b> <a id="e9fc1ce841bbcb6e" href="../../../R/e9fc1ce841bbcb6e.html" target="n" data-glyph="75,2" class="i method">AddPropertyValueFilter</a>(<a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a> <span id="r24 rd" class="r24 r">propertyValueFilter</span>)
+            {
+                <a href="#50bb458bd2786739" class="i field">_propertyValueFilters</a>.<span class="i">Add</span>(<span class="r24 r">propertyValueFilter</span>);
+            }
+ 
+            <b>protected override bool</b> <a id="a948ab0bdaf06fbb" href="../../../R/a948ab0bdaf06fbb.html" target="n" data-glyph="75,2" class="i method">IsMatchCore</a>(<span class="i">CimInstance</span> <span id="r25 rd" class="r25 r">cimInstance</span>)
+            {
+                <b>bool</b> <span id="r26 rd" class="r26 r">isMatch</span> = <b>false</b>;
+                <b>foreach</b> (<a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a> <span id="r27 rd" class="r27 r">propertyValueFilter</span> <b>in</b> <a href="#2be0e722a8df52ae" class="k">this</a>.<a href="#bea444756137ab9c" class="i property">PropertyValueFilters</a>)
+                {
+                    <b>if</b> (<span class="r27 r">propertyValueFilter</span>.<a href="#1bca0b9d31d47521" class="i method">IsMatch</a>(<span class="r25 r">cimInstance</span>))
+                    {
+                        <span class="r26 r">isMatch</span> = <b>true</b>;
+                        <b>if</b> (<a href="#2be0e722a8df52ae" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> == <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>)
+                        {
+                            <b>break</b>;
+                        }
+                    }
+                }
+ 
+                <b>return</b> <span class="r26 r">isMatch</span>;
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="1f5252ce77b6b4c9" href="../../../R/1f5252ce77b6b4c9.html" target="n" data-glyph="4,1" class="t t">CimInstanceRegularFilter</a> : <a href="#2be0e722a8df52ae" class="t t">CimInstancePropertyBasedFilter</a>
+        {
+            <b>public</b> <a id="18ee4b3713785b97" href="../../../R/18ee4b3713785b97.html" target="n" data-glyph="72,2" class="t constructor">CimInstanceRegularFilter</a>(<b>string</b> <span id="r28 rd" class="r28 r">propertyName</span>, <span class="i">IEnumerable</span> <span id="r29 rd" class="r29 r">allowedPropertyValues</span>, <b>bool</b> <span id="r30 rd" class="r30 r">wildcardsEnabled</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r31 rd" class="r31 r">behaviorOnNoMatch</span>)
+            {
+                <b>var</b> <span id="r32 rd" class="r32 r">valueBehaviors</span> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">BehaviorOnNoMatch</span>&gt;();
+ 
+                <b>foreach</b> (<b>object</b> <span id="r33 rd" class="r33 r">allowedPropertyValue</span> <b>in</b> <span class="r29 r">allowedPropertyValues</span>)
+                {
+                    <a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a> <span id="r34 rd" class="r34 r">filter</span> =
+                        <b>new</b> <a href="#3d430750a6496160" class="t constructor">PropertyValueRegularFilter</a>(
+                            <span class="r28 r">propertyName</span>,
+                            <span class="r33 r">allowedPropertyValue</span>,
+                            <span class="r30 r">wildcardsEnabled</span>,
+                            <span class="r31 r">behaviorOnNoMatch</span>);
+                    <a href="#1f5252ce77b6b4c9" class="k">this</a>.<a href="#e9fc1ce841bbcb6e" class="i method">AddPropertyValueFilter</a>(<span class="r34 r">filter</span>);
+ 
+                    <span class="r32 r">valueBehaviors</span>.<span class="i">Add</span>(<span class="r34 r">filter</span>.<a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>);
+                }
+ 
+                <b>if</b> (<span class="r32 r">valueBehaviors</span>.<span class="i">Count</span> == 1)
+                {
+                    <a href="#1f5252ce77b6b4c9" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <span class="r32 r">valueBehaviors</span>.<span class="i">First</span>();
+                }
+                <b>else</b>
+                {
+                    <a href="#1f5252ce77b6b4c9" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <span class="r31 r">behaviorOnNoMatch</span>;
+                }
+            }
+ 
+            <b>public override bool</b> <a id="6705f8aa1a617d9a" href="../../../R/6705f8aa1a617d9a.html" target="n" data-glyph="72,2" class="i method">ShouldReportErrorOnNoMatches_IfMultipleFilters</a>()
+            {
+                <b>switch</b> (<a href="#1f5252ce77b6b4c9" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>)
+                {
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>:
+                        <b>return</b> <b>true</b>;
+ 
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>:
+                        <b>return</b> <b>false</b>;
+ 
+                    <b>case</b> <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>:
+                    <b>default</b>:
+                        <b>return</b> <a href="#1f5252ce77b6b4c9" class="k">this</a>.<a href="#bea444756137ab9c" class="i property">PropertyValueFilters</a>
+                                   .<span class="i">Any</span>(<b>static</b> <span id="r35 rd" class="r35 r">f</span> =&gt; !<span class="r35 r">f</span>.<span class="i">HadMatch</span> &amp;&amp; <span class="r35 r">f</span>.<span class="i">BehaviorOnNoMatch</span> == <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>);
+                }
+            }
+ 
+            <b>public override</b> <span class="i">IEnumerable</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt; <a id="f9076107154c2349" href="../../../R/f9076107154c2349.html" target="n" data-glyph="72,2" class="i method">GetNotFoundErrors_IfThisIsTheOnlyFilter</a>()
+            {
+                <b>foreach</b> (<a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a> <span id="r36 rd" class="r36 r">propertyValueFilter</span> <b>in</b> <a href="#1f5252ce77b6b4c9" class="k">this</a>.<a href="#bea444756137ab9c" class="i property">PropertyValueFilters</a>)
+                {
+                    <b>if</b> (<span class="r36 r">propertyValueFilter</span>.<a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a> != <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>)
+                    {
+                        <b>continue</b>;
+                    }
+ 
+                    <b>if</b> (<span class="r36 r">propertyValueFilter</span>.<a href="#22a9c58157ad0615" class="i property">HadMatch</a>)
+                    {
+                        <b>continue</b>;
+                    }
+ 
+                    <a href="#11575105b54ab1a9" class="k">var</a> <span id="r37 rd" class="r37 r">propertyValueRegularFilter</span> = (<a href="#11575105b54ab1a9" class="t t">PropertyValueRegularFilter</a>)<span class="r36 r">propertyValueFilter</span>;
+                    <b>yield</b> <b>return</b> <span class="r37 r">propertyValueRegularFilter</span>.<a href="#2a8afd4e4acb6145" class="i method">GetGranularNotFoundError</a>();
+                }
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="cfb988ec7549f506" href="../../../R/cfb988ec7549f506.html" target="n" data-glyph="4,1" class="t t">CimInstanceExcludeFilter</a> : <a href="#2be0e722a8df52ae" class="t t">CimInstancePropertyBasedFilter</a>
+        {
+            <b>public</b> <a id="1015f4b2cb3076b9" href="../../../R/1015f4b2cb3076b9.html" target="n" data-glyph="72,2" class="t constructor">CimInstanceExcludeFilter</a>(<b>string</b> <span id="r38 rd" class="r38 r">propertyName</span>, <span class="i">IEnumerable</span> <span id="r39 rd" class="r39 r">excludedPropertyValues</span>, <b>bool</b> <span id="r40 rd" class="r40 r">wildcardsEnabled</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r41 rd" class="r41 r">behaviorOnNoMatch</span>)
+            {
+                <b>if</b> (<span class="r41 r">behaviorOnNoMatch</span> == <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>)
+                {
+                    <a href="#cfb988ec7549f506" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+                }
+                <b>else</b>
+                {
+                    <a href="#cfb988ec7549f506" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <span class="r41 r">behaviorOnNoMatch</span>;
+                }
+ 
+                <b>foreach</b> (<b>object</b> <span id="r42 rd" class="r42 r">excludedPropertyValue</span> <b>in</b> <span class="r39 r">excludedPropertyValues</span>)
+                {
+                    <a href="#cfb988ec7549f506" class="k">this</a>.<a href="#e9fc1ce841bbcb6e" class="i method">AddPropertyValueFilter</a>(
+                        <b>new</b> <a href="#338870cf4ce012cb" class="t constructor">PropertyValueExcludeFilter</a>(
+                            <span class="r38 r">propertyName</span>,
+                            <span class="r42 r">excludedPropertyValue</span>,
+                            <span class="r40 r">wildcardsEnabled</span>,
+                            <span class="r41 r">behaviorOnNoMatch</span>));
+                }
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="df657b8c1ef044d3" href="../../../R/df657b8c1ef044d3.html" target="n" data-glyph="4,1" class="t t">CimInstanceMinFilter</a> : <a href="#2be0e722a8df52ae" class="t t">CimInstancePropertyBasedFilter</a>
+        {
+            <b>public</b> <a id="133046ab1920b196" href="../../../R/133046ab1920b196.html" target="n" data-glyph="72,2" class="t constructor">CimInstanceMinFilter</a>(<b>string</b> <span id="r43 rd" class="r43 r">propertyName</span>, <b>object</b> <span id="r44 rd" class="r44 r">minPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r45 rd" class="r45 r">behaviorOnNoMatch</span>)
+            {
+                <b>if</b> (<span class="r45 r">behaviorOnNoMatch</span> == <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>)
+                {
+                    <a href="#df657b8c1ef044d3" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+                }
+                <b>else</b>
+                {
+                    <a href="#df657b8c1ef044d3" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <span class="r45 r">behaviorOnNoMatch</span>;
+                }
+ 
+                <a href="#df657b8c1ef044d3" class="k">this</a>.<a href="#e9fc1ce841bbcb6e" class="i method">AddPropertyValueFilter</a>(
+                    <b>new</b> <a href="#7e13f67586d217e0" class="t constructor">PropertyValueMinFilter</a>(
+                        <span class="r43 r">propertyName</span>,
+                        <span class="r44 r">minPropertyValue</span>,
+                        <span class="r45 r">behaviorOnNoMatch</span>));
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="85a4120ab9322c13" href="../../../R/85a4120ab9322c13.html" target="n" data-glyph="4,1" class="t t">CimInstanceMaxFilter</a> : <a href="#2be0e722a8df52ae" class="t t">CimInstancePropertyBasedFilter</a>
+        {
+            <b>public</b> <a id="fcfd9dda29c9efdf" href="../../../R/fcfd9dda29c9efdf.html" target="n" data-glyph="72,2" class="t constructor">CimInstanceMaxFilter</a>(<b>string</b> <span id="r46 rd" class="r46 r">propertyName</span>, <b>object</b> <span id="r47 rd" class="r47 r">minPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r48 rd" class="r48 r">behaviorOnNoMatch</span>)
+            {
+                <b>if</b> (<span class="r48 r">behaviorOnNoMatch</span> == <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>)
+                {
+                    <a href="#85a4120ab9322c13" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+                }
+                <b>else</b>
+                {
+                    <a href="#85a4120ab9322c13" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <span class="r48 r">behaviorOnNoMatch</span>;
+                }
+ 
+                <a href="#85a4120ab9322c13" class="k">this</a>.<a href="#e9fc1ce841bbcb6e" class="i method">AddPropertyValueFilter</a>(
+                    <b>new</b> <a href="#7f9287dff8701229" class="t constructor">PropertyValueMaxFilter</a>(
+                        <span class="r46 r">propertyName</span>,
+                        <span class="r47 r">minPropertyValue</span>,
+                        <span class="r48 r">behaviorOnNoMatch</span>));
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="f6b94378c149b229" href="../../../R/f6b94378c149b229.html" target="n" data-glyph="4,1" class="t t">CimInstanceAssociationFilter</a> : <a href="#4b991a4bd2df2670" class="t t">CimInstanceFilterBase</a>
+        {
+            <b>public</b> <a id="9109d41e85711b46" href="../../../R/9109d41e85711b46.html" target="n" data-glyph="72,2" class="t constructor">CimInstanceAssociationFilter</a>(<span class="i">BehaviorOnNoMatch</span> <span id="r49 rd" class="r49 r">behaviorOnNoMatch</span>)
+            {
+                <b>if</b> (<span class="r49 r">behaviorOnNoMatch</span> == <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>)
+                {
+                    <a href="#f6b94378c149b229" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>;
+                }
+                <b>else</b>
+                {
+                    <a href="#f6b94378c149b229" class="k">this</a>.<a href="#e806ff600d14556d" class="i property">BehaviorOnNoMatch</a> = <span class="r49 r">behaviorOnNoMatch</span>;
+                }
+            }
+ 
+            <b>protected override bool</b> <a id="7050d94b2e948d47" href="../../../R/7050d94b2e948d47.html" target="n" data-glyph="75,2" class="i method">IsMatchCore</a>(<span class="i">CimInstance</span> <span id="r50 rd" class="r50 r">cimInstance</span>)
+            {
+                <b>return</b> <b>true</b>; <span class="c">// the fact that this method is getting called means that CIM found associated instances (i.e. by definition the argument *is* matching)</span>
+            }
+        }
+ 
+        <b>internal abstract class</b> <a id="de7a1281f07bab58" href="../../../R/de7a1281f07bab58.html" target="n" data-glyph="2,1" class="t t">PropertyValueFilter</a>
+        {
+            <b>protected</b> <a id="570e8e94032f1f79" href="../../../R/570e8e94032f1f79.html" target="n" data-glyph="75,2" class="t constructor">PropertyValueFilter</a>(<b>string</b> <span id="r51 rd" class="r51 r">propertyName</span>, <b>object</b> <span id="r52 rd" class="r52 r">expectedPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r53 rd" class="r53 r">behaviorOnNoMatch</span>)
+            {
+                <a href="#b52ee34338cebcb2" class="i property">PropertyName</a> = <span class="r51 r">propertyName</span>;
+                <a href="#2d72b4c2b8e52b5d" class="i field">_behaviorOnNoMatch</a> = <span class="r53 r">behaviorOnNoMatch</span>;
+                <a href="#76d4490e46caa972" class="i property">OriginalExpectedPropertyValue</a> = <span class="r52 r">expectedPropertyValue</span>;
+                <a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a> = <a href="cimConverter.cs.html#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="cimConverter.cs.html#66412b49186d9810" class="i method">ConvertFromDotNetToCim</a>(<span class="r52 r">expectedPropertyValue</span>);
+            }
+ 
+            <b>public</b> <span class="i">BehaviorOnNoMatch</span> <a id="cd005f7b7bfd2226" href="../../../R/cd005f7b7bfd2226.html" target="n" data-glyph="102,2" class="i property">BehaviorOnNoMatch</a>
+            {
+                <b>get</b>
+                {
+                    <b>if</b> (<a href="#2d72b4c2b8e52b5d" class="i field">_behaviorOnNoMatch</a> == <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">Default</span>)
+                    {
+                        <a href="#2d72b4c2b8e52b5d" class="i field">_behaviorOnNoMatch</a> = <a href="#de7a1281f07bab58" class="k">this</a>.<a href="#af65f4bf01386dcc" class="i method">GetDefaultBehaviorWhenNoMatchesFound</a>(<a href="#de7a1281f07bab58" class="k">this</a>.<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+                    }
+ 
+                    <b>return</b> <a href="#2d72b4c2b8e52b5d" class="i field">_behaviorOnNoMatch</a>;
+                }
+            }
+ 
+            <b>protected abstract</b> <span class="i">BehaviorOnNoMatch</span> <a id="af65f4bf01386dcc" href="../../../R/af65f4bf01386dcc.html" target="n" data-glyph="75,2" class="i method">GetDefaultBehaviorWhenNoMatchesFound</a>(<b>object</b> <span id="r54 rd" class="r54 r">cimTypedExpectedPropertyValue</span>);
+ 
+            <b>private</b> <span class="i">BehaviorOnNoMatch</span> <a id="2d72b4c2b8e52b5d" href="../../../R/2d72b4c2b8e52b5d.html" target="n" data-glyph="46,2" class="i field">_behaviorOnNoMatch</a>;
+ 
+            <b>public string</b> <a id="b52ee34338cebcb2" href="../../../R/b52ee34338cebcb2.html" target="n" data-glyph="102,2" class="i property">PropertyName</a> { <b>get</b>; }
+ 
+            <b>public object</b> <a id="ad88b0020c699c8a" href="../../../R/ad88b0020c699c8a.html" target="n" data-glyph="102,2" class="i property">CimTypedExpectedPropertyValue</a> { <b>get</b>; }
+ 
+            <b>public object</b> <a id="76d4490e46caa972" href="../../../R/76d4490e46caa972.html" target="n" data-glyph="102,2" class="i property">OriginalExpectedPropertyValue</a> { <b>get</b>; }
+ 
+            <b>public bool</b> <a id="22a9c58157ad0615" href="../../../R/22a9c58157ad0615.html" target="n" data-glyph="102,2" class="i property">HadMatch</a> { <b>get</b>; <b>private set</b>; }
+ 
+            <b>public bool</b> <a id="1bca0b9d31d47521" href="../../../R/1bca0b9d31d47521.html" target="n" data-glyph="72,2" class="i method">IsMatch</a>(<span class="i">CimInstance</span> <span id="r55 rd" class="r55 r">o</span>)
+            {
+                <b>if</b> (<span class="r55 r">o</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <span class="i">CimProperty</span> <span id="r56 rd" class="r56 r">propertyInfo</span> = <span class="r55 r">o</span>.<span class="i">CimInstanceProperties</span>[<a href="#b52ee34338cebcb2" class="i property">PropertyName</a>];
+                <b>if</b> (<span class="r56 r">propertyInfo</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>object</b> <span id="r57 rd" class="r57 r">actualPropertyValue</span> = <span class="r56 r">propertyInfo</span>.<span class="i">Value</span>;
+ 
+                <b>if</b> (<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a> == <b>null</b>)
+                {
+                    <a href="#22a9c58157ad0615" class="i property">HadMatch</a> = <a href="#22a9c58157ad0615" class="i property">HadMatch</a> || (<span class="r57 r">actualPropertyValue</span> == <b>null</b>);
+                    <b>return</b> <span class="r57 r">actualPropertyValue</span> == <b>null</b>;
+                }
+ 
+                <a href="cimConverter.cs.html#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="cimConverter.cs.html#41911896f531b8e0" class="i method">AssertIntrinsicCimValue</a>(<span class="r57 r">actualPropertyValue</span>);
+                <a href="cimConverter.cs.html#77ff34e79c7129cc" class="t t">CimValueConverter</a>.<a href="cimConverter.cs.html#41911896f531b8e0" class="i method">AssertIntrinsicCimValue</a>(<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+ 
+                <span class="r57 r">actualPropertyValue</span> = <a href="#ff2c1776e782ff9e" class="i method">ConvertActualValueToExpectedType</a>(<span class="r57 r">actualPropertyValue</span>, <a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+                <span class="i">Dbg</span>.<span class="i">Assert</span>(<a href="#20566bff8c2f9668" class="i method">IsSameType</a>(<span class="r57 r">actualPropertyValue</span>, <a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>), <span class="s">&quot;Types of actual vs expected property value should always match&quot;</span>);
+ 
+                <b>bool</b> <span id="r58 rd" class="r58 r">isMatch</span> = <a href="#de7a1281f07bab58" class="k">this</a>.<a href="#177cc4aad11cec88" class="i method">IsMatchingValue</a>(<span class="r57 r">actualPropertyValue</span>);
+                <a href="#22a9c58157ad0615" class="i property">HadMatch</a> = <a href="#22a9c58157ad0615" class="i property">HadMatch</a> || <span class="r58 r">isMatch</span>;
+                <b>return</b> <span class="r58 r">isMatch</span>;
+            }
+ 
+            <b>protected abstract bool</b> <a id="177cc4aad11cec88" href="../../../R/177cc4aad11cec88.html" target="n" data-glyph="75,2" class="i method">IsMatchingValue</a>(<b>object</b> <span id="r59 rd" class="r59 r">actualPropertyValue</span>);
+ 
+            <b>private object</b> <a id="ff2c1776e782ff9e" href="../../../R/ff2c1776e782ff9e.html" target="n" data-glyph="76,2" class="i method">ConvertActualValueToExpectedType</a>(<b>object</b> <span id="r60 rd" class="r60 r">actualPropertyValue</span>, <b>object</b> <span id="r61 rd" class="r61 r">expectedPropertyValue</span>)
+            {
+                <b>if</b> (<span class="r60 r">actualPropertyValue</span> <b>is string</b> &amp;&amp; <span class="r61 r">expectedPropertyValue</span> <b>is not string</b>)
+                {
+                    <span class="r60 r">actualPropertyValue</span> = <span class="i">LanguagePrimitives</span>.<span class="i">ConvertTo</span>(<span class="r60 r">actualPropertyValue</span>, <span class="r61 r">expectedPropertyValue</span>.<span class="i">GetType</span>(), <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+                }
+ 
+                <b>if</b> (!<a href="#20566bff8c2f9668" class="i method">IsSameType</a>(<span class="r60 r">actualPropertyValue</span>, <span class="r61 r">expectedPropertyValue</span>))
+                {
+                    <b>var</b> <span id="r62 rd" class="r62 r">errorMessage</span> = <b>string</b>.<span class="i">Format</span>(
+                        <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                        <span class="i">CmdletizationResources</span>.<span class="i">CimJob_MismatchedTypeOfPropertyReturnedByQuery</span>,
+                        <a href="#b52ee34338cebcb2" class="i property">PropertyName</a>,
+                        <span class="r60 r">actualPropertyValue</span>.<span class="i">GetType</span>().<span class="i">FullName</span>,
+                        <span class="r61 r">expectedPropertyValue</span>.<span class="i">GetType</span>().<span class="i">FullName</span>);
+                    <b>throw</b> <a href="CimJobException.cs.html#c2c8afcb7779a576" class="t t">CimJobException</a>.<span class="i">CreateWithoutJobContext</span>(
+                        <span class="r62 r">errorMessage</span>,
+                        <span class="s">&quot;CimJob_PropertyTypeUnexpectedByClientSideQuery&quot;</span>,
+                        <span class="i">ErrorCategory</span>.<span class="i">InvalidType</span>);
+                }
+ 
+                <b>return</b> <span class="r60 r">actualPropertyValue</span>;
+            }
+ 
+            <b>private static bool</b> <a id="20566bff8c2f9668" href="../../../R/20566bff8c2f9668.html" target="n" data-glyph="76,2" class="i method">IsSameType</a>(<b>object</b> <span id="r63 rd" class="r63 r">actualPropertyValue</span>, <b>object</b> <span id="r64 rd" class="r64 r">expectedPropertyValue</span>)
+            {
+                <b>if</b> (<span class="r63 r">actualPropertyValue</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>true</b>;
+                }
+ 
+                <b>if</b> (<span class="r64 r">expectedPropertyValue</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>true</b>;
+                }
+ 
+                <b>if</b> (<span class="r63 r">actualPropertyValue</span> <b>is</b> <span class="i">TimeSpan</span> || <span class="r63 r">actualPropertyValue</span> <b>is</b> <span class="i">DateTime</span>)
+                {
+                    <b>return</b> <span class="r64 r">expectedPropertyValue</span> <b>is</b> <span class="i">TimeSpan</span> || <span class="r64 r">expectedPropertyValue</span> <b>is</b> <span class="i">DateTime</span>;
+                }
+ 
+                <b>return</b> <span class="r63 r">actualPropertyValue</span>.<span class="i">GetType</span>() == <span class="r64 r">expectedPropertyValue</span>.<span class="i">GetType</span>();
+            }
+        }
+ 
+        <b>internal class</b> <a id="11575105b54ab1a9" href="../../../R/11575105b54ab1a9.html" target="n" data-glyph="2,1" class="t t">PropertyValueRegularFilter</a> : <a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a>
+        {
+            <b>private readonly bool</b> <a id="d51db7104bbefd73" href="../../../R/d51db7104bbefd73.html" target="n" data-glyph="46,2" class="i field">_wildcardsEnabled</a>;
+ 
+            <b>public</b> <a id="3d430750a6496160" href="../../../R/3d430750a6496160.html" target="n" data-glyph="72,2" class="t constructor">PropertyValueRegularFilter</a>(<b>string</b> <span id="r65 rd" class="r65 r">propertyName</span>, <b>object</b> <span id="r66 rd" class="r66 r">expectedPropertyValue</span>, <b>bool</b> <span id="r67 rd" class="r67 r">wildcardsEnabled</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r68 rd" class="r68 r">behaviorOnNoMatch</span>)
+                : <a href="#570e8e94032f1f79" class="k">base</a>(<span class="r65 r">propertyName</span>, <span class="r66 r">expectedPropertyValue</span>, <span class="r68 r">behaviorOnNoMatch</span>)
+            {
+                <a href="#d51db7104bbefd73" class="i field">_wildcardsEnabled</a> = <span class="r67 r">wildcardsEnabled</span>;
+            }
+ 
+            <b>protected override</b> <span class="i">BehaviorOnNoMatch</span> <a id="da2d0ee6f766391d" href="../../../R/da2d0ee6f766391d.html" target="n" data-glyph="75,2" class="i method">GetDefaultBehaviorWhenNoMatchesFound</a>(<b>object</b> <span id="r69 rd" class="r69 r">cimTypedExpectedPropertyValue</span>)
+            {
+                <b>if</b> (!<a href="#d51db7104bbefd73" class="i field">_wildcardsEnabled</a>)
+                {
+                    <b>return</b> <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>;
+                }
+                <b>else</b>
+                {
+                    <b>string</b> <span id="r70 rd" class="r70 r">expectedPropertyValueAsString</span> = <span class="r69 r">cimTypedExpectedPropertyValue</span> <b>as string</b>;
+                    <b>if</b> (<span class="r70 r">expectedPropertyValueAsString</span> != <b>null</b> &amp;&amp; <span class="i">WildcardPattern</span>.<span class="i">ContainsWildcardCharacters</span>(<span class="r70 r">expectedPropertyValueAsString</span>))
+                    {
+                        <b>return</b> <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+                    }
+                    <b>else</b>
+                    {
+                        <b>return</b> <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">ReportErrors</span>;
+                    }
+                }
+            }
+ 
+            <b>internal</b> <a href="#9bff11a49624bcec" class="t t">NotFoundError</a> <a id="2a8afd4e4acb6145" href="../../../R/2a8afd4e4acb6145.html" target="n" data-glyph="74,2" class="i method">GetGranularNotFoundError</a>()
+            {
+                <b>return</b> <b>new</b> <a href="#ec49b5e0bbbaf269" class="t constructor">NotFoundError</a>(<a href="#11575105b54ab1a9" class="k">this</a>.<a href="#b52ee34338cebcb2" class="i property">PropertyName</a>, <a href="#11575105b54ab1a9" class="k">this</a>.<a href="#76d4490e46caa972" class="i property">OriginalExpectedPropertyValue</a>, <a href="#d51db7104bbefd73" class="i field">_wildcardsEnabled</a>);
+            }
+ 
+            <b>protected override bool</b> <a id="4be74678d762466b" href="../../../R/4be74678d762466b.html" target="n" data-glyph="75,2" class="i method">IsMatchingValue</a>(<b>object</b> <span id="r71 rd" class="r71 r">actualPropertyValue</span>)
+            {
+                <b>if</b> (<a href="#d51db7104bbefd73" class="i field">_wildcardsEnabled</a>)
+                {
+                    <b>return</b> <a href="#d52eef48639bb6c4" class="i method">WildcardEqual</a>(<a href="#11575105b54ab1a9" class="k">this</a>.<a href="#b52ee34338cebcb2" class="i property">PropertyName</a>, <span class="r71 r">actualPropertyValue</span>, <a href="#11575105b54ab1a9" class="k">this</a>.<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <a href="#14c75b3f5c3e77b3" class="i method">NonWildcardEqual</a>(<a href="#11575105b54ab1a9" class="k">this</a>.<a href="#b52ee34338cebcb2" class="i property">PropertyName</a>, <span class="r71 r">actualPropertyValue</span>, <a href="#11575105b54ab1a9" class="k">this</a>.<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+                }
+            }
+ 
+            <b>private static bool</b> <a id="14c75b3f5c3e77b3" href="../../../R/14c75b3f5c3e77b3.html" target="n" data-glyph="76,2" class="i method">NonWildcardEqual</a>(<b>string</b> <span id="r72 rd" class="r72 r">propertyName</span>, <b>object</b> <span id="r73 rd" class="r73 r">actualPropertyValue</span>, <b>object</b> <span id="r74 rd" class="r74 r">expectedPropertyValue</span>)
+            {
+                <span class="c">// perform .NET-based, case-insensitive equality test for 1) characters and 2) strings</span>
+                <b>if</b> (<span class="r74 r">expectedPropertyValue</span> <b>is char</b>)
+                {
+                    <span class="r74 r">expectedPropertyValue</span> = <span class="r74 r">expectedPropertyValue</span>.<span class="i">ToString</span>();
+                    <span class="r73 r">actualPropertyValue</span> = <span class="r73 r">actualPropertyValue</span>.<span class="i">ToString</span>();
+                }
+ 
+                <b>var</b> <span id="r75 rd" class="r75 r">expectedPropertyValueAsString</span> = <span class="r74 r">expectedPropertyValue</span> <b>as string</b>;
+                <b>if</b> (<span class="r75 r">expectedPropertyValueAsString</span> != <b>null</b>)
+                {
+                    <b>var</b> <span id="r76 rd" class="r76 r">actualPropertyValueAsString</span> = (<b>string</b>)<span class="r73 r">actualPropertyValue</span>;
+                    <b>return</b> <span class="r76 r">actualPropertyValueAsString</span>.<span class="i">Equals</span>(<span class="r75 r">expectedPropertyValueAsString</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>);
+                }
+ 
+                <span class="c">// perform .NET based equality for everything else</span>
+                <b>return</b> <span class="r73 r">actualPropertyValue</span>.<span class="i">Equals</span>(<span class="r74 r">expectedPropertyValue</span>);
+            }
+ 
+            <b>private static bool</b> <a id="d52eef48639bb6c4" href="../../../R/d52eef48639bb6c4.html" target="n" data-glyph="76,2" class="i method">WildcardEqual</a>(<b>string</b> <span id="r77 rd" class="r77 r">propertyName</span>, <b>object</b> <span id="r78 rd" class="r78 r">actualPropertyValue</span>, <b>object</b> <span id="r79 rd" class="r79 r">expectedPropertyValue</span>)
+            {
+                <b>string</b> <span id="r80 rd" class="r80 r">actualPropertyValueAsString</span>;
+                <b>string</b> <span id="r81 rd" class="r81 r">expectedPropertyValueAsString</span>;
+                <b>if</b> (!<span class="i">LanguagePrimitives</span>.<span class="i">TryConvertTo</span>(<span class="r78 r">actualPropertyValue</span>, <b>out</b> <span class="r80 r">actualPropertyValueAsString</span>))
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>if</b> (!<span class="i">LanguagePrimitives</span>.<span class="i">TryConvertTo</span>(<span class="r79 r">expectedPropertyValue</span>, <b>out</b> <span class="r81 r">expectedPropertyValueAsString</span>))
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>return</b> <span class="i">WildcardPattern</span>.<span class="i">Get</span>(<span class="r81 r">expectedPropertyValueAsString</span>, <span class="i">WildcardOptions</span>.<span class="i">IgnoreCase</span>).<span class="i">IsMatch</span>(<span class="r80 r">actualPropertyValueAsString</span>);
+            }
+        }
+ 
+        <b>internal class</b> <a id="cb6119e96b766fbe" href="../../../R/cb6119e96b766fbe.html" target="n" data-glyph="2,1" class="t t">PropertyValueExcludeFilter</a> : <a href="#11575105b54ab1a9" class="t t">PropertyValueRegularFilter</a>
+        {
+            <b>public</b> <a id="338870cf4ce012cb" href="../../../R/338870cf4ce012cb.html" target="n" data-glyph="72,2" class="t constructor">PropertyValueExcludeFilter</a>(<b>string</b> <span id="r82 rd" class="r82 r">propertyName</span>, <b>object</b> <span id="r83 rd" class="r83 r">expectedPropertyValue</span>, <b>bool</b> <span id="r84 rd" class="r84 r">wildcardsEnabled</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r85 rd" class="r85 r">behaviorOnNoMatch</span>)
+                : <a href="#3d430750a6496160" class="k">base</a>(<span class="r82 r">propertyName</span>, <span class="r83 r">expectedPropertyValue</span>, <span class="r84 r">wildcardsEnabled</span>, <span class="r85 r">behaviorOnNoMatch</span>)
+            {
+            }
+ 
+            <b>protected override</b> <span class="i">BehaviorOnNoMatch</span> <a id="b2a713d724508a7b" href="../../../R/b2a713d724508a7b.html" target="n" data-glyph="75,2" class="i method">GetDefaultBehaviorWhenNoMatchesFound</a>(<b>object</b> <span id="r86 rd" class="r86 r">cimTypedExpectedPropertyValue</span>)
+            {
+                <b>return</b> <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+            }
+ 
+            <b>protected override bool</b> <a id="f59b7b01b156fc07" href="../../../R/f59b7b01b156fc07.html" target="n" data-glyph="75,2" class="i method">IsMatchingValue</a>(<b>object</b> <span id="r87 rd" class="r87 r">actualPropertyValue</span>)
+            {
+                <b>return</b> !<a href="#11575105b54ab1a9" class="k">base</a>.<a href="#4be74678d762466b" class="i method">IsMatchingValue</a>(<span class="r87 r">actualPropertyValue</span>);
+            }
+        }
+ 
+        <b>internal class</b> <a id="cc1ce35e7abf256a" href="../../../R/cc1ce35e7abf256a.html" target="n" data-glyph="2,1" class="t t">PropertyValueMinFilter</a> : <a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a>
+        {
+            <b>public</b> <a id="7e13f67586d217e0" href="../../../R/7e13f67586d217e0.html" target="n" data-glyph="72,2" class="t constructor">PropertyValueMinFilter</a>(<b>string</b> <span id="r88 rd" class="r88 r">propertyName</span>, <b>object</b> <span id="r89 rd" class="r89 r">expectedPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r90 rd" class="r90 r">behaviorOnNoMatch</span>)
+                : <a href="#570e8e94032f1f79" class="k">base</a>(<span class="r88 r">propertyName</span>, <span class="r89 r">expectedPropertyValue</span>, <span class="r90 r">behaviorOnNoMatch</span>)
+            {
+            }
+ 
+            <b>protected override</b> <span class="i">BehaviorOnNoMatch</span> <a id="dccef8435d2ab0ef" href="../../../R/dccef8435d2ab0ef.html" target="n" data-glyph="75,2" class="i method">GetDefaultBehaviorWhenNoMatchesFound</a>(<b>object</b> <span id="r91 rd" class="r91 r">cimTypedExpectedPropertyValue</span>)
+            {
+                <b>return</b> <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+            }
+ 
+            <b>protected override bool</b> <a id="9a6eaf79418875f2" href="../../../R/9a6eaf79418875f2.html" target="n" data-glyph="75,2" class="i method">IsMatchingValue</a>(<b>object</b> <span id="r92 rd" class="r92 r">actualPropertyValue</span>)
+            {
+                <b>return</b> <a href="#94826b58bcebdc1f" class="i method">ActualValueGreaterThanOrEqualToExpectedValue</a>(<a href="#cc1ce35e7abf256a" class="k">this</a>.<a href="#b52ee34338cebcb2" class="i property">PropertyName</a>, <span class="r92 r">actualPropertyValue</span>, <a href="#cc1ce35e7abf256a" class="k">this</a>.<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+            }
+ 
+            <b>private static bool</b> <a id="94826b58bcebdc1f" href="../../../R/94826b58bcebdc1f.html" target="n" data-glyph="76,2" class="i method">ActualValueGreaterThanOrEqualToExpectedValue</a>(<b>string</b> <span id="r93 rd" class="r93 r">propertyName</span>, <b>object</b> <span id="r94 rd" class="r94 r">actualPropertyValue</span>, <b>object</b> <span id="r95 rd" class="r95 r">expectedPropertyValue</span>)
+            {
+                <b>try</b>
+                {
+                    <b>if</b> (!(<span class="r95 r">expectedPropertyValue</span> <b>is</b> <span class="i">IComparable</span> <span id="r96 rd" class="r96 r">expectedComparable</span>))
+                    {
+                        <b>return</b> <b>false</b>;
+                    }
+ 
+                    <b>return</b> <span class="r96 r">expectedComparable</span>.<span class="i">CompareTo</span>(<span class="r94 r">actualPropertyValue</span>) &lt;= 0;
+                }
+                <b>catch</b> (<span class="i">ArgumentException</span>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+            }
+        }
+ 
+        <b>internal class</b> <a id="62b2c3289d062616" href="../../../R/62b2c3289d062616.html" target="n" data-glyph="2,1" class="t t">PropertyValueMaxFilter</a> : <a href="#de7a1281f07bab58" class="t t">PropertyValueFilter</a>
+        {
+            <b>public</b> <a id="7f9287dff8701229" href="../../../R/7f9287dff8701229.html" target="n" data-glyph="72,2" class="t constructor">PropertyValueMaxFilter</a>(<b>string</b> <span id="r97 rd" class="r97 r">propertyName</span>, <b>object</b> <span id="r98 rd" class="r98 r">expectedPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r99 rd" class="r99 r">behaviorOnNoMatch</span>)
+                : <a href="#570e8e94032f1f79" class="k">base</a>(<span class="r97 r">propertyName</span>, <span class="r98 r">expectedPropertyValue</span>, <span class="r99 r">behaviorOnNoMatch</span>)
+            {
+            }
+ 
+            <b>protected override</b> <span class="i">BehaviorOnNoMatch</span> <a id="bb0e895b42cfa7fa" href="../../../R/bb0e895b42cfa7fa.html" target="n" data-glyph="75,2" class="i method">GetDefaultBehaviorWhenNoMatchesFound</a>(<b>object</b> <span id="r100 rd" class="r100 r">cimTypedExpectedPropertyValue</span>)
+            {
+                <b>return</b> <a href="#cd005f7b7bfd2226" class="i property">BehaviorOnNoMatch</a>.<span class="i">SilentlyContinue</span>;
+            }
+ 
+            <b>protected override bool</b> <a id="d6146a1c25996eea" href="../../../R/d6146a1c25996eea.html" target="n" data-glyph="75,2" class="i method">IsMatchingValue</a>(<b>object</b> <span id="r101 rd" class="r101 r">actualPropertyValue</span>)
+            {
+                <b>return</b> <a href="#9bfd4d4a752d0793" class="i method">ActualValueLessThanOrEqualToExpectedValue</a>(<a href="#62b2c3289d062616" class="k">this</a>.<a href="#b52ee34338cebcb2" class="i property">PropertyName</a>, <span class="r101 r">actualPropertyValue</span>, <a href="#62b2c3289d062616" class="k">this</a>.<a href="#ad88b0020c699c8a" class="i property">CimTypedExpectedPropertyValue</a>);
+            }
+ 
+            <b>private static bool</b> <a id="9bfd4d4a752d0793" href="../../../R/9bfd4d4a752d0793.html" target="n" data-glyph="76,2" class="i method">ActualValueLessThanOrEqualToExpectedValue</a>(<b>string</b> <span id="r102 rd" class="r102 r">propertyName</span>, <b>object</b> <span id="r103 rd" class="r103 r">actualPropertyValue</span>, <b>object</b> <span id="r104 rd" class="r104 r">expectedPropertyValue</span>)
+            {
+                <b>try</b>
+                {
+                    <b>if</b> (!(<span class="r103 r">actualPropertyValue</span> <b>is</b> <span class="i">IComparable</span> <span id="r105 rd" class="r105 r">actualComparable</span>))
+                    {
+                        <b>return</b> <b>false</b>;
+                    }
+ 
+                    <b>return</b> <span class="r105 r">actualComparable</span>.<span class="i">CompareTo</span>(<span class="r104 r">expectedPropertyValue</span>) &lt;= 0;
+                }
+                <b>catch</b> (<span class="i">ArgumentException</span>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+            }
+        }
+ 
+        <b>private int</b> <a id="d457754cc3111cff" href="../../../R/d457754cc3111cff.html" target="n" data-glyph="46,1" class="i field">_numberOfResultsFromMi</a>;
+        <b>private int</b> <a id="72df8ca0f8bd23c1" href="../../../R/72df8ca0f8bd23c1.html" target="n" data-glyph="46,1" class="i field">_numberOfMatchingResults</a>;
+ 
+        <b>private readonly</b> <span class="i">List</span>&lt;<a href="#4b991a4bd2df2670" class="t t">CimInstanceFilterBase</a>&gt; <a id="10c0fed619ddb8a5" href="../../../R/10c0fed619ddb8a5.html" target="n" data-glyph="46,1" class="i field">_filters</a> = <b>new</b>();
+        <b>private readonly object</b> <a id="db12bb85227ce67e" href="../../../R/db12bb85227ce67e.html" target="n" data-glyph="46,1" class="i field">_myLock</a> = <b>new</b>();
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> &quot;Public&quot; interface for client-side filtering
+ 
+        <b>internal bool</b> <a id="37052911c7f497fc" href="../../../R/37052911c7f497fc.html" target="n" data-glyph="74,1" class="i method">IsResultMatchingClientSideQuery</a>(<span class="i">CimInstance</span> <span id="r106 rd" class="r106 r">result</span>)
+        {
+            <b>lock</b> (<a href="#db12bb85227ce67e" class="i field">_myLock</a>)
+            {
+                <a href="#d457754cc3111cff" class="i field">_numberOfResultsFromMi</a>++;
+ 
+                <b>if</b> (<a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">All</span>(<span id="r107 rd" class="r107 r">f</span> =&gt; <span class="r107 r">f</span>.<span class="i">IsMatch</span>(<span class="r106 r">result</span>)))
+                {
+                    <a href="#72df8ca0f8bd23c1" class="i field">_numberOfMatchingResults</a>++;
+                    <b>return</b> <b>true</b>;
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <b>false</b>;
+                }
+            }
+        }
+ 
+        <b>internal</b> <span class="i">IEnumerable</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt; <a id="c10bc0f1f2e6d8fd" href="../../../R/c10bc0f1f2e6d8fd.html" target="n" data-glyph="74,1" class="i method">GenerateNotFoundErrors</a>()
+        {
+            <b>if</b> (<a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">Count</span> &gt; 1)
+            {
+                <b>if</b> (<a href="#72df8ca0f8bd23c1" class="i field">_numberOfMatchingResults</a> &gt; 0)
+                {
+                    <b>return</b> <span class="i">Enumerable</span>.<span class="i">Empty</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt;();
+                }
+ 
+                <b>if</b> (<a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">All</span>(<b>static</b> <span id="r108 rd" class="r108 r">f</span> =&gt; !<span class="r108 r">f</span>.<span class="i">ShouldReportErrorOnNoMatches_IfMultipleFilters</span>()))
+                {
+                    <b>return</b> <span class="i">Enumerable</span>.<span class="i">Empty</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt;();
+                }
+ 
+                <b>return</b> <b>new</b>[] { <b>new</b> <a href="#9ed9d2f4f556a253" class="t constructor">NotFoundError</a>() };
+            }
+ 
+            <a href="#4b991a4bd2df2670" class="t t">CimInstanceFilterBase</a> <span id="r109 rd" class="r109 r">filter</span> = <a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">SingleOrDefault</span>();
+            <b>if</b> (<span class="r109 r">filter</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r109 r">filter</span>.<a href="#9acaba34d03d12fb" class="i method">GetNotFoundErrors_IfThisIsTheOnlyFilter</a>();
+            }
+ 
+            <b>return</b> <span class="i">Enumerable</span>.<span class="i">Empty</span>&lt;<a href="#9bff11a49624bcec" class="t t">NotFoundError</a>&gt;();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> QueryBuilder interface
+ 
+        <b>public override void</b> <a id="8221d573d28e3aaa" href="../../../R/8221d573d28e3aaa.html" target="n" data-glyph="72,1" class="i method">FilterByProperty</a>(<b>string</b> <span id="r110 rd" class="r110 r">propertyName</span>, <span class="i">IEnumerable</span> <span id="r111 rd" class="r111 r">allowedPropertyValues</span>, <b>bool</b> <span id="r112 rd" class="r112 r">wildcardsEnabled</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r113 rd" class="r113 r">behaviorOnNoMatch</span>)
+        {
+            <a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">Add</span>(<b>new</b> <a href="#18ee4b3713785b97" class="t constructor">CimInstanceRegularFilter</a>(<span class="r110 r">propertyName</span>, <span class="r111 r">allowedPropertyValues</span>, <span class="r112 r">wildcardsEnabled</span>, <span class="r113 r">behaviorOnNoMatch</span>));
+        }
+ 
+        <b>public override void</b> <a id="660f5c2c9a2992f7" href="../../../R/660f5c2c9a2992f7.html" target="n" data-glyph="72,1" class="i method">ExcludeByProperty</a>(<b>string</b> <span id="r114 rd" class="r114 r">propertyName</span>, <span class="i">IEnumerable</span> <span id="r115 rd" class="r115 r">excludedPropertyValues</span>, <b>bool</b> <span id="r116 rd" class="r116 r">wildcardsEnabled</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r117 rd" class="r117 r">behaviorOnNoMatch</span>)
+        {
+            <a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">Add</span>(<b>new</b> <a href="#1015f4b2cb3076b9" class="t constructor">CimInstanceExcludeFilter</a>(<span class="r114 r">propertyName</span>, <span class="r115 r">excludedPropertyValues</span>, <span class="r116 r">wildcardsEnabled</span>, <span class="r117 r">behaviorOnNoMatch</span>));
+        }
+ 
+        <b>public override void</b> <a id="2c86f62c98900636" href="../../../R/2c86f62c98900636.html" target="n" data-glyph="72,1" class="i method">FilterByMinPropertyValue</a>(<b>string</b> <span id="r118 rd" class="r118 r">propertyName</span>, <b>object</b> <span id="r119 rd" class="r119 r">minPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r120 rd" class="r120 r">behaviorOnNoMatch</span>)
+        {
+            <a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">Add</span>(<b>new</b> <a href="#133046ab1920b196" class="t constructor">CimInstanceMinFilter</a>(<span class="r118 r">propertyName</span>, <span class="r119 r">minPropertyValue</span>, <span class="r120 r">behaviorOnNoMatch</span>));
+        }
+ 
+        <b>public override void</b> <a id="b60f8ea9e78defe3" href="../../../R/b60f8ea9e78defe3.html" target="n" data-glyph="72,1" class="i method">FilterByMaxPropertyValue</a>(<b>string</b> <span id="r121 rd" class="r121 r">propertyName</span>, <b>object</b> <span id="r122 rd" class="r122 r">maxPropertyValue</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r123 rd" class="r123 r">behaviorOnNoMatch</span>)
+        {
+            <a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">Add</span>(<b>new</b> <a href="#fcfd9dda29c9efdf" class="t constructor">CimInstanceMaxFilter</a>(<span class="r121 r">propertyName</span>, <span class="r122 r">maxPropertyValue</span>, <span class="r123 r">behaviorOnNoMatch</span>));
+        }
+ 
+        <b>public override void</b> <a id="ae3c96246fd789e4" href="../../../R/ae3c96246fd789e4.html" target="n" data-glyph="72,1" class="i method">FilterByAssociatedInstance</a>(<b>object</b> <span id="r124 rd" class="r124 r">associatedInstance</span>, <b>string</b> <span id="r125 rd" class="r125 r">associationName</span>, <b>string</b> <span id="r126 rd" class="r126 r">sourceRole</span>, <b>string</b> <span id="r127 rd" class="r127 r">resultRole</span>, <span class="i">BehaviorOnNoMatch</span> <span id="r128 rd" class="r128 r">behaviorOnNoMatch</span>)
+        {
+            <a href="#10c0fed619ddb8a5" class="i field">_filters</a>.<span class="i">Add</span>(<b>new</b> <a href="#9109d41e85711b46" class="t constructor">CimInstanceAssociationFilter</a>(<span class="r128 r">behaviorOnNoMatch</span>));
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

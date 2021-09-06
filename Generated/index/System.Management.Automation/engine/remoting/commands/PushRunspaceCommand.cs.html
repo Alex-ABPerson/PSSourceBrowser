@@ -1,0 +1,1389 @@
+﻿<!DOCTYPE html>
+<html><head><title>PushRunspaceCommand.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(1380);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/commands/PushRunspaceCommand.cs" target="_top">engine\remoting\commands\PushRunspaceCommand.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>.<span class="i n">Internal</span>.<span class="i n">Format</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Enter-PSSession cmdlet.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#d056c4b8c99405e5" class="t t">VerbsCommon</a>.<a href="../../../utils/Verbs.cs.html#a39399adfa6ea6ba" class="i field">Enter</a>, <span class="s">&quot;PSSession&quot;</span>, <span class="i">DefaultParameterSetName</span> = <span class="s">&quot;ComputerName&quot;</span>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkID=2096695&quot;</span>, <span class="i">RemotingCapability</span> = <a href="../common/misc.cs.html#59e8ed9184274cab" class="t t">RemotingCapability</a>.<a href="../common/misc.cs.html#24fda4b6c5a6ee93" class="i field">OwnedByCommand</a>)]
+    <b>public class</b> <a id="6473c5d5c4356c4e" href="../../../R/6473c5d5c4356c4e.html" target="n" data-glyph="0,0" class="t t"><span id="cb969a92cabd4fb9">EnterPSSessionCommand</span></a> : <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="t t">PSRemotingBaseCmdlet</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Strings
+ 
+        <b>private const string</b> <a id="83013e264216b083" href="../../../R/83013e264216b083.html" target="n" data-glyph="10,1" class="i field">InstanceIdParameterSet</a> = <span class="s">&quot;InstanceId&quot;</span>;
+        <b>private const string</b> <a id="e6d864041087a5e9" href="../../../R/e6d864041087a5e9.html" target="n" data-glyph="10,1" class="i field">IdParameterSet</a> = <span class="s">&quot;Id&quot;</span>;
+        <b>private const string</b> <a id="bd7325e1ec9e2b6b" href="../../../R/bd7325e1ec9e2b6b.html" target="n" data-glyph="10,1" class="i field">NameParameterSet</a> = <span class="s">&quot;Name&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Members
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Disable ThrottleLimit parameter inherited from base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <b>new</b> <b>int</b> <a id="a03699846b48d276" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">ThrottleLimit</a> { <b>get</b> { <b>return</b> 0; } <b>set</b> { } }
+ 
+        <b>private</b> <a href="../../../utils/ObjectStream.cs.html#247cf7c4c5dec5a4" class="t t">ObjectStream</a> <a id="75b59636e74f4cee" href="../../../R/75b59636e74f4cee.html" target="n" data-glyph="46,1" class="i field">_stream</a>;
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="0357286504839e90" href="../../../R/0357286504839e90.html" target="n" data-glyph="46,1" class="i field">_tempRunspace</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> SSH Parameter Set
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host name for an SSH remote connection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="t t">PSRemotingBaseCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#1d1f1661df97e61a" class="i field">SSHHostParameterSet</a>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        <b>public</b> <b>new</b> <b>string</b> <a id="c9ab45b9f8d62e81" href="../../../R/c9ab45b9f8d62e81.html" target="n" data-glyph="102,1" class="i property">HostName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Computer name parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>)]
+        [<span class="i">Alias</span>(<span class="s">&quot;Cn&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        <b>public</b> <b>new</b> <b>string</b> <a id="9bd6c27a3195efd9" href="../../../R/9bd6c27a3195efd9.html" target="n" data-glyph="102,1" class="i property">ComputerName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Runspace parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Naming&quot;</span>, <span class="s">&quot;CA1704:IdentifiersShouldBeSpelledCorrectly&quot;</span>, <span class="i">MessageId</span> = <span class="s">&quot;Runspace&quot;</span>)]
+        <b>public</b> <b>new</b> <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <a id="9c1740457385d5db" href="../../../R/9c1740457385d5db.html" target="n" data-glyph="102,1" class="i property">Session</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ConnectionUri parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#00bdee282001266a" class="i field">UriParameterSet</a>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">Alias</span>(<span class="s">&quot;URI&quot;</span>, <span class="s">&quot;CU&quot;</span>)]
+        <b>public</b> <b>new</b> <span class="i">Uri</span> <a id="35f9a58a2edccb93" href="../../../R/35f9a58a2edccb93.html" target="n" data-glyph="102,1" class="i property">ConnectionUri</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> RemoteRunspaceId of the remote runspace info object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+        <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#83013e264216b083" class="i field">InstanceIdParameterSet</a>)]
+        [<span class="i">ValidateNotNull</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Naming&quot;</span>, <span class="s">&quot;CA1704:IdentifiersShouldBeSpelledCorrectly&quot;</span>, <span class="i">MessageId</span> = <span class="s">&quot;Runspace&quot;</span>)]
+        <b>public</b> <span class="i">Guid</span> <a id="4fe41dc7ce1a90fd" href="../../../R/4fe41dc7ce1a90fd.html" target="n" data-glyph="102,1" class="i property">InstanceId</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> SessionId of the remote runspace info object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+            <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+             <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#e6d864041087a5e9" class="i field">IdParameterSet</a>)]
+        [<span class="i">ValidateNotNull</span>]
+        <b>public int</b> <a id="597c1321841f0ab6" href="../../../R/597c1321841f0ab6.html" target="n" data-glyph="102,1" class="i property">Id</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of the remote runspace info object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+        <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#bd7325e1ec9e2b6b" class="i field">NameParameterSet</a>)]
+        <b>public string</b> <a id="562458a7adfb54c0" href="../../../R/562458a7adfb54c0.html" target="n" data-glyph="102,1" class="i property">Name</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When set and in loopback scenario (localhost) this enables creation of WSMan</span>
+        <span class="c">///</span><span class="c"> host process with the user interactive token, allowing PowerShell script network access,</span>
+        <span class="c">///</span><span class="c"> i.e., allows going off box.  When this property is true and a PSSession is disconnected,</span>
+        <span class="c">///</span><span class="c"> reconnection is allowed only if reconnecting from a PowerShell session on the same box.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#00bdee282001266a" class="i field">UriParameterSet</a>)]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="4de94eb0609993e9" href="../../../R/4de94eb0609993e9.html" target="n" data-glyph="102,1" class="i property">EnableNetworkAccess</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Virtual machine ID.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>)]
+        [<span class="i">Alias</span>(<span class="s">&quot;VMGuid&quot;</span>)]
+        <b>public</b> <b>new</b> <span class="i">Guid</span> <a id="54a67d202500f72f" href="../../../R/54a67d202500f72f.html" target="n" data-glyph="102,1" class="i property">VMId</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Virtual machine name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>)]
+        <b>public</b> <b>new</b> <b>string</b> <a id="d77a3fa34624f241" href="../../../R/d77a3fa34624f241.html" target="n" data-glyph="102,1" class="i property">VMName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Specifies the credentials of the user to impersonate in the</span>
+        <span class="c">///</span><span class="c"> virtual machine. If this parameter is not specified then the</span>
+        <span class="c">///</span><span class="c"> credentials of the current user process will be assumed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="t t">PSRemotingBaseCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="t t">PSRemotingBaseCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#00bdee282001266a" class="i field">UriParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>)]
+        [<span class="i">Credential</span>()]
+        <b>public override</b> <a href="../../Credential.cs.html#6245dc122e2f1916" class="t t">PSCredential</a> <a id="4eb9a42bbfcf84b8" href="../../../R/4eb9a42bbfcf84b8.html" target="n" data-glyph="102,1" class="i property">Credential</a>
+        {
+            <b>get</b> { <b>return</b> <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="k">base</a>.<a href="PSRemotingCmdlet.cs.html#6bc302d77d480a65" class="i property">Credential</a>; }
+ 
+            <b>set</b> { <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="k">base</a>.<a href="PSRemotingCmdlet.cs.html#6bc302d77d480a65" class="i property">Credential</a> = <b>value</b>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Id of the target container.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+            <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>, <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#572318a2191690f0" class="i field">ContainerIdParameterSet</a>)]
+        <b>public</b> <b>new</b> <b>string</b> <a id="92494021ae24264d" href="../../../R/92494021ae24264d.html" target="n" data-glyph="102,1" class="i property">ContainerId</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> For WSMan sessions:</span>
+        <span class="c">///</span><span class="c"> If this parameter is not specified then the value specified in</span>
+        <span class="c">///</span><span class="c"> the environment variable DEFAULTREMOTESHELLNAME will be used. If</span>
+        <span class="c">///</span><span class="c"> this is not set as well, then Microsoft.PowerShell is used.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> For VM/Container sessions:</span>
+        <span class="c">///</span><span class="c"> If this parameter is not specified then no configuration is used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#00bdee282001266a" class="i field">UriParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#572318a2191690f0" class="i field">ContainerIdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>)]
+        <b>public string</b> <a id="b38e0c437531bbd0" href="../../../R/b38e0c437531bbd0.html" target="n" data-glyph="102,1" class="i property">ConfigurationName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Suppress PSRemotingBaseCmdlet SSH hash parameter set
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Suppress SSHConnection parameter set.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Hashtable</span>[] <a id="69e677dc1759e887" href="../../../R/69e677dc1759e887.html" target="n" data-glyph="102,1" class="i property">SSHConnection</a>
+        {
+            <b>get</b> { <b>return</b> <b>null</b>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Resolves shellname and appname.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="955182fc6fea130e" href="../../../R/955182fc6fea130e.html" target="n" data-glyph="75,1" class="i method">BeginProcessing</a>()
+        {
+            <a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="k">base</a>.<a href="PSRemotingCmdlet.cs.html#2b247ef886dca829" class="i method">BeginProcessing</a>();
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a>))
+            {
+                <b>if</b> ((<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>) ||
+                    (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="#6473c5d5c4356c4e" class="t t">EnterPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#00bdee282001266a" class="i field">UriParameterSet</a>))
+                {
+                    <span class="c">// set to default value for WSMan session</span>
+                    <a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a> = <a href="PSRemotingCmdlet.cs.html#f6b9edb5e4879089" class="i method">ResolveShell</a>(<b>null</b>);
+                }
+                <b>else</b>
+                {
+                    <span class="c">// convert null to string.Empty for VM/Container session</span>
+                    <a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a> = <b>string</b>.<span class="i">Empty</span>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process record.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="a1cbcf5590318398" href="../../../R/a1cbcf5590318398.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <span class="c">// Push the remote runspace on the local host.</span>
+            <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r0 rd" class="r0 r">host</span> = <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a> <b>as</b> <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a>;
+            <b>if</b> (<span class="r0 r">host</span> == <b>null</b>)
+            {
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="i">ArgumentException</span>(<span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HostDoesNotSupportPushRunspace</span>)),
+                        <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#5fbf9c767c0c462c" class="i field">HostDoesNotSupportPushRunspace</a>),
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <b>null</b>));
+                <b>return</b>;
+            }
+ 
+            <span class="c">// for the console host and Graphical PowerShell host</span>
+            <span class="c">// we want to skip pushing into the the runspace if</span>
+            <span class="c">// the host is in a nested prompt</span>
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>.<span class="i n">Host</span>.<a href="../../hostifaces/InternalHost.cs.html#83104f2ad59a19df" class="t t">InternalHost</a> <span id="r1 rd" class="r1 r">chost</span> =
+                <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a> <b>as</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>.<span class="i n">Host</span>.<a href="../../hostifaces/InternalHost.cs.html#83104f2ad59a19df" class="t t">InternalHost</a>;
+ 
+            <b>if</b> (!<a href="#9d85a6476db4ac5d" class="i method">IsParameterSetForVM</a>() &amp;&amp;
+                !<a href="#a399b48ce9d4e33a" class="i method">IsParameterSetForContainer</a>() &amp;&amp;
+                !<a href="#f2bc4263c723f4b8" class="i method">IsParameterSetForVMContainerSession</a>() &amp;&amp;
+                <span class="r1 r">chost</span> != <b>null</b> &amp;&amp; <span class="r1 r">chost</span>.<a href="../../hostifaces/InternalHost.cs.html#2f1bcbdb45eeb8f1" class="i method">HostInNestedPrompt</a>())
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(<b>new</b> <span class="t">ErrorRecord</span>(
+                    <b>new</b> <span class="i">InvalidOperationException</span>(<a href="../common/remotingexceptions.cs.html#53047fc052e9b445" class="t t">PSRemotingErrorInvariants</a>.<span class="i">FormatResourceString</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HostInNestedPrompt</span>)),
+                    <span class="s">&quot;HostInNestedPrompt&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <span class="r1 r">chost</span>));
+            }
+ 
+            <span class="c">/*Microsoft.Windows.PowerShell.Gui.Internal.GPSHost ghost = this.Host as Microsoft.Windows.PowerShell.Gui.Internal.GPSHost;
+ 
+            if (ghost != null &amp;&amp; ghost.HostInNestedPrompt())
+            {
+                ThrowTerminatingError(new ErrorRecord(
+                    new InvalidOperationException(PSRemotingErrorInvariants.FormatResourceString(PSRemotingErrorId.HostInNestedPrompt)),
+                    &quot;HostInNestedPrompt&quot;, ErrorCategory.InvalidOperation, wpshost));
+            }*/</span>
+ 
+            <span class="c">// Get the remote runspace.</span>
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r2 rd" class="r2 r">remoteRunspace</span> = <b>null</b>;
+            <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+            {
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#d6426977cb031280" class="i method">CreateRunspaceWhenComputerNameParameterSpecified</a>();
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#00bdee282001266a" class="i field">UriParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#90a10cdb6b78da8e" class="i method">CreateRunspaceWhenUriParameterSpecified</a>();
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = (<a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>)<a href="#9c1740457385d5db" class="i property">Session</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#83013e264216b083" class="i field">InstanceIdParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#bbf69e62a4f13099" class="i method">GetRunspaceMatchingRunspaceId</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#4fe41dc7ce1a90fd" class="i property">InstanceId</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#e6d864041087a5e9" class="i field">IdParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#827d39b50ac9069a" class="i method">GetRunspaceMatchingSessionId</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#597c1321841f0ab6" class="i property">Id</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#bd7325e1ec9e2b6b" class="i field">NameParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#99b905a96b5e4418" class="i method">GetRunspaceMatchingName</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#562458a7adfb54c0" class="i property">Name</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>:
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#37bf1de2e623ad84" class="i method">GetRunspaceForVMSession</a>();
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#572318a2191690f0" class="i field">ContainerIdParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#275443b74b40a3d3" class="i method">GetRunspaceForContainerSession</a>();
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#1d1f1661df97e61a" class="i field">SSHHostParameterSet</a>:
+                    <span class="r2 r">remoteRunspace</span> = <a href="#39591fdd66a0b4e8" class="i method">GetRunspaceForSSHSession</a>();
+                    <b>break</b>;
+            }
+ 
+            <span class="c">// If runspace is null then the error record has already been written and we can exit.</span>
+            <b>if</b> (<span class="r2 r">remoteRunspace</span> == <b>null</b>) { <b>return</b>; }
+ 
+            <span class="c">// If the runspace is in a disconnected state try to connect.</span>
+            <b>bool</b> <span id="r3 rd" class="r3 r">runspaceConnected</span> = <b>false</b>;
+            <b>if</b> (<span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#0a8fc62a22d129a1" class="i field">Disconnected</a>)
+            {
+                <b>if</b> (!<span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#be12cabf607e3495" class="i property">CanConnect</a>)
+                {
+                    <b>string</b> <span id="r4 rd" class="r4 r">message</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">SessionNotAvailableForConnection</span>);
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <a href="../../../utils/RuntimeException.cs.html#e4538a388d78c143" class="t constructor">RuntimeException</a>(<span class="r4 r">message</span>), <span class="s">&quot;EnterPSSessionCannotConnectDisconnectedSession&quot;</span>,
+                                <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <span class="r2 r">remoteRunspace</span>));
+ 
+                    <b>return</b>;
+                }
+ 
+                <span class="c">// Connect the runspace.</span>
+                <span class="i">Exception</span> <span id="r5 rd" class="r5 r">ex</span> = <b>null</b>;
+                <b>try</b>
+                {
+                    <span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#25aba598f1a8b95a" class="i method">Connect</a>();
+                    <span class="r3 r">runspaceConnected</span> = <b>true</b>;
+                }
+                <b>catch</b> (<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r6 rd" class="r6 r">e</span>)
+                {
+                    <span class="r5 r">ex</span> = <span class="r6 r">e</span>;
+                }
+                <b>catch</b> (<a href="../../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a> <span id="r7 rd" class="r7 r">e</span>)
+                {
+                    <span class="r5 r">ex</span> = <span class="r7 r">e</span>;
+                }
+                <b>catch</b> (<a href="../../hostifaces/RunspacePool.cs.html#741ffc1755303d69" class="t t">InvalidRunspacePoolStateException</a> <span id="r8 rd" class="r8 r">e</span>)
+                {
+                    <span class="r5 r">ex</span> = <span class="r8 r">e</span>;
+                }
+ 
+                <b>if</b> (<span class="r5 r">ex</span> != <b>null</b>)
+                {
+                    <b>string</b> <span id="r9 rd" class="r9 r">message</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">SessionConnectFailed</span>);
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <a href="../../../utils/RuntimeException.cs.html#e550883d468d8c30" class="t constructor">RuntimeException</a>(<span class="r9 r">message</span>, <span class="r5 r">ex</span>), <span class="s">&quot;EnterPSSessionConnectSessionFailed&quot;</span>,
+                                <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <span class="r2 r">remoteRunspace</span>));
+ 
+                    <b>return</b>;
+                }
+            }
+ 
+            <span class="c">// Verify that the runspace is open.</span>
+            <b>if</b> (<span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> != <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+            {
+                <b>if</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)
+                {
+                    <b>string</b> <span id="r10 rd" class="r10 r">sessionName</span> = (<a href="#9c1740457385d5db" class="i property">Session</a> != <b>null</b>) ? <a href="#9c1740457385d5db" class="i property">Session</a>.<a href="../client/remoterunspaceinfo.cs.html#dcc034e330dc7781" class="i property">Name</a> : <b>string</b>.<span class="i">Empty</span>;
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSSessionBrokenSession</span>,
+                                <span class="r10 r">sessionName</span>, <span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#912a4002c4156bbf" class="i property">ConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#64143b41c05cd7ea" class="i property">ComputerName</a>, <span class="r2 r">remoteRunspace</span>.<a href="../../hostifaces/Connection.cs.html#af7b715fe8b1bee2" class="i property">InstanceId</a>)),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#39bdc81ac37bc1a5" class="i field">PushedRunspaceMustBeOpen</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <b>null</b>));
+                }
+                <b>else</b>
+                {
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">PushedRunspaceMustBeOpen</span>)),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#39bdc81ac37bc1a5" class="i field">PushedRunspaceMustBeOpen</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <b>null</b>));
+                }
+ 
+                <b>return</b>;
+            }
+ 
+            <a href="../../debugger/debugger.cs.html#9e8f0b396592e65c" class="t t">Debugger</a> <span id="r11 rd" class="r11 r">debugger</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <b>if</b> (<span class="r0 r">host</span>.<a href="../../hostifaces/MshHost.cs.html#bb0974f45a993c53" class="i property">Runspace</a> != <b>null</b>)
+                {
+                    <span class="r11 r">debugger</span> = <span class="r0 r">host</span>.<a href="../../hostifaces/MshHost.cs.html#bb0974f45a993c53" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#d6610640d00b19f5" class="i property">Debugger</a>;
+                }
+            }
+            <b>catch</b> (<a href="../../../utils/MshNotImplementedException.cs.html#ddab2b46a60907f3" class="t t">PSNotImplementedException</a>) { }
+ 
+            <b>bool</b> <span id="r12 rd" class="r12 r">supportRunningCommand</span> = ((<span class="r11 r">debugger</span> != <b>null</b>) &amp;&amp; ((<span class="r11 r">debugger</span>.<a href="../../debugger/debugger.cs.html#cb370f0b35bef91f" class="i property">DebugMode</a> &amp; <a href="../../debugger/debugger.cs.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="../../debugger/debugger.cs.html#36492991f477f6e1" class="i field">RemoteScript</a>) == <a href="../../debugger/debugger.cs.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="../../debugger/debugger.cs.html#36492991f477f6e1" class="i field">RemoteScript</a>));
+            <b>if</b> (<span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#c9a8dc56926b5fdf" class="i property">RunspaceAvailability</a> != <a href="../../hostifaces/Connection.cs.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="../../hostifaces/Connection.cs.html#64bc5c5290cfb16d" class="i field">Available</a>)
+            {
+                <span class="c">// Session has running command.</span>
+                <b>if</b> (!<span class="r12 r">supportRunningCommand</span>)
+                {
+                    <span class="c">// Host does not support remote debug and cannot connect to running command.</span>
+                    <b>if</b> (<span class="r3 r">runspaceConnected</span>)
+                    {
+                        <span class="c">// If we succeeded connecting the session (runspace) but it is already running a command,</span>
+                        <span class="c">// emit an error for this case because since it is disconnected this session object will</span>
+                        <span class="c">// never complete and the user must use *reconstruct* scenario to retrieve data.</span>
+                        <b>string</b> <span id="r13 rd" class="r13 r">message</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterPSSessionDisconnected</span>,
+                                                        <span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#3e2394bcbf12f720" class="i property">PSSessionName</a>);
+                        <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                            <b>new</b> <span class="t">ErrorRecord</span>(
+                                <b>new</b> <a href="../../../utils/RuntimeException.cs.html#e4538a388d78c143" class="t constructor">RuntimeException</a>(<span class="r13 r">message</span>), <span class="s">&quot;EnterPSSessionConnectSessionNotAvailable&quot;</span>,
+                                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <a href="#9c1740457385d5db" class="i property">Session</a>));
+ 
+                        <span class="c">// Leave session in original disconnected state.</span>
+                        <span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#69452270facf0a86" class="i method">DisconnectAsync</a>();
+ 
+                        <b>return</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// If the remote runspace is currently not available then let user know that this command</span>
+                        <span class="c">// will not complete until it becomes available.</span>
+                        <a href="../../cmdlet.cs.html#dda5a07d1a8a6cba" class="i method">WriteWarning</a>(<span class="i">GetMessage</span>(<span class="i">RunspaceStrings</span>.<span class="i">RunspaceNotReady</span>));
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Running commands supported.</span>
+                    <span class="c">// Warn user that they are entering a session that is running a command and output may</span>
+                    <span class="c">// be going to a job object.</span>
+                    <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r14 rd" class="r14 r">job</span> = <a href="#ab4a202701d0d239" class="i method">FindJobForRunspace</a>(<span class="r2 r">remoteRunspace</span>.<a href="../../hostifaces/Connection.cs.html#af7b715fe8b1bee2" class="i property">InstanceId</a>);
+                    <b>string</b> <span id="r15 rd" class="r15 r">msg</span>;
+                    <b>if</b> (<span class="r14 r">job</span> != <b>null</b>)
+                    {
+                        <span class="r15 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                            <span class="i">RunspaceStrings</span>.<span class="i">RunningCmdWithJob</span>,
+                            (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r14 r">job</span>.<a href="../client/Job.cs.html#6332c7ef857bb146" class="i property">Name</a>)) ? <span class="r14 r">job</span>.<a href="../client/Job.cs.html#6332c7ef857bb146" class="i property">Name</a> : <b>string</b>.<span class="i">Empty</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <b>if</b> (<span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#c9a8dc56926b5fdf" class="i property">RunspaceAvailability</a> == <a href="../../hostifaces/Connection.cs.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="../../hostifaces/Connection.cs.html#244d7672812dd8a9" class="i field">RemoteDebug</a>)
+                        {
+                            <span class="r15 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                                <span class="i">RunspaceStrings</span>.<span class="i">RunningCmdDebugStop</span>);
+                        }
+                        <b>else</b>
+                        {
+                            <span class="r15 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                                <span class="i">RunspaceStrings</span>.<span class="i">RunningCmdWithoutJob</span>);
+                        }
+                    }
+ 
+                    <a href="../../cmdlet.cs.html#dda5a07d1a8a6cba" class="i method">WriteWarning</a>(<span class="r15 r">msg</span>);
+                }
+            }
+ 
+            <span class="c">// Make sure any PSSession object passed in is saved in the local runspace repository.</span>
+            <b>if</b> (<a href="#9c1740457385d5db" class="i property">Session</a> != <b>null</b>)
+            {
+                <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#455bd8325dd03be4" class="i property">RunspaceRepository</a>.<a href="runspacerepository.cs.html#a860d36943db1f52" class="i method">AddOrReplace</a>(<a href="#9c1740457385d5db" class="i property">Session</a>);
+            }
+ 
+            <span class="c">// prepare runspace for prompt</span>
+            <a href="#3b687d79b9642b60" class="i method">SetRunspacePrompt</a>(<span class="r2 r">remoteRunspace</span>);
+ 
+            <b>try</b>
+            {
+                <span class="r0 r">host</span>.<a href="../../hostifaces/MshHost.cs.html#0de7c13b058ff86d" class="i method">PushRunspace</a>(<span class="r2 r">remoteRunspace</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <span class="c">// A third-party host can throw any exception here..we should</span>
+                <span class="c">// clean the runspace created in this case.</span>
+                <b>if</b> ((<span class="r2 r">remoteRunspace</span> != <b>null</b>) &amp;&amp; (<span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a7ae975f02f2273a" class="i property">ShouldCloseOnPop</a>))
+                {
+                    <span class="r2 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#93d0f66da676bbe4" class="i method">Close</a>();
+                }
+ 
+                <span class="c">// rethrow the exception after cleanup.</span>
+                <b>throw</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method will until the runspace is opened and warnings if any</span>
+        <span class="c">///</span><span class="c"> are reported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="9cf7a0723990c733" href="../../../R/9cf7a0723990c733.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <b>if</b> (<a href="#75b59636e74f4cee" class="i field">_stream</a> != <b>null</b>)
+            {
+                <b>while</b> (<b>true</b>)
+                {
+                    <span class="c">// Keep reading objects until end of stream is encountered</span>
+                    <a href="#75b59636e74f4cee" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#abc89c235e72527c" class="i property">ObjectReader</a>.<a href="../../../utils/IObjectReader.cs.html#284e3297ec4d8f81" class="i property">WaitHandle</a>.<span class="i">WaitOne</span>();
+ 
+                    <b>if</b> (!<a href="#75b59636e74f4cee" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#abc89c235e72527c" class="i property">ObjectReader</a>.<a href="../../../utils/IObjectReader.cs.html#427c991c7263cfda" class="i property">EndOfPipeline</a>)
+                    {
+                        <b>object</b> <span id="r16 rd" class="r16 r">streamObject</span> = <a href="#75b59636e74f4cee" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#abc89c235e72527c" class="i property">ObjectReader</a>.<a href="../../../utils/IObjectReader.cs.html#44674511beae23a4" class="i method">Read</a>();
+                        <a href="PSRemotingCmdlet.cs.html#8c7d6343604dfd87" class="i method">WriteStreamObject</a>((<span class="i">Action</span>&lt;<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt;)<span class="r16 r">streamObject</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <b>break</b>;
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="13aba027ddc69ebb" href="../../../R/13aba027ddc69ebb.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="k">var</a> <span id="r17 rd" class="r17 r">remoteRunspace</span> = <a href="#0357286504839e90" class="i field">_tempRunspace</a>;
+            <b>if</b> (<span class="r17 r">remoteRunspace</span> != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <span class="r17 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#0bab9589a46f6bec" class="i method">CloseAsync</a>();
+                }
+                <b>catch</b> (<a href="../../hostifaces/Connection.cs.html#340ccbbd1c6e8b87" class="t t">InvalidRunspaceStateException</a>) { }
+ 
+                <b>return</b>;
+            }
+ 
+            <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r18 rd" class="r18 r">host</span> = <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a> <b>as</b> <a href="../../hostifaces/MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a>;
+            <b>if</b> (<span class="r18 r">host</span> == <b>null</b>)
+            {
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="i">ArgumentException</span>(<span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HostDoesNotSupportPushRunspace</span>)),
+                        <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#5fbf9c767c0c462c" class="i field">HostDoesNotSupportPushRunspace</a>),
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <b>null</b>));
+                <b>return</b>;
+            }
+ 
+            <span class="r18 r">host</span>.<a href="../../hostifaces/MshHost.cs.html#bfefb28a81efacc0" class="i method">PopRunspace</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create temporary remote runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="d6d1b2fd2bf9d6f3" href="../../../R/d6d1b2fd2bf9d6f3.html" target="n" data-glyph="76,1" class="i method">CreateTemporaryRemoteRunspace</a>(<a href="../../hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r19 rd" class="r19 r">host</span>, <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a> <span id="r20 rd" class="r20 r">connectionInfo</span>)
+        {
+            <span class="c">// Create and open the runspace.</span>
+            <b>int</b> <span id="r21 rd" class="r21 r">rsId</span>;
+            <b>string</b> <span id="r22 rd" class="r22 r">rsName</span> = <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>.<a href="../client/remoterunspaceinfo.cs.html#62039237bb23d055" class="i method">GenerateRunspaceName</a>(<b>out</b> <span class="r21 r">rsId</span>);
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r23 rd" class="r23 r">remoteRunspace</span> = <b>new</b> <a href="../client/remoterunspace.cs.html#926354f3385f000b" class="t constructor">RemoteRunspace</a>(
+                <a href="../../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../../Utils.cs.html#7c94e15c53ac5a07" class="i method">GetTypeTableFromExecutionContextTLS</a>(),
+                <span class="r20 r">connectionInfo</span>,
+                <span class="r19 r">host</span>,
+                <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="PSRemotingCmdlet.cs.html#c791712b37902fe7" class="i property">SessionOption</a>.<a href="PSRemotingCmdlet.cs.html#e85ec0b1616d3e82" class="i property">ApplicationArguments</a>,
+                <span class="r22 r">rsName</span>,
+                <span class="r21 r">rsId</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r23 r">remoteRunspace</span> != <b>null</b>, <span class="s">&quot;Expected remoteRunspace != null&quot;</span>);
+            <span class="r23 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#f21dad86b0e2d67e" class="i">URIRedirectionReported</a> += <span class="i">HandleURIDirectionReported</span>;
+ 
+            <a href="#75b59636e74f4cee" class="i field">_stream</a> = <b>new</b> <a href="../../../utils/ObjectStream.cs.html#9f848b3587e1f797" class="t constructor">ObjectStream</a>();
+            <b>try</b>
+            {
+                <span class="r23 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#8f5246099264f315" class="i method">Open</a>();
+ 
+                <span class="c">// Mark this temporary runspace so that it closes on pop.</span>
+                <span class="r23 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a7ae975f02f2273a" class="i property">ShouldCloseOnPop</a> = <b>true</b>;
+            }
+            <b>finally</b>
+            {
+                <span class="c">// unregister uri redirection handler</span>
+                <span class="r23 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#f21dad86b0e2d67e" class="i">URIRedirectionReported</a> -= <span class="i">HandleURIDirectionReported</span>;
+                <span class="c">// close the internal object stream after runspace is opened</span>
+                <span class="c">// Runspace.Open() might throw exceptions..this will make sure</span>
+                <span class="c">// the stream is always closed.</span>
+                <a href="#75b59636e74f4cee" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<a href="../../../utils/IObjectWriter.cs.html#2c9b22a04af963c5" class="i method">Close</a>();
+ 
+                <span class="c">// make sure we dispose the temporary runspace if something bad happens</span>
+                <b>if</b> (<span class="r23 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> != <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+                {
+                    <span class="r23 r">remoteRunspace</span>.<a href="../../hostifaces/Connection.cs.html#47cd985e55a9f99c" class="i method">Dispose</a>();
+                    <span class="r23 r">remoteRunspace</span> = <b>null</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r23 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Write error create remote runspace failed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="e65022fbfdd3a8ec" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">WriteErrorCreateRemoteRunspaceFailed</a>(<span class="i">Exception</span> <span id="r24 rd" class="r24 r">exception</span>, <b>object</b> <span id="r25 rd" class="r25 r">argument</span>)
+        {
+            <span class="c">// set the transport message in the error detail so that</span>
+            <span class="c">// the user can directly get to see the message without</span>
+            <span class="c">// having to mine through the error record details</span>
+            <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r26 rd" class="r26 r">transException</span> =
+                        <span class="r24 r">exception</span> <b>as</b> <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a>;
+            <b>string</b> <span id="r27 rd" class="r27 r">errorDetails</span> = <b>null</b>;
+            <b>if</b> ((<span class="r26 r">transException</span> != <b>null</b>) &amp;&amp;
+                (<span class="r26 r">transException</span>.<a href="../common/remotingexceptions.cs.html#f96218464c4b7244" class="i property">ErrorCode</a> ==
+                    <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Client</span>.<a href="../fanin/WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="../fanin/WSManNativeAPI.cs.html#325ee0cf8be4313d" class="i field">ERROR_WSMAN_REDIRECT_REQUESTED</a>))
+            {
+                <span class="c">// Handling a special case for redirection..we should talk about</span>
+                <span class="c">// AllowRedirection parameter and WSManMaxRedirectionCount preference</span>
+                <span class="c">// variables</span>
+                <b>string</b> <span id="r28 rd" class="r28 r">message</span> = <a href="../common/remotingexceptions.cs.html#53047fc052e9b445" class="t t">PSRemotingErrorInvariants</a>.<span class="i">FormatResourceString</span>(
+                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">URIRedirectionReported</span>,
+                    <span class="r26 r">transException</span>.<span class="i">Message</span>,
+                    <span class="s">&quot;MaximumConnectionRedirectionCount&quot;</span>,
+                    <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>.<a href="PSRemotingCmdlet.cs.html#3b23821ea164740f" class="t t">PSRemotingBaseCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#079ce7151f202fe2" class="i field">DEFAULT_SESSION_OPTION</a>,
+                    <span class="s">&quot;AllowRedirection&quot;</span>);
+ 
+                <span class="r27 r">errorDetails</span> = <span class="r28 r">message</span>;
+            }
+ 
+            <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r29 rd" class="r29 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#63310140b5760920" class="t constructor">ErrorRecord</a>(<span class="r24 r">exception</span>, <span class="r25 r">argument</span>,
+                <span class="s">&quot;CreateRemoteRunspaceFailed&quot;</span>,
+                <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                <b>null</b>, <b>null</b>, <b>null</b>, <b>null</b>, <b>null</b>, <span class="r27 r">errorDetails</span>, <b>null</b>);
+ 
+            <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r29 r">errorRecord</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Write invalid argument error.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="52acd400ed4d0b76" href="../../../R/52acd400ed4d0b76.html" target="n" data-glyph="76,1" class="i method">WriteInvalidArgumentError</a>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a> <span id="r30 rd" class="r30 r">errorId</span>, <b>string</b> <span id="r31 rd" class="r31 r">resourceString</span>, <b>object</b> <span id="r32 rd" class="r32 r">errorArgument</span>)
+        {
+            <b>string</b> <span id="r33 rd" class="r33 r">message</span> = <a href="PSRemotingCmdlet.cs.html#ae4e30474662ef10" class="i method">GetMessage</a>(<span class="r31 r">resourceString</span>, <span class="r32 r">errorArgument</span>);
+            <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<b>new</b> <span class="t">ErrorRecord</span>(<b>new</b> <span class="i">ArgumentException</span>(<span class="r33 r">message</span>), <span class="r30 r">errorId</span>.<span class="i">ToString</span>(),
+                <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>, <span class="r32 r">errorArgument</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When the client remote session reports a URI redirection, this method will report the</span>
+        <span class="c">///</span><span class="c"> message to the user as a Warning using Host method calls.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="ed3920ac9ecc4cbf" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleURIDirectionReported</a>(<b>object</b> <span id="r34 rd" class="r34 r">sender</span>, <a href="../common/misc.cs.html#16d1e16a7ed9f8cc" class="t t">RemoteDataEventArgs</a>&lt;<span class="i">Uri</span>&gt; <span id="r35 rd" class="r35 r">eventArgs</span>)
+        {
+            <b>string</b> <span id="r36 rd" class="r36 r">message</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">URIRedirectWarningToHost</span>, <span class="r35 r">eventArgs</span>.<a href="../common/misc.cs.html#0896dbbd394ce2e6" class="i property">Data</a>.<span class="i">OriginalString</span>);
+            <span class="i">Action</span>&lt;<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt; <span id="r37 rd" class="r37 r">streamObject</span> = (<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r38 rd" class="r38 r">cmdlet</span>) =&gt; <span class="r38 r">cmdlet</span>.<a href="../../cmdlet.cs.html#dda5a07d1a8a6cba" class="i method">WriteWarning</a>(<span class="r36 r">message</span>);
+            <a href="#75b59636e74f4cee" class="i field">_stream</a>.<span class="i">Write</span>(<span class="r37 r">streamObject</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create runspace when computer name parameter specified.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="d6426977cb031280" href="../../../R/d6426977cb031280.html" target="n" data-glyph="76,1" class="i method">CreateRunspaceWhenComputerNameParameterSpecified</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r39 rd" class="r39 r">remoteRunspace</span> = <b>null</b>;
+            <b>string</b> <span id="r40 rd" class="r40 r">resolvedComputerName</span> = <a href="PSRemotingCmdlet.cs.html#bd0c84ecceec9eb5" class="i method">ResolveComputerName</a>(<a href="#9bd6c27a3195efd9" class="i property">ComputerName</a>);
+            <b>try</b>
+            {
+                <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a> <span id="r41 rd" class="r41 r">connectionInfo</span> = <b>null</b>;
+                <span class="r41 r">connectionInfo</span> = <b>new</b> <a href="../common/RunspaceConnectionInfo.cs.html#633c07f34544868e" class="t constructor">WSManConnectionInfo</a>();
+                <b>string</b> <span id="r42 rd" class="r42 r">scheme</span> = <a href="PSRemotingCmdlet.cs.html#f7dc857c5bcbf5f9" class="i property">UseSSL</a>.<a href="../../MshCmdlet.cs.html#e9c777a85700d3da" class="i property">IsPresent</a> ? <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#e8cee89627b2168d" class="i field">HttpsScheme</a> : <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#46c932f319b767db" class="i field">HttpScheme</a>;
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#74b71e9668d24a47" class="i property">ComputerName</a> = <span class="r40 r">resolvedComputerName</span>;
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#1aeb2cc802b3a879" class="i property">Port</a> = <a href="PSRemotingCmdlet.cs.html#c7b9201c1ed0baf1" class="i property">Port</a>;
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#0757157b257825db" class="i property">AppName</a> = <a href="PSRemotingCmdlet.cs.html#eb12660da611783d" class="i property">ApplicationName</a>;
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#a0ee4c890acec948" class="i property">ShellUri</a> = <a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a>;
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#d29b8b073c4a8931" class="i property">Scheme</a> = <span class="r42 r">scheme</span>;
+                <b>if</b> (<a href="PSRemotingCmdlet.cs.html#f78523e35a5c6bee" class="i property">CertificateThumbprint</a> != <b>null</b>)
+                {
+                    <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#4589105955753e41" class="i property">CertificateThumbprint</a> = <a href="PSRemotingCmdlet.cs.html#f78523e35a5c6bee" class="i property">CertificateThumbprint</a>;
+                }
+                <b>else</b>
+                {
+                    <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#5a783a782d2a0c8e" class="i property">Credential</a> = <a href="#4eb9a42bbfcf84b8" class="i property">Credential</a>;
+                }
+ 
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#e1a2e5b5a5d08c41" class="i property">AuthenticationMechanism</a> = <a href="PSRemotingCmdlet.cs.html#3fdef7f4fed9b04a" class="i property">Authentication</a>;
+                <a href="PSRemotingCmdlet.cs.html#6bc5b72b4986cb8e" class="i method">UpdateConnectionInfo</a>(<span class="r41 r">connectionInfo</span>);
+ 
+                <span class="r41 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#bccff2b013731c62" class="i property">EnableNetworkAccess</a> = <a href="#4de94eb0609993e9" class="i property">EnableNetworkAccess</a>;
+ 
+                <span class="r39 r">remoteRunspace</span> = <a href="#d6d1b2fd2bf9d6f3" class="i method">CreateTemporaryRemoteRunspace</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>, <span class="r41 r">connectionInfo</span>);
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span> <span id="r43 rd" class="r43 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r43 r">e</span>, <span class="r40 r">resolvedComputerName</span>);
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span> <span id="r44 rd" class="r44 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r44 r">e</span>, <span class="r40 r">resolvedComputerName</span>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r45 rd" class="r45 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r45 r">e</span>, <span class="r40 r">resolvedComputerName</span>);
+            }
+ 
+            <b>return</b> <span class="r39 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create runspace when uri parameter specified.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="90a10cdb6b78da8e" href="../../../R/90a10cdb6b78da8e.html" target="n" data-glyph="76,1" class="i method">CreateRunspaceWhenUriParameterSpecified</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r46 rd" class="r46 r">remoteRunspace</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a> <span id="r47 rd" class="r47 r">connectionInfo</span> = <b>new</b> <a href="../common/RunspaceConnectionInfo.cs.html#633c07f34544868e" class="t constructor">WSManConnectionInfo</a>();
+                <span class="r47 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#eb73ffdb9b586505" class="i property">ConnectionUri</a> = <a href="#35f9a58a2edccb93" class="i property">ConnectionUri</a>;
+                <span class="r47 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#a0ee4c890acec948" class="i property">ShellUri</a> = <a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a>;
+                <b>if</b> (<a href="PSRemotingCmdlet.cs.html#f78523e35a5c6bee" class="i property">CertificateThumbprint</a> != <b>null</b>)
+                {
+                    <span class="r47 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#4589105955753e41" class="i property">CertificateThumbprint</a> = <a href="PSRemotingCmdlet.cs.html#f78523e35a5c6bee" class="i property">CertificateThumbprint</a>;
+                }
+                <b>else</b>
+                {
+                    <span class="r47 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#5a783a782d2a0c8e" class="i property">Credential</a> = <a href="#4eb9a42bbfcf84b8" class="i property">Credential</a>;
+                }
+ 
+                <span class="r47 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#e1a2e5b5a5d08c41" class="i property">AuthenticationMechanism</a> = <a href="PSRemotingCmdlet.cs.html#3fdef7f4fed9b04a" class="i property">Authentication</a>;
+                <a href="PSRemotingCmdlet.cs.html#6bc5b72b4986cb8e" class="i method">UpdateConnectionInfo</a>(<span class="r47 r">connectionInfo</span>);
+                <span class="r47 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#bccff2b013731c62" class="i property">EnableNetworkAccess</a> = <a href="#4de94eb0609993e9" class="i property">EnableNetworkAccess</a>;
+                <span class="r46 r">remoteRunspace</span> = <a href="#d6d1b2fd2bf9d6f3" class="i method">CreateTemporaryRemoteRunspace</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>, <span class="r47 r">connectionInfo</span>);
+            }
+            <b>catch</b> (<span class="i">UriFormatException</span> <span id="r48 rd" class="r48 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r48 r">e</span>, <a href="#35f9a58a2edccb93" class="i property">ConnectionUri</a>);
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span> <span id="r49 rd" class="r49 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r49 r">e</span>, <a href="#35f9a58a2edccb93" class="i property">ConnectionUri</a>);
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span> <span id="r50 rd" class="r50 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r50 r">e</span>, <a href="#35f9a58a2edccb93" class="i property">ConnectionUri</a>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r51 rd" class="r51 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r51 r">e</span>, <a href="#35f9a58a2edccb93" class="i property">ConnectionUri</a>);
+            }
+            <b>catch</b> (<span class="i">NotSupportedException</span> <span id="r52 rd" class="r52 r">e</span>)
+            {
+                <span class="i">WriteErrorCreateRemoteRunspaceFailed</span>(<span class="r52 r">e</span>, <a href="#35f9a58a2edccb93" class="i property">ConnectionUri</a>);
+            }
+ 
+            <b>return</b> <span class="r46 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get runspace matching condition.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="cc89c0d8f1d06686" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetRunspaceMatchingCondition</a>(
+            <span class="i">Predicate</span>&lt;<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>&gt; <span id="r53 rd" class="r53 r">condition</span>,
+            <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a> <span id="r54 rd" class="r54 r">tooFew</span>,
+            <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a> <span id="r55 rd" class="r55 r">tooMany</span>,
+            <b>string</b> <span id="r56 rd" class="r56 r">tooFewResourceString</span>,
+            <b>string</b> <span id="r57 rd" class="r57 r">tooManyResourceString</span>,
+            <b>object</b> <span id="r58 rd" class="r58 r">errorArgument</span>)
+        {
+            <span class="c">// Find matches.</span>
+            <span class="i">List</span>&lt;<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>&gt; <span id="r59 rd" class="r59 r">matches</span> = <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#455bd8325dd03be4" class="i property">RunspaceRepository</a>.<a href="runspacerepository.cs.html#63a7ff9561dc2e86" class="i property">Runspaces</a>.<span class="i">FindAll</span>(<span class="r53 r">condition</span>);
+ 
+            <span class="c">// Validate.</span>
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r60 rd" class="r60 r">remoteRunspace</span> = <b>null</b>;
+            <b>if</b> (<span class="r59 r">matches</span>.<span class="i">Count</span> == 0)
+            {
+                <a href="#52acd400ed4d0b76" class="i method">WriteInvalidArgumentError</a>(<span class="r54 r">tooFew</span>, <span class="r56 r">tooFewResourceString</span>, <span class="r58 r">errorArgument</span>);
+            }
+            <b>else</b> <b>if</b> (<span class="r59 r">matches</span>.<span class="i">Count</span> &gt; 1)
+            {
+                <a href="#52acd400ed4d0b76" class="i method">WriteInvalidArgumentError</a>(<span class="r55 r">tooMany</span>, <span class="r57 r">tooManyResourceString</span>, <span class="r58 r">errorArgument</span>);
+            }
+            <b>else</b>
+            {
+                <span class="r60 r">remoteRunspace</span> = (<a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>)<span class="r59 r">matches</span>[0].<span class="i">Runspace</span>;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r60 r">remoteRunspace</span> != <b>null</b>, <span class="s">&quot;Expected remoteRunspace != null&quot;</span>);
+            }
+ 
+            <b>return</b> <span class="r60 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get runspace matching runspace id.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="bbf69e62a4f13099" href="../../../R/bbf69e62a4f13099.html" target="n" data-glyph="76,1" class="i method">GetRunspaceMatchingRunspaceId</a>(<span class="i">Guid</span> <span id="r61 rd" class="r61 r">remoteRunspaceId</span>)
+        {
+            <b>return</b> <span class="i">GetRunspaceMatchingCondition</span>(
+                <span class="i">condition</span>: <span id="r62 rd" class="r62 r">info</span> =&gt; <span class="r62 r">info</span>.<span class="i">InstanceId</span> == <span class="r61 r">remoteRunspaceId</span>,
+                <span class="i">tooFew</span>: <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#b3c189f77d861124" class="i field">RemoteRunspaceNotAvailableForSpecifiedRunspaceId</a>,
+                <span class="i">tooMany</span>: <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#c1028b1f8dcf0766" class="i field">RemoteRunspaceHasMultipleMatchesForSpecifiedRunspaceId</a>,
+                <span class="i">tooFewResourceString</span>: <span class="i">RemotingErrorIdStrings</span>.<span class="i">RemoteRunspaceNotAvailableForSpecifiedRunspaceId</span>,
+                <span class="i">tooManyResourceString</span>: <span class="i">RemotingErrorIdStrings</span>.<span class="i">RemoteRunspaceHasMultipleMatchesForSpecifiedRunspaceId</span>,
+                <span class="i">errorArgument</span>: <span class="r61 r">remoteRunspaceId</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get runspace matching session id.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="827d39b50ac9069a" href="../../../R/827d39b50ac9069a.html" target="n" data-glyph="76,1" class="i method">GetRunspaceMatchingSessionId</a>(<b>int</b> <span id="r63 rd" class="r63 r">sessionId</span>)
+        {
+            <b>return</b> <span class="i">GetRunspaceMatchingCondition</span>(
+                <span class="i">condition</span>: <span id="r64 rd" class="r64 r">info</span> =&gt; <span class="r64 r">info</span>.<span class="i">Id</span> == <span class="r63 r">sessionId</span>,
+                <span class="i">tooFew</span>: <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#a7348c014a062c1e" class="i field">RemoteRunspaceNotAvailableForSpecifiedSessionId</a>,
+                <span class="i">tooMany</span>: <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#1031b34c48a0d9fe" class="i field">RemoteRunspaceHasMultipleMatchesForSpecifiedSessionId</a>,
+                <span class="i">tooFewResourceString</span>: <span class="i">RemotingErrorIdStrings</span>.<span class="i">RemoteRunspaceNotAvailableForSpecifiedSessionId</span>,
+                <span class="i">tooManyResourceString</span>: <span class="i">RemotingErrorIdStrings</span>.<span class="i">RemoteRunspaceHasMultipleMatchesForSpecifiedSessionId</span>,
+                <span class="i">errorArgument</span>: <span class="r63 r">sessionId</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get runspace matching name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="99b905a96b5e4418" href="../../../R/99b905a96b5e4418.html" target="n" data-glyph="76,1" class="i method">GetRunspaceMatchingName</a>(<b>string</b> <span id="r65 rd" class="r65 r">name</span>)
+        {
+            <b>return</b> <span class="i">GetRunspaceMatchingCondition</span>(
+                <span class="i">condition</span>: <span id="r66 rd" class="r66 r">info</span> =&gt; <span class="r66 r">info</span>.<span class="i">Name</span>.<span class="i">Equals</span>(<span class="r65 r">name</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>),
+                <span class="i">tooFew</span>: <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#7770de82cbddcafd" class="i field">RemoteRunspaceNotAvailableForSpecifiedName</a>,
+                <span class="i">tooMany</span>: <a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#76f2670c984b64cd" class="i field">RemoteRunspaceHasMultipleMatchesForSpecifiedName</a>,
+                <span class="i">tooFewResourceString</span>: <span class="i">RemotingErrorIdStrings</span>.<span class="i">RemoteRunspaceNotAvailableForSpecifiedName</span>,
+                <span class="i">tooManyResourceString</span>: <span class="i">RemotingErrorIdStrings</span>.<span class="i">RemoteRunspaceHasMultipleMatchesForSpecifiedName</span>,
+                <span class="i">errorArgument</span>: <span class="r65 r">name</span>);
+        }
+ 
+        <b>private</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="ab4a202701d0d239" href="../../../R/ab4a202701d0d239.html" target="n" data-glyph="76,1" class="i method">FindJobForRunspace</a>(<span class="i">Guid</span> <span id="r67 rd" class="r67 r">id</span>)
+        {
+            <b>foreach</b> (<b>var</b> <span id="r68 rd" class="r68 r">repJob</span> <b>in</b> <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#025e5235224e3234" class="i property">JobRepository</a>.<a href="JobRepository.cs.html#2d8e4e2819a2e8c8" class="i property">Jobs</a>)
+            {
+                <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r69 rd" class="r69 r">childJob</span> <b>in</b> <span class="r68 r">repJob</span>.<span class="i">ChildJobs</span>)
+                {
+                    <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a> <span id="r70 rd" class="r70 r">remotingChildJob</span> = <span class="r69 r">childJob</span> <b>as</b> <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a>;
+ 
+                    <b>if</b> (<span class="r70 r">remotingChildJob</span> != <b>null</b> &amp;&amp;
+                        <span class="r70 r">remotingChildJob</span>.<a href="../client/Job.cs.html#08647015a50a05bd" class="i property">Runspace</a> != <b>null</b> &amp;&amp;
+                        <span class="r70 r">remotingChildJob</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a> &amp;&amp;
+                        <span class="r70 r">remotingChildJob</span>.<a href="../client/Job.cs.html#08647015a50a05bd" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#af7b715fe8b1bee2" class="i property">InstanceId</a>.<span class="i">Equals</span>(<span class="r67 r">id</span>))
+                    {
+                        <b>return</b> <span class="r68 r">repJob</span>;
+                    }
+                }
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <b>private bool</b> <a id="9d85a6476db4ac5d" href="../../../R/9d85a6476db4ac5d.html" target="n" data-glyph="76,1" class="i method">IsParameterSetForVM</a>()
+        {
+            <b>return</b> ((<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>) ||
+                    (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>));
+        }
+ 
+        <b>private bool</b> <a id="a399b48ce9d4e33a" href="../../../R/a399b48ce9d4e33a.html" target="n" data-glyph="76,1" class="i method">IsParameterSetForContainer</a>()
+        {
+            <b>return</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="PSRemotingCmdlet.cs.html#572318a2191690f0" class="i field">ContainerIdParameterSet</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Whether the input is a session object or property that corresponds to</span>
+        <span class="c">///</span><span class="c"> VM or container.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="f2bc4263c723f4b8" href="../../../R/f2bc4263c723f4b8.html" target="n" data-glyph="76,1" class="i method">IsParameterSetForVMContainerSession</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r71 rd" class="r71 r">remoteRunspace</span> = <b>null</b>;
+ 
+            <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+            {
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>:
+                    <b>if</b> (<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#9c1740457385d5db" class="i property">Session</a> != <b>null</b>)
+                    {
+                        <span class="r71 r">remoteRunspace</span> = (<a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>)<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#9c1740457385d5db" class="i property">Session</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>;
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#83013e264216b083" class="i field">InstanceIdParameterSet</a>:
+                    <span class="r71 r">remoteRunspace</span> = <a href="#bbf69e62a4f13099" class="i method">GetRunspaceMatchingRunspaceId</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#4fe41dc7ce1a90fd" class="i property">InstanceId</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#e6d864041087a5e9" class="i field">IdParameterSet</a>:
+                    <span class="r71 r">remoteRunspace</span> = <a href="#827d39b50ac9069a" class="i method">GetRunspaceMatchingSessionId</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#597c1321841f0ab6" class="i property">Id</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#bd7325e1ec9e2b6b" class="i field">NameParameterSet</a>:
+                    <span class="r71 r">remoteRunspace</span> = <a href="#99b905a96b5e4418" class="i method">GetRunspaceMatchingName</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#562458a7adfb54c0" class="i property">Name</a>);
+                    <b>break</b>;
+ 
+                <b>default</b>:
+                    <b>break</b>;
+            }
+ 
+            <b>if</b> ((<span class="r71 r">remoteRunspace</span> != <b>null</b>) &amp;&amp;
+                (<span class="r71 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#912a4002c4156bbf" class="i property">ConnectionInfo</a> != <b>null</b>))
+            {
+                <b>if</b> ((<span class="r71 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#912a4002c4156bbf" class="i property">ConnectionInfo</a> <b>is</b> <a href="../common/RunspaceConnectionInfo.cs.html#3906a420e89ab01e" class="t t">VMConnectionInfo</a>) ||
+                    (<span class="r71 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#912a4002c4156bbf" class="i property">ConnectionInfo</a> <b>is</b> <a href="../common/RunspaceConnectionInfo.cs.html#d2be2d5c63c76391" class="t t">ContainerConnectionInfo</a>))
+                {
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create runspace for VM session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="37bf1de2e623ad84" href="../../../R/37bf1de2e623ad84.html" target="n" data-glyph="76,1" class="i method">GetRunspaceForVMSession</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r72 rd" class="r72 r">remoteRunspace</span> = <b>null</b>;
+            <b>string</b> <span id="r73 rd" class="r73 r">command</span>;
+            <span class="i">Collection</span>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r74 rd" class="r74 r">results</span>;
+ 
+            <b>if</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>)
+            {
+                <span class="r73 r">command</span> = <span class="s">&quot;Get-VM -Id $args[0]&quot;</span>;
+ 
+                <b>try</b>
+                {
+                    <span class="r74 r">results</span> = <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../MshCmdlet.cs.html#515d359906da8f3d" class="i property">InvokeCommand</a>.<span class="i">InvokeScript</span>(
+                        <span class="r73 r">command</span>, <b>false</b>, <a href="../../hostifaces/Command.cs.html#b4c8a564cfb76454" class="t t">PipelineResultTypes</a>.<a href="../../hostifaces/Command.cs.html#2176d4a38e55153d" class="i field">None</a>, <b>null</b>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#54a67d202500f72f" class="i property">VMId</a>);
+                }
+                <b>catch</b> (<a href="../../../utils/CommandDiscoveryExceptions.cs.html#d61739861b769224" class="t t">CommandNotFoundException</a>)
+                {
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HyperVModuleNotAvailable</span>),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#09e45f002736cd62" class="i field">HyperVModuleNotAvailable</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#1b53f568895cb17a" class="i field">NotInstalled</a>,
+                            <b>null</b>));
+ 
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>if</b> (<span class="r74 r">results</span>.<span class="i">Count</span> != 1)
+                {
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">InvalidVMId</span>),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#be85d7b0af78dfb1" class="i field">InvalidVMId</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <b>null</b>));
+ 
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#d77a3fa34624f241" class="i property">VMName</a> = (<b>string</b>)<span class="r74 r">results</span>[0].<span class="i">Properties</span>[<span class="s">&quot;VMName&quot;</span>].<span class="i">Value</span>;
+            }
+            <b>else</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>, <span class="s">&quot;Expected ParameterSetName == VMName&quot;</span>);
+ 
+                <span class="r73 r">command</span> = <span class="s">&quot;Get-VM -Name $args&quot;</span>;
+ 
+                <b>try</b>
+                {
+                    <span class="r74 r">results</span> = <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../MshCmdlet.cs.html#515d359906da8f3d" class="i property">InvokeCommand</a>.<a href="../../MshCmdlet.cs.html#2564f48a57fd58ca" class="i method">InvokeScript</a>(
+                        <span class="r73 r">command</span>, <b>false</b>, <a href="../../hostifaces/Command.cs.html#b4c8a564cfb76454" class="t t">PipelineResultTypes</a>.<a href="../../hostifaces/Command.cs.html#2176d4a38e55153d" class="i field">None</a>, <b>null</b>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#d77a3fa34624f241" class="i property">VMName</a>);
+                }
+                <b>catch</b> (<a href="../../../utils/CommandDiscoveryExceptions.cs.html#d61739861b769224" class="t t">CommandNotFoundException</a>)
+                {
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">HyperVModuleNotAvailable</span>),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#09e45f002736cd62" class="i field">HyperVModuleNotAvailable</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#1b53f568895cb17a" class="i field">NotInstalled</a>,
+                            <b>null</b>));
+ 
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>if</b> (<span class="r74 r">results</span>.<span class="i">Count</span> == 0)
+                {
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">InvalidVMNameNoVM</span>),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#75992218ee122581" class="i field">InvalidVMNameNoVM</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <b>null</b>));
+ 
+                    <b>return</b> <b>null</b>;
+                }
+                <b>else</b> <b>if</b> (<span class="r74 r">results</span>.<span class="i">Count</span> &gt; 1)
+                {
+                    <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">InvalidVMNameMultipleVM</span>),
+                            <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#5d8a5eb91d229166" class="i field">InvalidVMNameMultipleVM</a>),
+                            <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                            <b>null</b>));
+ 
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#54a67d202500f72f" class="i property">VMId</a> = (<span class="i">Guid</span>)<span class="r74 r">results</span>[0].<span class="i">Properties</span>[<span class="s">&quot;VMId&quot;</span>].<span class="i">Value</span>;
+                <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#d77a3fa34624f241" class="i property">VMName</a> = (<b>string</b>)<span class="r74 r">results</span>[0].<span class="i">Properties</span>[<span class="s">&quot;VMName&quot;</span>].<span class="i">Value</span>;
+            }
+ 
+            <span class="c">//</span>
+            <span class="c">// VM should be in running state.</span>
+            <span class="c">//</span>
+            <b>if</b> ((<a href="PSRemotingCmdlet.cs.html#9d724f5455a8e524" class="t t">VMState</a>)<span class="r74 r">results</span>[0].<span class="i">Properties</span>[<span class="s">&quot;State&quot;</span>].<span class="i">Value</span> != <a href="PSRemotingCmdlet.cs.html#9d724f5455a8e524" class="t t">VMState</a>.<a href="PSRemotingCmdlet.cs.html#7ceef812f32c3eef" class="i field">Running</a>)
+            {
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="i">ArgumentException</span>(<span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">InvalidVMState</span>,
+                                                         <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#d77a3fa34624f241" class="i property">VMName</a>)),
+                        <b>nameof</b>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#95e1f86f2941307a" class="i field">InvalidVMState</a>),
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <b>null</b>));
+ 
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>try</b>
+            {
+                <a href="../common/RunspaceConnectionInfo.cs.html#3906a420e89ab01e" class="t t">VMConnectionInfo</a> <span id="r75 rd" class="r75 r">connectionInfo</span>;
+                <span class="r75 r">connectionInfo</span> = <b>new</b> <a href="../common/RunspaceConnectionInfo.cs.html#14edb95257658f82" class="t constructor">VMConnectionInfo</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#4eb9a42bbfcf84b8" class="i property">Credential</a>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#54a67d202500f72f" class="i property">VMId</a>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#d77a3fa34624f241" class="i property">VMName</a>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a>);
+ 
+                <span class="r72 r">remoteRunspace</span> = <a href="#8503970ad02f9ef4" class="i method">CreateTemporaryRemoteRunspaceForPowerShellDirect</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>, <span class="r75 r">connectionInfo</span>);
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span> <span id="r76 rd" class="r76 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r77 rd" class="r77 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r76 r">e</span>,
+                    <span class="s">&quot;CreateRemoteRunspaceForVMFailed&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <b>null</b>);
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r77 r">errorRecord</span>);
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span> <span id="r78 rd" class="r78 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r79 rd" class="r79 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r78 r">e</span>,
+                    <span class="s">&quot;CreateRemoteRunspaceForVMFailed&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                    <b>null</b>);
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r79 r">errorRecord</span>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r80 rd" class="r80 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r81 rd" class="r81 r">errorRecord</span>;
+ 
+                <span class="c">//</span>
+                <span class="c">// In case of PSDirectException, we should output the precise error message</span>
+                <span class="c">// in inner exception instead of the generic one in outer exception.</span>
+                <span class="c">//</span>
+                <b>if</b> ((<span class="r80 r">e</span>.<span class="i">InnerException</span> != <b>null</b>) &amp;&amp; (<span class="r80 r">e</span>.<span class="i">InnerException</span> <b>is</b> <a href="../common/remotingexceptions.cs.html#013d87579f687ee0" class="t t">PSDirectException</a>))
+                {
+                    <span class="r81 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r80 r">e</span>.<span class="i">InnerException</span>,
+                        <span class="s">&quot;CreateRemoteRunspaceForVMFailed&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <b>null</b>);
+                }
+                <b>else</b>
+                {
+                    <span class="r81 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r80 r">e</span>,
+                        <span class="s">&quot;CreateRemoteRunspaceForVMFailed&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <b>null</b>);
+                }
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r81 r">errorRecord</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r82 rd" class="r82 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r83 rd" class="r83 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r82 r">e</span>,
+                    <span class="s">&quot;CreateRemoteRunspaceForVMFailed&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <b>null</b>);
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r83 r">errorRecord</span>);
+            }
+ 
+            <b>return</b> <span class="r72 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create temporary remote runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="8503970ad02f9ef4" href="../../../R/8503970ad02f9ef4.html" target="n" data-glyph="76,1" class="i method">CreateTemporaryRemoteRunspaceForPowerShellDirect</a>(<a href="../../hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r84 rd" class="r84 r">host</span>, <a href="../common/RunspaceConnectionInfo.cs.html#e07ed56a8a1da829" class="t t">RunspaceConnectionInfo</a> <span id="r85 rd" class="r85 r">connectionInfo</span>)
+        {
+            <span class="c">// Create and open the runspace.</span>
+            <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a> <span id="r86 rd" class="r86 r">typeTable</span> = <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a>.<a href="../../TypeTable.cs.html#c6d160f5d02296fa" class="i method">LoadDefaultTypeFiles</a>();
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r87 rd" class="r87 r">remoteRunspace</span> = <a href="../../hostifaces/ConnectionFactory.cs.html#c5fbe142e4e21218" class="t t">RunspaceFactory</a>.<a href="../../hostifaces/ConnectionFactory.cs.html#7efc9e75cdb9fe67" class="i method">CreateRunspace</a>(<span class="r85 r">connectionInfo</span>, <span class="r84 r">host</span>, <span class="r86 r">typeTable</span>) <b>as</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>;
+            <span class="r87 r">remoteRunspace</span>.<a href="../../hostifaces/Connection.cs.html#c40205e63f7ff911" class="i property">Name</a> = <span class="s">&quot;PowerShellDirectAttach&quot;</span>;
+ 
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r87 r">remoteRunspace</span> != <b>null</b>, <span class="s">&quot;Expected remoteRunspace != null&quot;</span>);
+            <b>try</b>
+            {
+                <span class="r87 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#8f5246099264f315" class="i method">Open</a>();
+ 
+                <span class="c">// Mark this temporary runspace so that it closes on pop.</span>
+                <span class="r87 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a7ae975f02f2273a" class="i property">ShouldCloseOnPop</a> = <b>true</b>;
+            }
+            <b>finally</b>
+            {
+                <span class="c">// Make sure we dispose the temporary runspace if something bad happens.</span>
+                <b>if</b> (<span class="r87 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> != <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+                {
+                    <span class="r87 r">remoteRunspace</span>.<a href="../../hostifaces/Connection.cs.html#47cd985e55a9f99c" class="i method">Dispose</a>();
+                    <span class="r87 r">remoteRunspace</span> = <b>null</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r87 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set prompt for VM/Container sessions.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="3b687d79b9642b60" href="../../../R/3b687d79b9642b60.html" target="n" data-glyph="76,1" class="i method">SetRunspacePrompt</a>(<a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r88 rd" class="r88 r">remoteRunspace</span>)
+        {
+            <b>if</b> (<a href="#9d85a6476db4ac5d" class="i method">IsParameterSetForVM</a>() ||
+                <a href="#a399b48ce9d4e33a" class="i method">IsParameterSetForContainer</a>() ||
+                <a href="#f2bc4263c723f4b8" class="i method">IsParameterSetForVMContainerSession</a>())
+            {
+                <b>string</b> <span id="r89 rd" class="r89 r">targetName</span> = <b>string</b>.<span class="i">Empty</span>;
+ 
+                <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+                {
+                    <b>case</b> <a href="PSRemotingCmdlet.cs.html#5d25e1e8da3ff53e" class="i field">VMIdParameterSet</a>:
+                    <b>case</b> <a href="PSRemotingCmdlet.cs.html#b2efa99b627d2719" class="i field">VMNameParameterSet</a>:
+                        <span class="r89 r">targetName</span> = <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#d77a3fa34624f241" class="i property">VMName</a>;
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="PSRemotingCmdlet.cs.html#572318a2191690f0" class="i field">ContainerIdParameterSet</a>:
+                        <span class="r89 r">targetName</span> = (<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#92494021ae24264d" class="i property">ContainerId</a>.<span class="i">Length</span> &lt;= 15) ? <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#92494021ae24264d" class="i property">ContainerId</a>
+                                                                     : <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#92494021ae24264d" class="i property">ContainerId</a>.<span class="i">Remove</span>(14) + <a href="../../../FormatAndOutput/common/Utilities/MshObjectUtil.cs.html#fa81a7bc4f9cb4f0" class="t t">PSObjectHelper</a>.<a href="../../../FormatAndOutput/common/Utilities/MshObjectUtil.cs.html#a5549bfa35c48a67" class="i field">Ellipsis</a>;
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>:
+                        <span class="r89 r">targetName</span> = (<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#9c1740457385d5db" class="i property">Session</a> != <b>null</b>) ? <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#9c1740457385d5db" class="i property">Session</a>.<a href="../client/remoterunspaceinfo.cs.html#4e8388b3861bf08b" class="i property">ComputerName</a> : <b>string</b>.<span class="i">Empty</span>;
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="#83013e264216b083" class="i field">InstanceIdParameterSet</a>:
+                    <b>case</b> <a href="#e6d864041087a5e9" class="i field">IdParameterSet</a>:
+                    <b>case</b> <a href="#bd7325e1ec9e2b6b" class="i field">NameParameterSet</a>:
+                        <b>if</b> ((<span class="r88 r">remoteRunspace</span> != <b>null</b>) &amp;&amp;
+                            (<span class="r88 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#912a4002c4156bbf" class="i property">ConnectionInfo</a> != <b>null</b>))
+                        {
+                            <span class="r89 r">targetName</span> = <span class="r88 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#912a4002c4156bbf" class="i property">ConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#64143b41c05cd7ea" class="i property">ComputerName</a>;
+                        }
+ 
+                        <b>break</b>;
+ 
+                    <b>default</b>:
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;Unrecognized parameter set.&quot;</span>);
+                        <b>break</b>;
+                }
+ 
+                <b>string</b> <span id="r90 rd" class="r90 r">promptFn</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnterVMSessionPrompt</span>,
+                    <span class="s">@&quot;function global:prompt { &quot;&quot;&quot;</span>,
+                    <span class="r89 r">targetName</span>,
+                    <span class="s">@&quot;PS $($executionContext.SessionState.Path.CurrentLocation)&gt; &quot;&quot; }&quot;</span>);
+ 
+                <span class="c">// Set prompt in pushed named pipe runspace.</span>
+                <b>using</b> (<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r91 rd" class="r91 r">ps</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#40345bc4625ff918" class="i method">Create</a>())
+                {
+                    <span class="r91 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#ccf57242c9d46642" class="i property">Runspace</a> = <span class="r88 r">remoteRunspace</span>;
+ 
+                    <b>try</b>
+                    {
+                        <span class="c">// Set pushed runspace prompt.</span>
+                        <span class="r91 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#c97f8d15a2f93e31" class="i method">AddScript</a>(<span class="r90 r">promptFn</span>).<a href="../../hostifaces/PowerShell.cs.html#184e23c46120523e" class="i method">Invoke</a>();
+                    }
+                    <b>catch</b> (<span class="i">Exception</span>)
+                    {
+                    }
+                }
+            }
+ 
+            <b>return</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create runspace for container session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="275443b74b40a3d3" href="../../../R/275443b74b40a3d3.html" target="n" data-glyph="76,1" class="i method">GetRunspaceForContainerSession</a>()
+        {
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r92 rd" class="r92 r">remoteRunspace</span> = <b>null</b>;
+ 
+            <b>try</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#92494021ae24264d" class="i property">ContainerId</a>), <span class="s">&quot;ContainerId has to be set.&quot;</span>);
+ 
+                <a href="../common/RunspaceConnectionInfo.cs.html#d2be2d5c63c76391" class="t t">ContainerConnectionInfo</a> <span id="r93 rd" class="r93 r">connectionInfo</span> = <b>null</b>;
+ 
+                <span class="c">//</span>
+                <span class="c">// Hyper-V container uses Hype-V socket as transport.</span>
+                <span class="c">// Windows Server container uses named pipe as transport.</span>
+                <span class="c">//</span>
+                <span class="r93 r">connectionInfo</span> = <a href="../common/RunspaceConnectionInfo.cs.html#d2be2d5c63c76391" class="t t">ContainerConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#ceceac64cec04a81" class="i method">CreateContainerConnectionInfo</a>(<a href="#92494021ae24264d" class="i property">ContainerId</a>, <a href="PSRemotingCmdlet.cs.html#cd880049454ad846" class="i property">RunAsAdministrator</a>.<a href="../../MshCmdlet.cs.html#e9c777a85700d3da" class="i property">IsPresent</a>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="#b38e0c437531bbd0" class="i property">ConfigurationName</a>);
+ 
+                <span class="r93 r">connectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#c98e542c0a68e45e" class="i method">CreateContainerProcess</a>();
+                <span class="r92 r">remoteRunspace</span> = <a href="#8503970ad02f9ef4" class="i method">CreateTemporaryRemoteRunspaceForPowerShellDirect</a>(<a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>, <span class="r93 r">connectionInfo</span>);
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span> <span id="r94 rd" class="r94 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r95 rd" class="r95 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r94 r">e</span>,
+                    <span class="s">&quot;CreateRemoteRunspaceForContainerFailed&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <b>null</b>);
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r95 r">errorRecord</span>);
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span> <span id="r96 rd" class="r96 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r97 rd" class="r97 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r96 r">e</span>,
+                    <span class="s">&quot;CreateRemoteRunspaceForContainerFailed&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                    <b>null</b>);
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r97 r">errorRecord</span>);
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r98 rd" class="r98 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r99 rd" class="r99 r">errorRecord</span>;
+ 
+                <span class="c">//</span>
+                <span class="c">// In case of PSDirectException, we should output the precise error message</span>
+                <span class="c">// in inner exception instead of the generic one in outer exception.</span>
+                <span class="c">//</span>
+                <b>if</b> ((<span class="r98 r">e</span>.<span class="i">InnerException</span> != <b>null</b>) &amp;&amp; (<span class="r98 r">e</span>.<span class="i">InnerException</span> <b>is</b> <a href="../common/remotingexceptions.cs.html#013d87579f687ee0" class="t t">PSDirectException</a>))
+                {
+                    <span class="r99 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r98 r">e</span>.<span class="i">InnerException</span>,
+                        <span class="s">&quot;CreateRemoteRunspaceForContainerFailed&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <b>null</b>);
+                }
+                <b>else</b>
+                {
+                    <span class="r99 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r98 r">e</span>,
+                        <span class="s">&quot;CreateRemoteRunspaceForContainerFailed&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <b>null</b>);
+                }
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r99 r">errorRecord</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r100 rd" class="r100 r">e</span>)
+            {
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r101 rd" class="r101 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r100 r">e</span>,
+                    <span class="s">&quot;CreateRemoteRunspaceForContainerFailed&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <b>null</b>);
+ 
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r101 r">errorRecord</span>);
+            }
+ 
+            <b>return</b> <span class="r92 r">remoteRunspace</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create remote runspace for SSH session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="39591fdd66a0b4e8" href="../../../R/39591fdd66a0b4e8.html" target="n" data-glyph="76,1" class="i method">GetRunspaceForSSHSession</a>()
+        {
+            <a href="PSRemotingCmdlet.cs.html#2e8a7c4b18259ed2" class="i method">ParseSshHostName</a>(<a href="#c9ab45b9f8d62e81" class="i property">HostName</a>, <b>out string</b> <span id="r102 rd" class="r102 r">host</span>, <b>out string</b> <span id="r103 rd" class="r103 r">userName</span>, <b>out int</b> <span id="r104 rd" class="r104 r">port</span>);
+            <a href="../common/RunspaceConnectionInfo.cs.html#c9fcf5b14ea1c33c" class="k">var</a> <span id="r105 rd" class="r105 r">sshConnectionInfo</span> = <b>new</b> <a href="../common/RunspaceConnectionInfo.cs.html#2db667929f670ab9" class="t constructor">SSHConnectionInfo</a>(<span class="r103 r">userName</span>, <span class="r102 r">host</span>, <a href="PSRemotingCmdlet.cs.html#764f077eaac4f43a" class="i property">KeyFilePath</a>, <span class="r104 r">port</span>, <a href="PSRemotingCmdlet.cs.html#74ae07cd214614c2" class="i property">Subsystem</a>, <a href="PSRemotingCmdlet.cs.html#b41fd1bfc38a6b12" class="i property">ConnectingTimeout</a>);
+            <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="k">var</a> <span id="r106 rd" class="r106 r">typeTable</span> = <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a>.<a href="../../TypeTable.cs.html#c6d160f5d02296fa" class="i method">LoadDefaultTypeFiles</a>();
+ 
+            <span class="c">// Use the class _tempRunspace field while the runspace is being opened so that StopProcessing can be handled at that time.</span>
+            <span class="c">// This is only needed for SSH sessions where a Ctrl+C during an SSH password prompt can abort the session before a connection</span>
+            <span class="c">// is established.</span>
+            <a href="#0357286504839e90" class="i field">_tempRunspace</a> = <a href="../../hostifaces/ConnectionFactory.cs.html#c5fbe142e4e21218" class="t t">RunspaceFactory</a>.<a href="../../hostifaces/ConnectionFactory.cs.html#7efc9e75cdb9fe67" class="i method">CreateRunspace</a>(<span class="r105 r">sshConnectionInfo</span>, <a href="#6473c5d5c4356c4e" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>, <span class="r106 r">typeTable</span>) <b>as</b> <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>;
+            <a href="#0357286504839e90" class="i field">_tempRunspace</a>.<a href="../client/remoterunspace.cs.html#8f5246099264f315" class="i method">Open</a>();
+            <a href="#0357286504839e90" class="i field">_tempRunspace</a>.<a href="../client/remoterunspace.cs.html#a7ae975f02f2273a" class="i property">ShouldCloseOnPop</a> = <b>true</b>;
+            <a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="k">var</a> <span id="r107 rd" class="r107 r">remoteRunspace</span> = <a href="#0357286504839e90" class="i field">_tempRunspace</a>;
+            <a href="#0357286504839e90" class="i field">_tempRunspace</a> = <b>null</b>;
+ 
+            <b>return</b> <span class="r107 r">remoteRunspace</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal Methods
+ 
+        <b>internal static</b> <a href="../client/remotepipeline.cs.html#018b4ca446b0fea0" class="t t">RemotePipeline</a> <a id="6ce360e81461f862" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ConnectRunningPipeline</a>(<a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r108 rd" class="r108 r">remoteRunspace</span>)
+        {
+            <a href="../client/remotepipeline.cs.html#018b4ca446b0fea0" class="t t">RemotePipeline</a> <span id="r109 rd" class="r109 r">cmd</span> = <b>null</b>;
+            <b>if</b> (<span class="r108 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#c7d59b1aea27b0c9" class="i property">RemoteCommand</a> != <b>null</b>)
+            {
+                <span class="c">// Reconstruct scenario.</span>
+                <span class="c">// Newly connected pipeline object is added to the RemoteRunspace running</span>
+                <span class="c">// pipeline list.</span>
+                <span class="r109 r">cmd</span> = <b>new</b> <a href="../client/remotepipeline.cs.html#709351a766991b78" class="t constructor">RemotePipeline</a>(<span class="r108 r">remoteRunspace</span>);
+            }
+            <b>else</b>
+            {
+                <span class="c">// Reconnect scenario.</span>
+                <span class="r109 r">cmd</span> = <span class="r108 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#9ab3dedcf11ea947" class="i method">GetCurrentlyRunningPipeline</a>() <b>as</b> <a href="../client/remotepipeline.cs.html#018b4ca446b0fea0" class="t t">RemotePipeline</a>;
+            }
+ 
+            <span class="c">// Connect the runspace pipeline so that debugging and output data from</span>
+            <span class="c">// remote server can continue.</span>
+            <b>if</b> (<span class="r109 r">cmd</span> != <b>null</b> &amp;&amp;
+                <span class="r109 r">cmd</span>.<a href="../client/remotepipeline.cs.html#088450944502051f" class="i property">PipelineStateInfo</a>.<a href="../../hostifaces/Pipeline.cs.html#2589f8c7203969a0" class="i property">State</a> == <a href="../../hostifaces/Pipeline.cs.html#03704abc5975cfc4" class="t t">PipelineState</a>.<a href="../../hostifaces/Pipeline.cs.html#401ea10f45569c67" class="i field">Disconnected</a>)
+            {
+                <b>using</b> (<span class="i">ManualResetEvent</span> <span id="r110 rd" class="r110 r">connected</span> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>false</b>))
+                {
+                    <span class="r109 r">cmd</span>.<a href="../client/remotepipeline.cs.html#7001904b7a393079" class="i">StateChanged</a> += (<span id="r111 rd" class="r111 r">sender</span>, <span id="r112 rd" class="r112 r">args</span>) =&gt;
+                    {
+                        <b>if</b> (<span class="r112 r">args</span>.<span class="i">PipelineStateInfo</span>.<span class="i">State</span> != <a href="../../hostifaces/Pipeline.cs.html#03704abc5975cfc4" class="t t">PipelineState</a>.<a href="../../hostifaces/Pipeline.cs.html#401ea10f45569c67" class="i field">Disconnected</a>)
+                        {
+                            <b>try</b>
+                            {
+                                <span class="r110 r">connected</span>.<span class="i">Set</span>();
+                            }
+                            <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+                        }
+                    };
+ 
+                    <span class="r109 r">cmd</span>.<a href="../client/remotepipeline.cs.html#ec400610bd67c95c" class="i method">ConnectAsync</a>();
+                    <span class="r110 r">connected</span>.<span class="i">WaitOne</span>();
+                }
+            }
+ 
+            <b>return</b> <span class="r109 r">cmd</span>;
+        }
+ 
+        <b>internal static void</b> <a id="8ecfaf39f1ef1e42" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ContinueCommand</a>(<a href="../client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r113 rd" class="r113 r">remoteRunspace</span>, <a href="../../hostifaces/Pipeline.cs.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r114 rd" class="r114 r">cmd</span>, <a href="../../hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r115 rd" class="r115 r">host</span>, <b>bool</b> <span id="r116 rd" class="r116 r">inDebugMode</span>, <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r117 rd" class="r117 r">context</span>)
+        {
+            <a href="../client/remotepipeline.cs.html#018b4ca446b0fea0" class="t t">RemotePipeline</a> <span id="r118 rd" class="r118 r">remotePipeline</span> = <span class="r114 r">cmd</span> <b>as</b> <a href="../client/remotepipeline.cs.html#018b4ca446b0fea0" class="t t">RemotePipeline</a>;
+ 
+            <b>if</b> (<span class="r118 r">remotePipeline</span> != <b>null</b>)
+            {
+                <b>using</b> (<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r119 rd" class="r119 r">ps</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#40345bc4625ff918" class="i method">Create</a>())
+                {
+                    <a href="../../hostifaces/PowerShell.cs.html#ce65c0834aa6f0ea" class="t t">PSInvocationSettings</a> <span id="r120 rd" class="r120 r">settings</span> = <b>new</b> <a href="../../hostifaces/PowerShell.cs.html#3f472392b2d45c15" class="t constructor">PSInvocationSettings</a>()
+                    {
+                        <a href="../../hostifaces/PowerShell.cs.html#2088d9ba09399d1e" class="i property">Host</a> = <span class="r115 r">host</span>
+                    };
+ 
+                    <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r121 rd" class="r121 r">input</span> = <b>new</b> <a href="../../hostifaces/PSDataCollection.cs.html#ee85ce3306fe4e5b" class="t constructor">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;();
+ 
+                    <a href="../../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a> <span id="r122 rd" class="r122 r">commandInfo</span> = <b>new</b> <span class="t">CmdletInfo</span>(<span class="s">&quot;Out-Default&quot;</span>, <b>typeof</b>(<a href="../../../FormatAndOutput/out-console/OutConsole.cs.html#c9bb0040912f3314" class="t t">OutDefaultCommand</a>), <b>null</b>, <b>null</b>, <span class="r117 r">context</span>);
+                    <a href="../../hostifaces/Command.cs.html#b55b68a3bf75e612" class="t t">Command</a> <span id="r123 rd" class="r123 r">outDefaultCommand</span> = <b>new</b> <a href="../../hostifaces/Command.cs.html#7afd6fbc88a9b688" class="t constructor">Command</a>(<span class="r122 r">commandInfo</span>);
+                    <span class="r119 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#f68f5b3ba7949aa4" class="i method">AddCommand</a>(<span class="r123 r">outDefaultCommand</span>);
+                    <span class="i">IAsyncResult</span> <span id="r124 rd" class="r124 r">async</span> = <span class="r119 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#ae78ab7180e7c40e" class="i method">BeginInvoke</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;(<span class="r121 r">input</span>, <span class="r120 r">settings</span>, <b>null</b>, <b>null</b>);
+ 
+                    <a href="../client/remoterunspace.cs.html#89199d5c3f22d94e" class="t t">RemoteDebugger</a> <span id="r125 rd" class="r125 r">remoteDebugger</span> = <span class="r113 r">remoteRunspace</span>.<a href="../client/remoterunspace.cs.html#8c26a63dda2acb44" class="i property">Debugger</a> <b>as</b> <a href="../client/remoterunspace.cs.html#89199d5c3f22d94e" class="t t">RemoteDebugger</a>;
+                    <b>if</b> (<span class="r125 r">remoteDebugger</span> != <b>null</b>)
+                    {
+                        <span class="c">// Update client with breakpoint information from pushed runspace.</span>
+                        <span class="c">// Information will be passed to the client via the Debugger.BreakpointUpdated event.</span>
+                        <span class="r125 r">remoteDebugger</span>.<a href="../client/remoterunspace.cs.html#2a1ec72c6a63704b" class="i method">SendBreakpointUpdatedEvents</a>();
+ 
+                        <b>if</b> (!<span class="r116 r">inDebugMode</span>)
+                        {
+                            <span class="c">// Enter debug mode if remote runspace is in debug stop mode.</span>
+                            <span class="r125 r">remoteDebugger</span>.<a href="../client/remoterunspace.cs.html#7707b91fc96fac5a" class="i method">CheckStateAndRaiseStopEvent</a>();
+                        }
+                    }
+ 
+                    <span class="c">// Wait for debugged cmd to complete.</span>
+                    <b>while</b> (!<span class="r118 r">remotePipeline</span>.<a href="../client/remotepipeline.cs.html#29d3347675fb48d8" class="i property">Output</a>.<a href="../../../utils/IObjectReader.cs.html#427c991c7263cfda" class="i property">EndOfPipeline</a>)
+                    {
+                        <span class="r118 r">remotePipeline</span>.<a href="../client/remotepipeline.cs.html#29d3347675fb48d8" class="i property">Output</a>.<a href="../../../utils/IObjectReader.cs.html#284e3297ec4d8f81" class="i property">WaitHandle</a>.<span class="i">WaitOne</span>();
+                        <b>while</b> (<span class="r118 r">remotePipeline</span>.<a href="../client/remotepipeline.cs.html#29d3347675fb48d8" class="i property">Output</a>.<a href="../../../utils/IObjectReader.cs.html#fb103466fcdb6fb2" class="i property">Count</a> &gt; 0)
+                        {
+                            <span class="r121 r">input</span>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<span class="r118 r">remotePipeline</span>.<a href="../client/remotepipeline.cs.html#29d3347675fb48d8" class="i property">Output</a>.<a href="../../../utils/IObjectReader.cs.html#44674511beae23a4" class="i method">Read</a>());
+                        }
+                    }
+ 
+                    <span class="r121 r">input</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+                    <span class="r119 r">ps</span>.<a href="../../hostifaces/PowerShell.cs.html#e6f659e0f52c6eca" class="i method">EndInvoke</a>(<span class="r124 r">async</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

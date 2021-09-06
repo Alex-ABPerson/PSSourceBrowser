@@ -1,0 +1,812 @@
+﻿<!DOCTYPE html>
+<html><head><title>SecurityManager.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(803);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/security/SecurityManager.cs" target="_top">security\SecurityManager.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Cryptography</span>.<span class="i">X509Certificates</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines the authorization policy that controls the way scripts</span>
+    <span class="c">///</span><span class="c"> (and other command types) are handled by Monad.  This authorization</span>
+    <span class="c">///</span><span class="c"> policy enforces one of four levels, as defined by the &#39;ExecutionPolicy&#39;</span>
+    <span class="c">///</span><span class="c"> value in one of the following locations:</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> In priority-order (highest priority first,) these come from:</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">    - Machine-wide Group Policy</span>
+    <span class="c">///</span><span class="c">    HKLM\Software\Policies\Microsoft\Windows\PowerShell</span>
+    <span class="c">///</span><span class="c">    - Current-user Group Policy</span>
+    <span class="c">///</span><span class="c">    HKCU\Software\Policies\Microsoft\Windows\PowerShell.</span>
+    <span class="c">///</span><span class="c">    - Current session preference</span>
+    <span class="c">///</span><span class="c">    ENV:PSExecutionPolicyPreference</span>
+    <span class="c">///</span><span class="c">    - Current user machine preference</span>
+    <span class="c">///</span><span class="c">    HKEY_CURRENT_USER\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell</span>
+    <span class="c">///</span><span class="c">    - Local machine preference</span>
+    <span class="c">///</span><span class="c">    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Restricted - All .ps1 files are blocked.  ps1xml files must be digitally</span>
+    <span class="c">///</span><span class="c">    signed, and by a trusted publisher.  If you haven&#39;t made a trust decision</span>
+    <span class="c">///</span><span class="c">    on the publisher yet, prompting is done as in AllSigned mode.</span>
+    <span class="c">///</span><span class="c"> AllSigned - All .ps1 and .ps1xml files must be digitally signed.  If</span>
+    <span class="c">///</span><span class="c">    signed and executed, Monad prompts to determine if files from the</span>
+    <span class="c">///</span><span class="c">    signing publisher should be run or not.</span>
+    <span class="c">///</span><span class="c"> RemoteSigned - Only .ps1 and .ps1xml files originating from the internet</span>
+    <span class="c">///</span><span class="c">    must be digitally signed.  If remote, signed, and executed, Monad</span>
+    <span class="c">///</span><span class="c">    prompts to determine if files from the signing publisher should be</span>
+    <span class="c">///</span><span class="c">    run or not.  This is the default setting.</span>
+    <span class="c">///</span><span class="c"> Unrestricted - No files must be signed.  If a file originates from the</span>
+    <span class="c">///</span><span class="c">    internet, Monad provides a warning prompt to alert the user.  To</span>
+    <span class="c">///</span><span class="c">    suppress this warning message, right-click on the file in File Explorer,</span>
+    <span class="c">///</span><span class="c">    select &quot;Properties,&quot; and then &quot;Unblock.&quot;  Requires Shell.</span>
+    <span class="c">///</span><span class="c"> Bypass - No files must be signed, and internet origin is not verified.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="824c306feaddc0a9" href="../R/824c306feaddc0a9.html" target="n" data-glyph="0,0" class="t t">PSAuthorizationManager</a> : <a href="../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a>
+    {
+        <b>internal enum</b> <a id="19cb5bd7bdafc01e" href="../R/19cb5bd7bdafc01e.html" target="n" data-glyph="20,1" class="t t"><span id="002be19a0d8b02f9">RunPromptDecision</span></a>
+        {
+            <a id="cb92b31d71a7fb3b" href="../R/cb92b31d71a7fb3b.html" target="n" data-glyph="24,2" class="i field">NeverRun</a> = 0,
+            <a id="8ec3cebaefe5debd" href="../R/8ec3cebaefe5debd.html" target="n" data-glyph="24,2" class="i field">DoNotRun</a> = 1,
+            <a id="f8f495534814bdf1" href="../R/f8f495534814bdf1.html" target="n" data-glyph="24,2" class="i field">RunOnce</a> = 2,
+            <a id="08b7c0b9a5811a87" href="../R/08b7c0b9a5811a87.html" target="n" data-glyph="24,2" class="i field">AlwaysRun</a> = 3,
+            <a id="a30ac6625ad1950b" href="../R/a30ac6625ad1950b.html" target="n" data-glyph="24,2" class="i field">Suspend</a> = 4
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> constructor
+ 
+        <span class="c">// execution policy that dictates what can run in msh</span>
+        <b>private</b> <a href="SecuritySupport.cs.html#73c2048fc177fabf" class="t t">ExecutionPolicy</a> <a id="286eddf321f428f9" href="../R/286eddf321f428f9.html" target="n" data-glyph="46,1" class="i field">_executionPolicy</a>;
+ 
+        <span class="c">// shellId supplied by runspace configuration</span>
+        <b>private readonly string</b> <a id="ba76287c418b0fda" href="../R/ba76287c418b0fda.html" target="n" data-glyph="46,1" class="i field">_shellId</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of the PSAuthorizationManager</span>
+        <span class="c">///</span><span class="c"> class, for a given ShellId.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">shellId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The shell identifier that the authorization manager applies</span>
+        <span class="c">///</span><span class="c"> to.  For example, Microsoft.PowerShell</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="391541be43bac856" href="../R/391541be43bac856.html" target="n" data-glyph="72,1" class="t constructor">PSAuthorizationManager</a>(<b>string</b> <span id="r0 rd" class="r0 r">shellId</span>)
+            : <a href="../engine/SecurityManagerBase.cs.html#f572299e9e7a3ced" class="k">base</a>(<span class="r0 r">shellId</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r0 r">shellId</span>))
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r0 r">shellId</span>));
+            }
+ 
+            <a href="#ba76287c418b0fda" class="i field">_shellId</a> = <span class="r0 r">shellId</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> constructor
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> signing check
+ 
+        <b>private static bool</b> <a id="eaa317acfb1879d7" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">IsSupportedExtension</a>(<b>string</b> <span id="r1 rd" class="r1 r">ext</span>)
+        {
+            <b>return</b> (
+                       <span class="r1 r">ext</span>.<span class="i">Equals</span>(<span class="s">&quot;.ps1&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                       <span class="r1 r">ext</span>.<span class="i">Equals</span>(<span class="s">&quot;.ps1xml&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                       <span class="r1 r">ext</span>.<span class="i">Equals</span>(<span class="s">&quot;.psm1&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                       <span class="r1 r">ext</span>.<span class="i">Equals</span>(<span class="s">&quot;.psd1&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                       <span class="r1 r">ext</span>.<span class="i">Equals</span>(<span class="s">&quot;.xaml&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                       <span class="r1 r">ext</span>.<span class="i">Equals</span>(<span class="s">&quot;.cdxml&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>));
+        }
+ 
+        <b>private bool</b> <a id="709c3dc2bff3a576" href="../R/709c3dc2bff3a576.html" target="n" data-glyph="76,1" class="i method">CheckPolicy</a>(<a href="../engine/ExternalScriptInfo.cs.html#7806ac40f903221c" class="t t">ExternalScriptInfo</a> <span id="r2 rd" class="r2 r">script</span>, <a href="../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r3 rd" class="r3 r">host</span>, <b>out</b> <span class="i">Exception</span> <span id="r4 rd" class="r4 r">reason</span>)
+        {
+            <b>bool</b> <span id="r5 rd" class="r5 r">policyCheckPassed</span> = <b>false</b>;
+            <span class="r4 r">reason</span> = <b>null</b>;
+            <b>string</b> <span id="r6 rd" class="r6 r">path</span> = <span class="r2 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#ba1a326ad41ce463" class="i property">Path</a>;
+            <b>string</b> <span id="r7 rd" class="r7 r">reasonMessage</span>;
+ 
+            <span class="c">// path is assumed to be fully qualified here</span>
+            <b>if</b> (<span class="r6 r">path</span>.<span class="i">IndexOf</span>(<span class="i n">System</span>.<span class="i">IO</span>.<span class="i">Path</span>.<span class="i">DirectorySeparatorChar</span>) &lt; 0)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<span class="s">&quot;path&quot;</span>);
+            }
+ 
+            <b>if</b> (<span class="r6 r">path</span>.<span class="i">LastIndexOf</span>(<span class="i n">System</span>.<span class="i">IO</span>.<span class="i">Path</span>.<span class="i">DirectorySeparatorChar</span>) == (<span class="r6 r">path</span>.<span class="i">Length</span> - 1))
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<span class="s">&quot;path&quot;</span>);
+            }
+ 
+            <span class="i">FileInfo</span> <span id="r8 rd" class="r8 r">fi</span> = <b>new</b> <span class="i">FileInfo</span>(<span class="r6 r">path</span>);
+ 
+            <span class="c">// Return false if the file does not exist, so that</span>
+            <span class="c">// we don&#39;t introduce a race condition</span>
+            <b>if</b> (!<span class="r8 r">fi</span>.<span class="i">Exists</span>)
+            {
+                <span class="r4 r">reason</span> = <b>new</b> <span class="i">FileNotFoundException</span>(<span class="r6 r">path</span>);
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <span class="c">// Quick exit if we don&#39;t support the file type</span>
+            <b>if</b> (!<span class="i">IsSupportedExtension</span>(<span class="r8 r">fi</span>.<span class="i">Extension</span>))
+                <b>return</b> <b>true</b>;
+ 
+            <span class="c">// Get the execution policy</span>
+            <a href="#286eddf321f428f9" class="i field">_executionPolicy</a> = <a href="SecuritySupport.cs.html#5c234bd2337db61c" class="t t">SecuritySupport</a>.<a href="SecuritySupport.cs.html#a59f2b02414af627" class="i method">GetExecutionPolicy</a>(<a href="#ba76287c418b0fda" class="i field">_shellId</a>);
+ 
+            <span class="c">// Always check the SAFER APIs if code integrity isn&#39;t being handled system-wide through</span>
+            <span class="c">// WLDP or AppLocker. In those cases, the scripts will be run in ConstrainedLanguage.</span>
+            <span class="c">// Otherwise, block.</span>
+            <span class="c">// SAFER APIs are not on CSS or OneCore</span>
+            <b>if</b> (<a href="wldpNativeMethods.cs.html#6b51558a7a8cde26" class="t t">SystemPolicy</a>.<a href="wldpNativeMethods.cs.html#2c0da8883146dab2" class="i method">GetSystemLockdownPolicy</a>() != <a href="wldpNativeMethods.cs.html#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="wldpNativeMethods.cs.html#5d74206001d0b817" class="i field">Enforce</a>)
+            {
+                <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a> <span id="r9 rd" class="r9 r">saferPolicy</span> = <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>;
+                <b>int</b> <span id="r10 rd" class="r10 r">saferAttempt</span> = 0;
+                <b>bool</b> <span id="r11 rd" class="r11 r">gotSaferPolicy</span> = <b>false</b>;
+ 
+                <span class="c">// We need to put in a retry workaround, as the SAFER APIs fail when under stress.</span>
+                <b>while</b> ((!<span class="r11 r">gotSaferPolicy</span>) &amp;&amp; (<span class="r10 r">saferAttempt</span> &lt; 5))
+                {
+                    <b>try</b>
+                    {
+                        <span class="r9 r">saferPolicy</span> = <a href="SecuritySupport.cs.html#5c234bd2337db61c" class="t t">SecuritySupport</a>.<a href="SecuritySupport.cs.html#03e8bd6c6938b551" class="i method">GetSaferPolicy</a>(<span class="r6 r">path</span>, <b>null</b>);
+                        <span class="r11 r">gotSaferPolicy</span> = <b>true</b>;
+                    }
+                    <b>catch</b> (<span class="i n">System</span>.<span class="i">ComponentModel</span>.<span class="i">Win32Exception</span>)
+                    {
+                        <b>if</b> (<span class="r10 r">saferAttempt</span> &gt; 4) { <b>throw</b>; }
+ 
+                        <span class="r10 r">saferAttempt</span>++;
+                        <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Thread</span>.<span class="i">Sleep</span>(100);
+                    }
+                }
+ 
+                <span class="c">// If the script is disallowed via AppLocker, block the file</span>
+                <span class="c">// unless the system-wide lockdown policy is &quot;Enforce&quot; (where all PowerShell</span>
+                <span class="c">// scripts are in blocked). If the system policy is &quot;Enforce&quot;, then the</span>
+                <span class="c">// script will be allowed (but ConstrainedLanguage will be applied).</span>
+                <b>if</b> (<span class="r9 r">saferPolicy</span> == <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>)
+                {
+                    <span class="r7 r">reasonMessage</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_DisallowedBySafer</span>, <span class="r6 r">path</span>);
+                    <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(<span class="r7 r">reasonMessage</span>);
+ 
+                    <b>return</b> <b>false</b>;
+                }
+            }
+ 
+            <span class="c">// WLDP and Applocker takes priority over powershell exeuction policy.</span>
+            <span class="c">// See if they want to bypass the authorization manager</span>
+            <b>if</b> (<a href="#286eddf321f428f9" class="i field">_executionPolicy</a> == <a href="SecuritySupport.cs.html#73c2048fc177fabf" class="t t">ExecutionPolicy</a>.<a href="SecuritySupport.cs.html#ee4d51bbeed2574c" class="i field">Bypass</a>)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (<a href="#286eddf321f428f9" class="i field">_executionPolicy</a> == <a href="SecuritySupport.cs.html#73c2048fc177fabf" class="t t">ExecutionPolicy</a>.<a href="SecuritySupport.cs.html#220fd609c31e55e1" class="i field">Unrestricted</a>)
+            {
+                <span class="c">// Product binaries are always trusted</span>
+                <span class="c">// This avoids signature and security zone checks</span>
+                <b>if</b> (<a href="SecuritySupport.cs.html#5c234bd2337db61c" class="t t">SecuritySupport</a>.<a href="SecuritySupport.cs.html#ce590ce9a9baa6b9" class="i method">IsProductBinary</a>(<span class="r6 r">path</span>))
+                    <b>return</b> <b>true</b>;
+ 
+                <span class="c">// We need to give the &quot;Remote File&quot; warning</span>
+                <span class="c">// if the file originated from the internet</span>
+                <b>if</b> (!<span class="i">IsLocalFile</span>(<span class="r8 r">fi</span>.<span class="i">FullName</span>))
+                {
+                    <span class="c">// Get the signature of the file.</span>
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r2 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#9f9388511bd97894" class="i property">ScriptContents</a>))
+                    {
+                        <span class="r7 r">reasonMessage</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_FileContentUnavailable</span>, <span class="r6 r">path</span>);
+                        <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(<span class="r7 r">reasonMessage</span>);
+ 
+                        <b>return</b> <b>false</b>;
+                    }
+ 
+                    <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r12 rd" class="r12 r">signature</span> = <a href="#920b9cb8d6bff16e" class="i method">GetSignatureWithEncodingRetry</a>(<span class="r6 r">path</span>, <span class="r2 r">script</span>);
+ 
+                    <span class="c">// The file is signed, with a publisher that</span>
+                    <span class="c">// we trust</span>
+                    <b>if</b> (<span class="r12 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> == <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>)
+                    {
+                        <span class="c">// The file is signed by a trusted publisher</span>
+                        <b>if</b> (<a href="#46dc328d9036e8b5" class="i method">IsTrustedPublisher</a>(<span class="r12 r">signature</span>, <span class="r6 r">path</span>))
+                        {
+                            <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+                        }
+                    }
+ 
+                    <span class="c">// We don&#39;t care about the signature.  If you distrust them,</span>
+                    <span class="c">// or the signature does not exist, we prompt you only</span>
+                    <span class="c">// because it&#39;s remote.</span>
+                    <b>if</b> (!<span class="r5 r">policyCheckPassed</span>)
+                    {
+                        <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a> <span id="r13 rd" class="r13 r">decision</span> = <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+ 
+                        <span class="c">// Get their remote prompt answer, allowing them to</span>
+                        <span class="c">// enter nested prompts, if wanted.</span>
+                        <b>do</b>
+                        {
+                            <span class="r13 r">decision</span> = <a href="#b12fd81fefd763ef" class="i method">RemoteFilePrompt</a>(<span class="r6 r">path</span>, <span class="r3 r">host</span>);
+ 
+                            <b>if</b> (<span class="r13 r">decision</span> == <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#a30ac6625ad1950b" class="i field">Suspend</a>)
+                                <span class="r3 r">host</span>.<a href="../engine/hostifaces/MshHost.cs.html#eaf1c9286d38d5b7" class="i method">EnterNestedPrompt</a>();
+                        } <b>while</b> (<span class="r13 r">decision</span> == <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#a30ac6625ad1950b" class="i field">Suspend</a>);
+ 
+                        <b>switch</b> (<span class="r13 r">decision</span>)
+                        {
+                            <b>case</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#f8f495534814bdf1" class="i field">RunOnce</a>:
+                                <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+                                <b>break</b>;
+                            <b>case</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>:
+                            <b>default</b>:
+                                <span class="r5 r">policyCheckPassed</span> = <b>false</b>;
+                                <span class="r7 r">reasonMessage</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_DoNotRun</span>, <span class="r6 r">path</span>);
+                                <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(<span class="r7 r">reasonMessage</span>);
+                                <b>break</b>;
+                        }
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+                }
+            }
+            <span class="c">// Don&#39;t need to check the signature if the file is local</span>
+            <span class="c">// and we&#39;re in &quot;RemoteSigned&quot; mode</span>
+            <b>else</b> <b>if</b> ((<span class="i">IsLocalFile</span>(<span class="r8 r">fi</span>.<span class="i">FullName</span>)) &amp;&amp;
+                    (<a href="#286eddf321f428f9" class="i field">_executionPolicy</a> == <a href="SecuritySupport.cs.html#73c2048fc177fabf" class="t t">ExecutionPolicy</a>.<a href="SecuritySupport.cs.html#32725e91e6ec08e2" class="i field">RemoteSigned</a>))
+            {
+                <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+            }
+            <b>else</b> <b>if</b> ((<a href="#286eddf321f428f9" class="i field">_executionPolicy</a> == <a href="SecuritySupport.cs.html#73c2048fc177fabf" class="t t">ExecutionPolicy</a>.<a href="SecuritySupport.cs.html#db1b3edc38853c2e" class="i field">AllSigned</a>) ||
+               (<a href="#286eddf321f428f9" class="i field">_executionPolicy</a> == <a href="SecuritySupport.cs.html#73c2048fc177fabf" class="t t">ExecutionPolicy</a>.<a href="SecuritySupport.cs.html#32725e91e6ec08e2" class="i field">RemoteSigned</a>))
+            {
+                <span class="c">// if policy requires signature verification,</span>
+                <span class="c">// make it so.</span>
+ 
+                <span class="c">// Get the signature of the file.</span>
+                <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r2 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#9f9388511bd97894" class="i property">ScriptContents</a>))
+                {
+                    <span class="r7 r">reasonMessage</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_FileContentUnavailable</span>, <span class="r6 r">path</span>);
+                    <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(<span class="r7 r">reasonMessage</span>);
+ 
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r14 rd" class="r14 r">signature</span> = <a href="#920b9cb8d6bff16e" class="i method">GetSignatureWithEncodingRetry</a>(<span class="r6 r">path</span>, <span class="r2 r">script</span>);
+ 
+                <span class="c">// The file is signed.</span>
+                <b>if</b> (<span class="r14 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> == <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>)
+                {
+                    <span class="c">// The file is signed by a trusted publisher</span>
+                    <b>if</b> (<a href="#46dc328d9036e8b5" class="i method">IsTrustedPublisher</a>(<span class="r14 r">signature</span>, <span class="r6 r">path</span>))
+                    {
+                        <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+                    }
+                    <span class="c">// The file is signed by an unknown publisher,</span>
+                    <span class="c">// So prompt.</span>
+                    <b>else</b>
+                    {
+                        <span class="r5 r">policyCheckPassed</span> = <a href="#1e268f13057ff825" class="i method">SetPolicyFromAuthenticodePrompt</a>(<span class="r6 r">path</span>, <span class="r3 r">host</span>, <b>ref</b> <span class="r4 r">reason</span>, <span class="r14 r">signature</span>);
+                    }
+                }
+                <span class="c">// The file is UnknownError, NotSigned, HashMismatch,</span>
+                <span class="c">// NotTrusted, NotSupportedFileFormat</span>
+                <b>else</b>
+                {
+                    <span class="r5 r">policyCheckPassed</span> = <b>false</b>;
+ 
+                    <b>if</b> (<span class="r14 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> == <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#67ffc52191127cac" class="i field">NotTrusted</a>)
+                    {
+                        <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(
+                            <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_NotTrusted</span>,
+                                <span class="r6 r">path</span>,
+                                <span class="r14 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a>.<span class="i">SubjectName</span>.<span class="i">Name</span>));
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(
+                            <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_Unknown</span>,
+                                <span class="r6 r">path</span>,
+                                <span class="r14 r">signature</span>.<a href="MshSignature.cs.html#83a506e6bc652be9" class="i property">StatusMessage</a>));
+                    }
+                }
+            }
+            <b>else</b> <span class="c">// if(executionPolicy == ExecutionPolicy.Restricted)</span>
+            {
+                <span class="c">// Deny everything</span>
+                <span class="r5 r">policyCheckPassed</span> = <b>false</b>;
+ 
+                <span class="c">// But accept mshxml files from publishers that we</span>
+                <span class="c">// trust, or files in the system protected directories</span>
+                <b>bool</b> <span id="r15 rd" class="r15 r">reasonSet</span> = <b>false</b>;
+                <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r8 r">fi</span>.<span class="i">Extension</span>, <span class="s">&quot;.ps1xml&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                {
+                    <b>string</b>[] <span id="r16 rd" class="r16 r">trustedDirectories</span> = <b>new</b> <b>string</b>[]
+                        { <a href="../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<span class="i">GetFolderPath</span>(<span class="i">Environment</span>.<span class="i">SpecialFolder</span>.<span class="i">System</span>),
+                          <a href="../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<span class="i">GetFolderPath</span>(<span class="i">Environment</span>.<span class="i">SpecialFolder</span>.<span class="i">ProgramFiles</span>)
+                        };
+ 
+                    <b>foreach</b> (<b>string</b> <span id="r17 rd" class="r17 r">trustedDirectory</span> <b>in</b> <span class="r16 r">trustedDirectories</span>)
+                    {
+                        <b>if</b> (<span class="r8 r">fi</span>.<span class="i">FullName</span>.<span class="i">StartsWith</span>(<span class="r17 r">trustedDirectory</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                            <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+                    }
+ 
+                    <b>if</b> (!<span class="r5 r">policyCheckPassed</span>)
+                    {
+                        <span class="c">// Get the signature of the file.</span>
+                        <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r18 rd" class="r18 r">signature</span> = <a href="#920b9cb8d6bff16e" class="i method">GetSignatureWithEncodingRetry</a>(<span class="r6 r">path</span>, <span class="r2 r">script</span>);
+ 
+                        <span class="c">// The file is signed by a trusted publisher</span>
+                        <b>if</b> (<span class="r18 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> == <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>)
+                        {
+                            <b>if</b> (<a href="#46dc328d9036e8b5" class="i method">IsTrustedPublisher</a>(<span class="r18 r">signature</span>, <span class="r6 r">path</span>))
+                            {
+                                <span class="r5 r">policyCheckPassed</span> = <b>true</b>;
+                            }
+                            <span class="c">// The file is signed by an unknown publisher,</span>
+                            <span class="c">// So prompt.</span>
+                            <b>else</b>
+                            {
+                                <span class="r5 r">policyCheckPassed</span> = <a href="#1e268f13057ff825" class="i method">SetPolicyFromAuthenticodePrompt</a>(<span class="r6 r">path</span>, <span class="r3 r">host</span>, <b>ref</b> <span class="r4 r">reason</span>, <span class="r18 r">signature</span>);
+                                <span class="r15 r">reasonSet</span> = <b>true</b>;
+                            }
+                        }
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r5 r">policyCheckPassed</span> &amp;&amp; !<span class="r15 r">reasonSet</span>)
+                {
+                    <span class="r4 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(
+                        <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_RestrictedMode</span>,
+                            <span class="r6 r">path</span>));
+                }
+            }
+ 
+            <b>return</b> <span class="r5 r">policyCheckPassed</span>;
+        }
+ 
+        <b>private static bool</b> <a id="1e268f13057ff825" href="../R/1e268f13057ff825.html" target="n" data-glyph="76,1" class="i method">SetPolicyFromAuthenticodePrompt</a>(<b>string</b> <span id="r19 rd" class="r19 r">path</span>, <a href="../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r20 rd" class="r20 r">host</span>, <b>ref</b> <span class="i">Exception</span> <span id="r21 rd" class="r21 r">reason</span>, <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r22 rd" class="r22 r">signature</span>)
+        {
+            <b>bool</b> <span id="r23 rd" class="r23 r">policyCheckPassed</span> = <b>false</b>;
+ 
+            <b>string</b> <span id="r24 rd" class="r24 r">reasonMessage</span>;
+            <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a> <span id="r25 rd" class="r25 r">decision</span> = <a href="#60c0a0bb9fe8d963" class="i method">AuthenticodePrompt</a>(<span class="r19 r">path</span>, <span class="r22 r">signature</span>, <span class="r20 r">host</span>);
+ 
+            <b>switch</b> (<span class="r25 r">decision</span>)
+            {
+                <b>case</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#f8f495534814bdf1" class="i field">RunOnce</a>:
+                    <span class="r23 r">policyCheckPassed</span> = <b>true</b>; <b>break</b>;
+                <b>case</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#08b7c0b9a5811a87" class="i field">AlwaysRun</a>:
+                    {
+                        <a href="#21b39bacf59ef2d7" class="i method">TrustPublisher</a>(<span class="r22 r">signature</span>);
+                        <span class="r23 r">policyCheckPassed</span> = <b>true</b>;
+                    }
+ 
+                    <b>break</b>;
+                <b>case</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>:
+                    <span class="r23 r">policyCheckPassed</span> = <b>false</b>;
+                    <span class="r24 r">reasonMessage</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_DoNotRun</span>, <span class="r19 r">path</span>);
+                    <span class="r21 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(<span class="r24 r">reasonMessage</span>);
+                    <b>break</b>;
+                <b>case</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#cb92b31d71a7fb3b" class="i field">NeverRun</a>:
+                    {
+                        <a href="#1321db238268dcbf" class="i method">UntrustPublisher</a>(<span class="r22 r">signature</span>);
+                        <span class="r24 r">reasonMessage</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">Reason_NeverRun</span>, <span class="r19 r">path</span>);
+                        <span class="r21 r">reason</span> = <b>new</b> <span class="i">UnauthorizedAccessException</span>(<span class="r24 r">reasonMessage</span>);
+                        <span class="r23 r">policyCheckPassed</span> = <b>false</b>;
+                    }
+ 
+                    <b>break</b>;
+            }
+ 
+            <b>return</b> <span class="r23 r">policyCheckPassed</span>;
+        }
+ 
+        <b>private static bool</b> <a id="bec36397f6d7529b" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">IsLocalFile</a>(<b>string</b> <span id="r26 rd" class="r26 r">filename</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            return true;
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+            <span class="i">SecurityZone</span> <span id="r27 rd" class="r27 r">zone</span> = <a href="../utils/ClrFacade.cs.html#a9a016478ec73a42" class="t t">ClrFacade</a>.<a href="../utils/ClrFacade.cs.html#6906f42830096d4c" class="i method">GetFileSecurityZone</a>(<span class="r26 r">filename</span>);
+ 
+            <b>if</b> (<span class="r27 r">zone</span> == <span class="i">SecurityZone</span>.<span class="i">MyComputer</span> ||
+                <span class="r27 r">zone</span> == <span class="i">SecurityZone</span>.<span class="i">Intranet</span> ||
+                <span class="r27 r">zone</span> == <span class="i">SecurityZone</span>.<span class="i">Trusted</span>)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="c">// Checks that a publisher is trusted by the system or is one of</span>
+        <span class="c">// the signed product binaries</span>
+        <b>private static bool</b> <a id="46dc328d9036e8b5" href="../R/46dc328d9036e8b5.html" target="n" data-glyph="76,1" class="i method">IsTrustedPublisher</a>(<a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r28 rd" class="r28 r">signature</span>, <b>string</b> <span id="r29 rd" class="r29 r">file</span>)
+        {
+            <span class="c">// Get the thumbprint of the current signature</span>
+            <span class="i">X509Certificate2</span> <span id="r30 rd" class="r30 r">signerCertificate</span> = <span class="r28 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a>;
+            <b>string</b> <span id="r31 rd" class="r31 r">thumbprint</span> = <span class="r30 r">signerCertificate</span>.<span class="i">Thumbprint</span>;
+ 
+            <span class="c">// See if it matches any in the list of trusted publishers</span>
+            <span class="i">X509Store</span> <span id="r32 rd" class="r32 r">trustedPublishers</span> = <b>new</b> <span class="i">X509Store</span>(<span class="i">StoreName</span>.<span class="i">TrustedPublisher</span>, <span class="i">StoreLocation</span>.<span class="i">CurrentUser</span>);
+            <span class="r32 r">trustedPublishers</span>.<span class="i">Open</span>(<span class="i">OpenFlags</span>.<span class="i">ReadOnly</span>);
+ 
+            <b>foreach</b> (<span class="i">X509Certificate2</span> <span id="r33 rd" class="r33 r">trustedCertificate</span> <b>in</b> <span class="r32 r">trustedPublishers</span>.<span class="i">Certificates</span>)
+            {
+                <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r33 r">trustedCertificate</span>.<span class="i">Thumbprint</span>, <span class="r31 r">thumbprint</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    <b>if</b> (!<a href="#0393e893ec361c59" class="i method">IsUntrustedPublisher</a>(<span class="r28 r">signature</span>, <span class="r29 r">file</span>)) <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>private static bool</b> <a id="0393e893ec361c59" href="../R/0393e893ec361c59.html" target="n" data-glyph="76,1" class="i method">IsUntrustedPublisher</a>(<a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r34 rd" class="r34 r">signature</span>, <b>string</b> <span id="r35 rd" class="r35 r">file</span>)
+        {
+            <span class="c">// Get the thumbprint of the current signature</span>
+            <span class="i">X509Certificate2</span> <span id="r36 rd" class="r36 r">signerCertificate</span> = <span class="r34 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a>;
+            <b>string</b> <span id="r37 rd" class="r37 r">thumbprint</span> = <span class="r36 r">signerCertificate</span>.<span class="i">Thumbprint</span>;
+ 
+            <span class="c">// See if it matches any in the list of trusted publishers</span>
+            <span class="i">X509Store</span> <span id="r38 rd" class="r38 r">trustedPublishers</span> = <b>new</b> <span class="i">X509Store</span>(<span class="i">StoreName</span>.<span class="i">Disallowed</span>, <span class="i">StoreLocation</span>.<span class="i">CurrentUser</span>);
+            <span class="r38 r">trustedPublishers</span>.<span class="i">Open</span>(<span class="i">OpenFlags</span>.<span class="i">ReadOnly</span>);
+ 
+            <b>foreach</b> (<span class="i">X509Certificate2</span> <span id="r39 rd" class="r39 r">trustedCertificate</span> <b>in</b> <span class="r38 r">trustedPublishers</span>.<span class="i">Certificates</span>)
+            {
+                <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r39 r">trustedCertificate</span>.<span class="i">Thumbprint</span>, <span class="r37 r">thumbprint</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Trust a publisher by adding it to the &quot;Trusted Publishers&quot; store.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">signature</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="21b39bacf59ef2d7" href="../R/21b39bacf59ef2d7.html" target="n" data-glyph="76,1" class="i method">TrustPublisher</a>(<a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r40 rd" class="r40 r">signature</span>)
+        {
+            <span class="c">// Get the certificate of the signer</span>
+            <span class="i">X509Certificate2</span> <span id="r41 rd" class="r41 r">signerCertificate</span> = <span class="r40 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a>;
+            <span class="i">X509Store</span> <span id="r42 rd" class="r42 r">trustedPublishers</span> = <b>new</b> <span class="i">X509Store</span>(<span class="i">StoreName</span>.<span class="i">TrustedPublisher</span>, <span class="i">StoreLocation</span>.<span class="i">CurrentUser</span>);
+ 
+            <b>try</b>
+            {
+                <span class="c">// Add it to the list of trusted publishers</span>
+                <span class="r42 r">trustedPublishers</span>.<span class="i">Open</span>(<span class="i">OpenFlags</span>.<span class="i">ReadWrite</span>);
+                <span class="r42 r">trustedPublishers</span>.<span class="i">Add</span>(<span class="r41 r">signerCertificate</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="r42 r">trustedPublishers</span>.<span class="i">Close</span>();
+            }
+        }
+ 
+        <b>private static void</b> <a id="1321db238268dcbf" href="../R/1321db238268dcbf.html" target="n" data-glyph="76,1" class="i method">UntrustPublisher</a>(<a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r43 rd" class="r43 r">signature</span>)
+        {
+            <span class="c">// Get the certificate of the signer</span>
+            <span class="i">X509Certificate2</span> <span id="r44 rd" class="r44 r">signerCertificate</span> = <span class="r43 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a>;
+            <span class="i">X509Store</span> <span id="r45 rd" class="r45 r">untrustedPublishers</span> = <b>new</b> <span class="i">X509Store</span>(<span class="i">StoreName</span>.<span class="i">Disallowed</span>, <span class="i">StoreLocation</span>.<span class="i">CurrentUser</span>);
+            <span class="i">X509Store</span> <span id="r46 rd" class="r46 r">trustedPublishers</span> = <b>new</b> <span class="i">X509Store</span>(<span class="i">StoreName</span>.<span class="i">TrustedPublisher</span>, <span class="i">StoreLocation</span>.<span class="i">CurrentUser</span>);
+ 
+            <span class="c">// Remove it from the list of trusted publishers</span>
+            <b>try</b>
+            {
+                <span class="c">// Remove the signer, if it&#39;s there</span>
+                <span class="r46 r">trustedPublishers</span>.<span class="i">Open</span>(<span class="i">OpenFlags</span>.<span class="i">ReadWrite</span>);
+                <span class="r46 r">trustedPublishers</span>.<span class="i">Remove</span>(<span class="r44 r">signerCertificate</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="r46 r">trustedPublishers</span>.<span class="i">Close</span>();
+            }
+ 
+            <b>try</b>
+            {
+                <span class="c">// Add it to the list of untrusted publishers</span>
+                <span class="r45 r">untrustedPublishers</span>.<span class="i">Open</span>(<span class="i">OpenFlags</span>.<span class="i">ReadWrite</span>);
+                <span class="r45 r">untrustedPublishers</span>.<span class="i">Add</span>(<span class="r44 r">signerCertificate</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="r45 r">untrustedPublishers</span>.<span class="i">Close</span>();
+            }
+        }
+ 
+        <span class="c">// Check the signature via the SIP which should never erroneously validate an invalid signature</span>
+        <span class="c">// or altered script.</span>
+        <b>private static</b> <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <a id="920b9cb8d6bff16e" href="../R/920b9cb8d6bff16e.html" target="n" data-glyph="76,1" class="i method">GetSignatureWithEncodingRetry</a>(<b>string</b> <span id="r47 rd" class="r47 r">path</span>, <a href="../engine/ExternalScriptInfo.cs.html#7806ac40f903221c" class="t t">ExternalScriptInfo</a> <span id="r48 rd" class="r48 r">script</span>)
+        {
+            <span class="c">// Invoke the SIP directly with the most simple method</span>
+            <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r49 rd" class="r49 r">signature</span> = <a href="Authenticode.cs.html#e9b013f194b66642" class="t t">SignatureHelper</a>.<a href="Authenticode.cs.html#9df06fe5ff05b73c" class="i method">GetSignature</a>(<span class="r47 r">path</span>, <span class="r50 r">fileContent</span>: <b>null</b>);
+            <b>if</b> (<span class="r49 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> == <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>)
+            {
+                <b>return</b> <span class="r49 r">signature</span>;
+            }
+ 
+            <span class="c">// try harder to validate the signature by being explicit about encoding</span>
+            <span class="c">// and providing the script contents</span>
+            <b>string</b> <span id="r51 rd" class="r51 r">verificationContents</span> = <span class="i">Encoding</span>.<span class="i">Unicode</span>.<span class="i">GetString</span>(<span class="r48 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#d185d07711810e3a" class="i property">OriginalEncoding</a>.<span class="i">GetPreamble</span>()) + <span class="r48 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#9f9388511bd97894" class="i property">ScriptContents</a>;
+            <span class="r49 r">signature</span> = <a href="Authenticode.cs.html#e9b013f194b66642" class="t t">SignatureHelper</a>.<a href="Authenticode.cs.html#9df06fe5ff05b73c" class="i method">GetSignature</a>(<span class="r47 r">path</span>, <span class="r51 r">verificationContents</span>);
+ 
+            <span class="c">// A last ditch effort -</span>
+            <span class="c">// If the file was originally ASCII or UTF8, the SIP may have added the Unicode BOM</span>
+            <b>if</b> (<span class="r49 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> != <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>
+                &amp;&amp; <span class="r48 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#d185d07711810e3a" class="i property">OriginalEncoding</a> != <span class="i">Encoding</span>.<span class="i">Unicode</span>)
+            {
+                <span class="r51 r">verificationContents</span> = <span class="i">Encoding</span>.<span class="i">Unicode</span>.<span class="i">GetString</span>(<span class="i">Encoding</span>.<span class="i">Unicode</span>.<span class="i">GetPreamble</span>()) + <span class="r48 r">script</span>.<a href="../engine/ExternalScriptInfo.cs.html#9f9388511bd97894" class="i property">ScriptContents</a>;
+                <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r52 rd" class="r52 r">fallbackSignature</span> = <a href="Authenticode.cs.html#e9b013f194b66642" class="t t">SignatureHelper</a>.<a href="Authenticode.cs.html#9df06fe5ff05b73c" class="i method">GetSignature</a>(<span class="r47 r">path</span>, <span class="r51 r">verificationContents</span>);
+ 
+                <b>if</b> (<span class="r52 r">fallbackSignature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a> == <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>)
+                    <span class="r49 r">signature</span> = <span class="r52 r">fallbackSignature</span>;
+            }
+ 
+            <b>return</b> <span class="r49 r">signature</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> signing check
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Determines if should run the specified command.  Please see the</span>
+        <span class="c">///</span><span class="c"> class summary for an overview of the semantics enforced by this</span>
+        <span class="c">///</span><span class="c"> authorization manager.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r53 r">commandInfo</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The command to be run.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r54 r">origin</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The origin of the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSHost executing the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r56 r">reason</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If access is denied, this parameter provides a specialized</span>
+        <span class="c">///</span><span class="c"> Exception as the reason.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the command should be run.  False otherwise.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i n">System</span>.<span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> CommandInfo is invalid. This may occur if</span>
+        <span class="c">///</span><span class="c"> commandInfo.Name is null or empty.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i n">System</span>.<span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> CommandInfo is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i n">System</span>.<span class="i">IO</span>.<span class="i">FileNotFoundException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file specified by commandInfo.Path is not found.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>protected internal override bool</b> <a id="7f5b398a140534e7" href="../R/7f5b398a140534e7.html" target="n" data-glyph="75,1" class="i method">ShouldRun</a>(<a href="../engine/CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a> <span id="r53 rd" class="r53 r">commandInfo</span>,
+                                                   <a href="../engine/SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a> <span id="r54 rd" class="r54 r">origin</span>,
+                                                   <a href="../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r55 rd" class="r55 r">host</span>,
+                                                   <b>out</b> <span class="i">Exception</span> <span id="r56 rd" class="r56 r">reason</span>)
+        {
+            <span class="i n">Dbg</span>.<a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r53 r">commandInfo</span> != <b>null</b>, <span class="s">&quot;caller should validate the parameter&quot;</span>);
+ 
+            <b>bool</b> <span id="r57 rd" class="r57 r">allowRun</span> = <b>false</b>;
+            <span class="r56 r">reason</span> = <b>null</b>;
+            <a href="../engine/Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../engine/Utils.cs.html#153698bbdd7dddf8" class="i method">CheckArgForNull</a>(<span class="r53 r">commandInfo</span>, <span class="s">&quot;commandInfo&quot;</span>);
+            <a href="../engine/Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../engine/Utils.cs.html#f42507df2adff9b7" class="i method">CheckArgForNullOrEmpty</a>(<span class="r53 r">commandInfo</span>.<a href="../engine/CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>, <span class="s">&quot;commandInfo.Name&quot;</span>);
+ 
+            <b>switch</b> (<span class="r53 r">commandInfo</span>.<a href="../engine/CommandInfo.cs.html#1aa74ca244a39308" class="i property">CommandType</a>)
+            {
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#e95f2e5deaaf9b93" class="i field">Cmdlet</a>:
+                    <span class="c">// Always allow cmdlets to run</span>
+                    <span class="r57 r">allowRun</span> = <b>true</b>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#83aa5e1f88cb9bf5" class="i field">Alias</a>:
+                    <span class="c">//</span>
+                    <span class="c">// we do not care about verifying an alias as we will</span>
+                    <span class="c">// get subsequent call(s) for commands/scripts</span>
+                    <span class="c">// when the alias is expanded.</span>
+                    <span class="c">//</span>
+                    <span class="r57 r">allowRun</span> = <b>true</b>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#8a4bdbbd93f182bf" class="i field">Function</a>:
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#7837d2f5f0343c5e" class="i field">Filter</a>:
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#2a673544a3a7e93f" class="i field">Configuration</a>:
+                    <span class="c">//</span>
+                    <span class="c">// we do not check functions/filters.</span>
+                    <span class="c">// we only perform script level check.</span>
+                    <span class="c">//</span>
+                    <span class="r57 r">allowRun</span> = <b>true</b>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#8324208f5ee6d431" class="i field">Script</a>:
+                    <span class="c">//</span>
+                    <span class="c">// Allow scripts that are built into the</span>
+                    <span class="c">// runspace configuration to run.</span>
+                    <span class="c">//</span>
+                    <span class="r57 r">allowRun</span> = <b>true</b>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#5baa5da2219b134a" class="i field">ExternalScript</a>:
+                    <a href="../engine/ExternalScriptInfo.cs.html#7806ac40f903221c" class="t t">ExternalScriptInfo</a> <span id="r58 rd" class="r58 r">si</span> = <span class="r53 r">commandInfo</span> <b>as</b> <a href="../engine/ExternalScriptInfo.cs.html#7806ac40f903221c" class="t t">ExternalScriptInfo</a>;
+                    <b>if</b> (<span class="r58 r">si</span> == <b>null</b>)
+                    {
+                        <span class="r56 r">reason</span> = <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<span class="s">&quot;scriptInfo&quot;</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <b>bool</b> <span id="r59 rd" class="r59 r">etwEnabled</span> = <a href="../engine/parser/Parser.cs.html#ef505205d8f64188" class="t t">ParserEventSource</a>.<a href="../engine/parser/Parser.cs.html#10130af1551d9144" class="i field">Log</a>.<span class="i">IsEnabled</span>();
+                        <b>if</b> (<span class="r59 r">etwEnabled</span>) <a href="../engine/parser/Parser.cs.html#ef505205d8f64188" class="t t">ParserEventSource</a>.<a href="../engine/parser/Parser.cs.html#10130af1551d9144" class="i field">Log</a>.<a href="../engine/parser/Parser.cs.html#e1d0f5d90e570c3e" class="i method">CheckSecurityStart</a>(<span class="r58 r">si</span>.<a href="../engine/ExternalScriptInfo.cs.html#ba1a326ad41ce463" class="i property">Path</a>);
+                        <span class="r57 r">allowRun</span> = <a href="#709c3dc2bff3a576" class="i method">CheckPolicy</a>(<span class="r58 r">si</span>, <span class="r55 r">host</span>, <b>out</b> <span class="r56 r">reason</span>);
+                        <b>if</b> (<span class="r59 r">etwEnabled</span>) <a href="../engine/parser/Parser.cs.html#ef505205d8f64188" class="t t">ParserEventSource</a>.<a href="../engine/parser/Parser.cs.html#10130af1551d9144" class="i field">Log</a>.<a href="../engine/parser/Parser.cs.html#aa494aa06e3da34c" class="i method">CheckSecurityStop</a>(<span class="r58 r">si</span>.<a href="../engine/ExternalScriptInfo.cs.html#ba1a326ad41ce463" class="i property">Path</a>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#f4fc4c6de9082bc5" class="i field">Application</a>:
+                    <span class="c">//</span>
+                    <span class="c">// We do not check executables -- that is done by Windows</span>
+                    <span class="c">//</span>
+                    <span class="r57 r">allowRun</span> = <b>true</b>;
+                    <b>break</b>;
+            }
+ 
+            <b>return</b> <span class="r57 r">allowRun</span>;
+        }
+ 
+        <b>private static</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a> <a id="60c0a0bb9fe8d963" href="../R/60c0a0bb9fe8d963.html" target="n" data-glyph="76,1" class="i method">AuthenticodePrompt</a>(<b>string</b> <span id="r60 rd" class="r60 r">path</span>,
+                                                <a href="MshSignature.cs.html#83295f4a53c4ebb2" class="t t">Signature</a> <span id="r61 rd" class="r61 r">signature</span>,
+                                                <a href="../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r62 rd" class="r62 r">host</span>)
+        {
+            <b>if</b> ((<span class="r62 r">host</span> == <b>null</b>) || (<span class="r62 r">host</span>.<a href="../engine/hostifaces/MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a> == <b>null</b>))
+            {
+                <b>return</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+            }
+ 
+            <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a> <span id="r63 rd" class="r63 r">decision</span> = <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+ 
+            <b>if</b> (<span class="r61 r">signature</span> == <b>null</b>)
+            {
+                <b>return</b> <span class="r63 r">decision</span>;
+            }
+ 
+            <b>switch</b> (<span class="r61 r">signature</span>.<a href="MshSignature.cs.html#2bab9ce115f461e1" class="i property">Status</a>)
+            {
+                <span class="c">//</span>
+                <span class="c">// we do not allow execution in any one of the</span>
+                <span class="c">// following cases</span>
+                <span class="c">//</span>
+                <b>case</b> <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ec189a0bd06bfb38" class="i field">UnknownError</a>:
+                <b>case</b> <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#1198a1d79cfbd925" class="i field">NotSigned</a>:
+                <b>case</b> <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ed42b94d9dc7464d" class="i field">HashMismatch</a>:
+                <b>case</b> <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#c36f37de699980fc" class="i field">NotSupportedFileFormat</a>:
+                    <span class="r63 r">decision</span> = <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="MshSignature.cs.html#3eaed445a9bfcee9" class="t t">SignatureStatus</a>.<a href="MshSignature.cs.html#ea02c48b5589b609" class="i field">Valid</a>:
+                    <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt; <span id="r64 rd" class="r64 r">choices</span> = <a href="#78b96102eda3fb88" class="i method">GetAuthenticodePromptChoices</a>();
+ 
+                    <b>string</b> <span id="r65 rd" class="r65 r">promptCaption</span> =
+                        <span class="i">Authenticode</span>.<span class="i">AuthenticodePromptCaption</span>;
+ 
+                    <b>string</b> <span id="r66 rd" class="r66 r">promptText</span>;
+ 
+                    <b>if</b> (<span class="r61 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a> == <b>null</b>)
+                    {
+                        <span class="r66 r">promptText</span> =
+                            <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">AuthenticodePromptText_UnknownPublisher</span>,
+                                <span class="r60 r">path</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r66 r">promptText</span> =
+                            <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">AuthenticodePromptText</span>,
+                                <span class="r60 r">path</span>,
+                                <span class="r61 r">signature</span>.<a href="MshSignature.cs.html#1b7a5b13109aba4c" class="i property">SignerCertificate</a>.<span class="i">SubjectName</span>.<span class="i">Name</span>
+                            );
+                    }
+ 
+                    <b>int</b> <span id="r67 rd" class="r67 r">userChoice</span> =
+                        <span class="r62 r">host</span>.<a href="../engine/hostifaces/MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a>.<a href="../engine/hostifaces/MshHostUserInterface.cs.html#ca6be5c54f8936b2" class="i method">PromptForChoice</a>(<span class="r65 r">promptCaption</span>,
+                                                    <span class="r66 r">promptText</span>,
+                                                    <span class="r64 r">choices</span>,
+                                                    (<b>int</b>)<a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>);
+                    <span class="r63 r">decision</span> = (<a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>)<span class="r67 r">userChoice</span>;
+ 
+                    <b>break</b>;
+ 
+                <span class="c">//</span>
+                <span class="c">// if the publisher is not trusted, we prompt and</span>
+                <span class="c">// ask the user if s/he wants to allow it to run</span>
+                <span class="c">//</span>
+                <b>default</b>:
+                    <span class="r63 r">decision</span> = <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+                    <b>break</b>;
+            }
+ 
+            <b>return</b> <span class="r63 r">decision</span>;
+        }
+ 
+        <b>private static</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a> <a id="b12fd81fefd763ef" href="../R/b12fd81fefd763ef.html" target="n" data-glyph="76,1" class="i method">RemoteFilePrompt</a>(<b>string</b> <span id="r68 rd" class="r68 r">path</span>, <a href="../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r69 rd" class="r69 r">host</span>)
+        {
+            <b>if</b> ((<span class="r69 r">host</span> == <b>null</b>) || (<span class="r69 r">host</span>.<a href="../engine/hostifaces/MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a> == <b>null</b>))
+            {
+                <b>return</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+            }
+ 
+            <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt; <span id="r70 rd" class="r70 r">choices</span> = <a href="#f64c535cd8be04d7" class="i method">GetRemoteFilePromptChoices</a>();
+ 
+            <b>string</b> <span id="r71 rd" class="r71 r">promptCaption</span> =
+                <span class="i">Authenticode</span>.<span class="i">RemoteFilePromptCaption</span>;
+ 
+            <b>string</b> <span id="r72 rd" class="r72 r">promptText</span> =
+                    <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">Authenticode</span>.<span class="i">RemoteFilePromptText</span>,
+                        <span class="r68 r">path</span>);
+ 
+            <b>int</b> <span id="r73 rd" class="r73 r">userChoice</span> = <span class="r69 r">host</span>.<a href="../engine/hostifaces/MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a>.<a href="../engine/hostifaces/MshHostUserInterface.cs.html#ca6be5c54f8936b2" class="i method">PromptForChoice</a>(<span class="r71 r">promptCaption</span>,
+                                            <span class="r72 r">promptText</span>,
+                                            <span class="r70 r">choices</span>,
+                                            0);
+ 
+            <b>switch</b> (<span class="r73 r">userChoice</span>)
+            {
+                <b>case</b> 0: <b>return</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+                <b>case</b> 1: <b>return</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#f8f495534814bdf1" class="i field">RunOnce</a>;
+                <b>case</b> 2: <b>return</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#a30ac6625ad1950b" class="i field">Suspend</a>;
+                <b>default</b>: <b>return</b> <a href="#19cb5bd7bdafc01e" class="t t">RunPromptDecision</a>.<a href="#8ec3cebaefe5debd" class="i field">DoNotRun</a>;
+            }
+        }
+ 
+        <b>private static</b> <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt; <a id="78b96102eda3fb88" href="../R/78b96102eda3fb88.html" target="n" data-glyph="76,1" class="i method">GetAuthenticodePromptChoices</a>()
+        {
+            <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt; <span id="r74 rd" class="r74 r">choices</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt;();
+ 
+            <b>string</b> <span id="r75 rd" class="r75 r">neverRun</span> = <span class="i">Authenticode</span>.<span class="i">Choice_NeverRun</span>;
+            <b>string</b> <span id="r76 rd" class="r76 r">neverRunHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_NeverRun_Help</span>;
+            <b>string</b> <span id="r77 rd" class="r77 r">doNotRun</span> = <span class="i">Authenticode</span>.<span class="i">Choice_DoNotRun</span>;
+            <b>string</b> <span id="r78 rd" class="r78 r">doNotRunHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_DoNotRun_Help</span>;
+            <b>string</b> <span id="r79 rd" class="r79 r">runOnce</span> = <span class="i">Authenticode</span>.<span class="i">Choice_RunOnce</span>;
+            <b>string</b> <span id="r80 rd" class="r80 r">runOnceHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_RunOnce_Help</span>;
+            <b>string</b> <span id="r81 rd" class="r81 r">alwaysRun</span> = <span class="i">Authenticode</span>.<span class="i">Choice_AlwaysRun</span>;
+            <b>string</b> <span id="r82 rd" class="r82 r">alwaysRunHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_AlwaysRun_Help</span>;
+ 
+            <span class="r74 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r75 r">neverRun</span>, <span class="r76 r">neverRunHelp</span>));
+            <span class="r74 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r77 r">doNotRun</span>, <span class="r78 r">doNotRunHelp</span>));
+            <span class="r74 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r79 r">runOnce</span>, <span class="r80 r">runOnceHelp</span>));
+            <span class="r74 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r81 r">alwaysRun</span>, <span class="r82 r">alwaysRunHelp</span>));
+ 
+            <b>return</b> <span class="r74 r">choices</span>;
+        }
+ 
+        <b>private static</b> <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt; <a id="f64c535cd8be04d7" href="../R/f64c535cd8be04d7.html" target="n" data-glyph="76,1" class="i method">GetRemoteFilePromptChoices</a>()
+        {
+            <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt; <span id="r83 rd" class="r83 r">choices</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../engine/hostifaces/ChoiceDescription.cs.html#1f38c9f99af41345" class="t t">ChoiceDescription</a>&gt;();
+ 
+            <b>string</b> <span id="r84 rd" class="r84 r">doNotRun</span> = <span class="i">Authenticode</span>.<span class="i">Choice_DoNotRun</span>;
+            <b>string</b> <span id="r85 rd" class="r85 r">doNotRunHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_DoNotRun_Help</span>;
+            <b>string</b> <span id="r86 rd" class="r86 r">runOnce</span> = <span class="i">Authenticode</span>.<span class="i">Choice_RunOnce</span>;
+            <b>string</b> <span id="r87 rd" class="r87 r">runOnceHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_RunOnce_Help</span>;
+            <b>string</b> <span id="r88 rd" class="r88 r">suspend</span> = <span class="i">Authenticode</span>.<span class="i">Choice_Suspend</span>;
+            <b>string</b> <span id="r89 rd" class="r89 r">suspendHelp</span> = <span class="i">Authenticode</span>.<span class="i">Choice_Suspend_Help</span>;
+ 
+            <span class="r83 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r84 r">doNotRun</span>, <span class="r85 r">doNotRunHelp</span>));
+            <span class="r83 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r86 r">runOnce</span>, <span class="r87 r">runOnceHelp</span>));
+            <span class="r83 r">choices</span>.<span class="i">Add</span>(<b>new</b> <a href="../engine/hostifaces/ChoiceDescription.cs.html#5f2b1cc3ea4f41a7" class="t constructor">ChoiceDescription</a>(<span class="r88 r">suspend</span>, <span class="r89 r">suspendHelp</span>));
+ 
+            <b>return</b> <span class="r83 r">choices</span>;
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,698 @@
+﻿<!DOCTYPE html>
+<html><head><title>IDispatchComObject.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(689);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/ComInterop/IDispatchComObject.cs" target="_top">engine\ComInterop\IDispatchComObject.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Licensed to the .NET Foundation under one or more agreements.</span>
+<span class="c">// The .NET Foundation licenses this file to you under the MIT license.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Dynamic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i">ComTypes</span> = <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>.<span class="i">ComTypes</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">ComInterop</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A wrapper around a COM object that implements IDispatch</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This currently has the following issues:</span>
+    <span class="c">///</span><span class="c"> 1. IDispatch cannot distinguish between properties and methods with 0 arguments (and non-0</span>
+    <span class="c">///</span><span class="c">    default arguments?). So obj.foo() is ambiguous as it could mean invoking method foo,</span>
+    <span class="c">///</span><span class="c">    or it could mean invoking the function pointer returned by property foo.</span>
+    <span class="c">///</span><span class="c">    We are attempting to find whether we need to call a method or a property by examining</span>
+    <span class="c">///</span><span class="c">    the ITypeInfo associated with the IDispatch. ITypeInfo tell&#39;s use what parameters the method</span>
+    <span class="c">///</span><span class="c">    expects, is it a method or a property, what is the default property of the object, how to</span>
+    <span class="c">///</span><span class="c">    create an enumerator for collections etc.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> We also support events for IDispatch objects:</span>
+    <span class="c">///</span><span class="c"> Background:</span>
+    <span class="c">///</span><span class="c"> COM objects support events through a mechanism known as Connect Points.</span>
+    <span class="c">///</span><span class="c"> Connection Points are separate objects created off the actual COM</span>
+    <span class="c">///</span><span class="c"> object (this is to prevent circular references between event sink</span>
+    <span class="c">///</span><span class="c"> and event source). When clients want to sink events generated  by</span>
+    <span class="c">///</span><span class="c"> COM object they would implement callback interfaces (aka source</span>
+    <span class="c">///</span><span class="c"> interfaces) and hand it over (advise) to the Connection Point.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Implementation details:</span>
+    <span class="c">///</span><span class="c"> When IDispatchComObject.TryGetMember request is received we first check</span>
+    <span class="c">///</span><span class="c"> whether the requested member is a property or a method. If this check</span>
+    <span class="c">///</span><span class="c"> fails we will try to determine whether an event is requested. To do</span>
+    <span class="c">///</span><span class="c"> so we will do the following set of steps:</span>
+    <span class="c">///</span><span class="c"> 1. Verify the COM object implements IConnectionPointContainer</span>
+    <span class="c">///</span><span class="c"> 2. Attempt to find COM object&#39;s coclass&#39;s description</span>
+    <span class="c">///</span><span class="c">    a. Query the object for IProvideClassInfo interface. Go to 3, if found</span>
+    <span class="c">///</span><span class="c">    b. From object&#39;s IDispatch retrieve primary interface description</span>
+    <span class="c">///</span><span class="c">    c. Scan coclasses declared in object&#39;s type library.</span>
+    <span class="c">///</span><span class="c">    d. Find coclass implementing this particular primary interface</span>
+    <span class="c">///</span><span class="c"> 3. Scan coclass for all its source interfaces.</span>
+    <span class="c">///</span><span class="c"> 4. Check whether to any of the methods on the source interfaces matches</span>
+    <span class="c">///</span><span class="c"> the request name</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Once we determine that TryGetMember requests an event we will return</span>
+    <span class="c">///</span><span class="c"> an instance of BoundDispEvent class. This class has InPlaceAdd and</span>
+    <span class="c">///</span><span class="c"> InPlaceSubtract operators defined. Calling InPlaceAdd operator will:</span>
+    <span class="c">///</span><span class="c"> 1. An instance of ComEventSinksContainer class is created (unless</span>
+    <span class="c">///</span><span class="c"> RCW already had one). This instance is associated to the RCW in attempt</span>
+    <span class="c">///</span><span class="c"> to bind the lifetime of event sinks to the lifetime of the RCW itself,</span>
+    <span class="c">///</span><span class="c"> meaning event sink will be collected once the RCW is collected (this</span>
+    <span class="c">///</span><span class="c"> is the same way event sinks lifetime is controlled by PIAs).</span>
+    <span class="c">///</span><span class="c"> Notice: ComEventSinksContainer contains a Finalizer which will go and</span>
+    <span class="c">///</span><span class="c"> unadvise all event sinks.</span>
+    <span class="c">///</span><span class="c"> Notice: ComEventSinksContainer is a list of ComEventSink objects.</span>
+    <span class="c">///</span><span class="c"> 2. Unless we have already created a ComEventSink for the required</span>
+    <span class="c">///</span><span class="c"> source interface, we will create and advise a new ComEventSink. Each</span>
+    <span class="c">///</span><span class="c"> ComEventSink implements a single source interface that COM object</span>
+    <span class="c">///</span><span class="c"> supports.</span>
+    <span class="c">///</span><span class="c"> 3. ComEventSink contains a map between method DISPIDs to  the</span>
+    <span class="c">///</span><span class="c"> multicast delegate that will be invoked when the event is raised.</span>
+    <span class="c">///</span><span class="c"> 4. ComEventSink implements IReflect interface which is exposed as</span>
+    <span class="c">///</span><span class="c"> custom IDispatch to COM consumers. This allows us to intercept calls</span>
+    <span class="c">///</span><span class="c"> to IDispatch.Invoke and apply custom logic - in particular we will</span>
+    <span class="c">///</span><span class="c"> just find and invoke the multicast delegate corresponding to the invoked</span>
+    <span class="c">///</span><span class="c"> dispid.</span>
+    <span class="c">///</span><span class="c">  </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="724858f3900a842d" href="../../R/724858f3900a842d.html" target="n" data-glyph="2,0" class="t t">IDispatchComObject</a> : <a href="ComObject.cs.html#16df9a2bc3004186" class="t t">ComObject</a>, <span class="i">IDynamicMetaObjectProvider</span>
+    {
+        <b>private</b> <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <a id="1b4fd0f551344d06" href="../../R/1b4fd0f551344d06.html" target="n" data-glyph="46,1" class="i field">_comTypeDesc</a>;
+        <b>private static readonly</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>&gt; <a id="963e72023539b402" href="../../R/963e72023539b402.html" target="n" data-glyph="46,1" class="i field">s_cacheComTypeDesc</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>&gt;();
+ 
+        <b>internal</b> <a id="15d512d4a98f0070" href="../../R/15d512d4a98f0070.html" target="n" data-glyph="74,1" class="t constructor">IDispatchComObject</a>(<a href="ComInterop.cs.html#059da79bb31bc43f" class="t t">IDispatch</a> <span id="r0 rd" class="r0 r">rcw</span>)
+            : <a href="ComObject.cs.html#58d44de1efad12d8" class="k">base</a>(<span class="r0 r">rcw</span>)
+        {
+            <a href="#8b419f96345cd29c" class="i property">DispatchObject</a> = <span class="r0 r">rcw</span>;
+        }
+ 
+        <b>public override string</b> <a id="7d5dfd85ea68bc0b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ToString</a>()
+        {
+            <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <span id="r1 rd" class="r1 r">ctd</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>;
+            <b>string</b> <span id="r2 rd" class="r2 r">typeName</span> = <b>null</b>;
+ 
+            <b>if</b> (<span class="r1 r">ctd</span> != <b>null</b>)
+            {
+                <span class="r2 r">typeName</span> = <span class="r1 r">ctd</span>.<a href="ComTypeDesc.cs.html#7799b69f5b1a37d4" class="i property">TypeName</a>;
+            }
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r2 r">typeName</span>))
+            {
+                <span class="r2 r">typeName</span> = <span class="s">&quot;IDispatch&quot;</span>;
+            }
+ 
+            <b>return</b> <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="s">&quot;{0} ({1})&quot;</span>, <a href="ComObject.cs.html#73486c9294f1d176" class="i property">RuntimeCallableWrapper</a>.<span class="i">ToString</span>(), <span class="r2 r">typeName</span>);
+        }
+ 
+        <b>public</b> <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <a id="c2e6e826d29dbd61" href="../../R/c2e6e826d29dbd61.html" target="n" data-glyph="102,1" class="i property">ComTypeDesc</a>
+        {
+            <b>get</b>
+            {
+                <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+                <b>return</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>;
+            }
+        }
+ 
+        <b>public</b> <a href="ComInterop.cs.html#059da79bb31bc43f" class="t t">IDispatch</a> <a id="8b419f96345cd29c" href="../../R/8b419f96345cd29c.html" target="n" data-glyph="102,1" class="i property">DispatchObject</a> { <b>get</b>; }
+ 
+        <b>private static int</b> <a id="b8435433c408ae81" href="../../R/b8435433c408ae81.html" target="n" data-glyph="76,1" class="i method">GetIDsOfNames</a>(<a href="ComInterop.cs.html#059da79bb31bc43f" class="t t">IDispatch</a> <span id="r3 rd" class="r3 r">dispatch</span>, <b>string</b> <span id="r4 rd" class="r4 r">name</span>, <b>out int</b> <span id="r5 rd" class="r5 r">dispId</span>)
+        {
+            <b>int</b>[] <span id="r6 rd" class="r6 r">dispIds</span> = <b>new</b> <b>int</b>[1];
+            <span class="i">Guid</span> <span id="r7 rd" class="r7 r">emptyRiid</span> = <span class="i">Guid</span>.<span class="i">Empty</span>;
+            <b>int</b> <span id="r8 rd" class="r8 r">hresult</span> = <span class="r3 r">dispatch</span>.<a href="ComInterop.cs.html#da6199839610eaaf" class="i method">TryGetIDsOfNames</a>(
+                <b>ref</b> <span class="r7 r">emptyRiid</span>,
+                <b>new</b> <b>string</b>[] { <span class="r4 r">name</span> },
+                1,
+                0,
+                <span class="r6 r">dispIds</span>);
+ 
+            <span class="r5 r">dispId</span> = <span class="r6 r">dispIds</span>[0];
+            <b>return</b> <span class="r8 r">hresult</span>;
+        }
+ 
+        <b>internal bool</b> <a id="1dd8c8a8a7adce1f" href="../../R/1dd8c8a8a7adce1f.html" target="n" data-glyph="74,1" class="i method">TryGetGetItem</a>(<b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r9 rd" class="r9 r">value</span>)
+        {
+            <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r10 rd" class="r10 r">methodDesc</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#f4f6635e6a7d9bd7" class="i property">GetItem</a>;
+            <b>if</b> (<span class="r10 r">methodDesc</span> != <b>null</b>)
+            {
+                <span class="r9 r">value</span> = <span class="r10 r">methodDesc</span>;
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="#741665b55c74327b" class="i method">SlowTryGetGetItem</a>(<b>out</b> <span class="r9 r">value</span>);
+        }
+ 
+        <b>private bool</b> <a id="741665b55c74327b" href="../../R/741665b55c74327b.html" target="n" data-glyph="76,1" class="i method">SlowTryGetGetItem</a>(<b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r11 rd" class="r11 r">value</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+ 
+            <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r12 rd" class="r12 r">methodDesc</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#f4f6635e6a7d9bd7" class="i property">GetItem</a>;
+ 
+            <span class="c">// Without type information, we really don&#39;t know whether or not we have a property getter.</span>
+            <b>if</b> (<span class="r12 r">methodDesc</span> == <b>null</b>)
+            {
+                <b>string</b> <span id="r13 rd" class="r13 r">name</span> = <span class="s">&quot;[PROPERTYGET, DISPID(0)]&quot;</span>;
+ 
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#cb204cac52d3ac4e" class="i method">EnsureGetItem</a>(<b>new</b> <span class="t">ComMethodDesc</span>(<span class="r13 r">name</span>, <a href="ComInterop.cs.html#46f652ef43c33cbc" class="t t">ComDispIds</a>.<a href="ComInterop.cs.html#8dfe02ccb4209aff" class="i field">DISPID_VALUE</a>, <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYGET</span>));
+                <span class="r12 r">methodDesc</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#f4f6635e6a7d9bd7" class="i property">GetItem</a>;
+            }
+ 
+            <span class="r11 r">value</span> = <span class="r12 r">methodDesc</span>;
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>internal bool</b> <a id="f04af4d348deddae" href="../../R/f04af4d348deddae.html" target="n" data-glyph="74,1" class="i method">TryGetSetItem</a>(<b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r14 rd" class="r14 r">value</span>)
+        {
+            <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r15 rd" class="r15 r">methodDesc</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#64742cacbaa80672" class="i property">SetItem</a>;
+            <b>if</b> (<span class="r15 r">methodDesc</span> != <b>null</b>)
+            {
+                <span class="r14 r">value</span> = <span class="r15 r">methodDesc</span>;
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="#b2dd7978b781175d" class="i method">SlowTryGetSetItem</a>(<b>out</b> <span class="r14 r">value</span>);
+        }
+ 
+        <b>private bool</b> <a id="b2dd7978b781175d" href="../../R/b2dd7978b781175d.html" target="n" data-glyph="76,1" class="i method">SlowTryGetSetItem</a>(<b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r16 rd" class="r16 r">value</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+ 
+            <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r17 rd" class="r17 r">methodDesc</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#64742cacbaa80672" class="i property">SetItem</a>;
+ 
+            <span class="c">// Without type information, we really don&#39;t know whether or not we have a property setter.</span>
+            <b>if</b> (<span class="r17 r">methodDesc</span> == <b>null</b>)
+            {
+                <b>string</b> <span id="r18 rd" class="r18 r">name</span> = <span class="s">&quot;[PROPERTYPUT, DISPID(0)]&quot;</span>;
+ 
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#19aeefc97a05d60d" class="i method">EnsureSetItem</a>(<b>new</b> <span class="t">ComMethodDesc</span>(<span class="r18 r">name</span>, <a href="ComInterop.cs.html#46f652ef43c33cbc" class="t t">ComDispIds</a>.<a href="ComInterop.cs.html#8dfe02ccb4209aff" class="i field">DISPID_VALUE</a>, <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUT</span>));
+                <span class="r17 r">methodDesc</span> = <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#64742cacbaa80672" class="i property">SetItem</a>;
+            }
+ 
+            <span class="r16 r">value</span> = <span class="r17 r">methodDesc</span>;
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>internal bool</b> <a id="2844c597faabd187" href="../../R/2844c597faabd187.html" target="n" data-glyph="74,1" class="i method">TryGetMemberMethod</a>(<b>string</b> <span id="r19 rd" class="r19 r">name</span>, <b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r20 rd" class="r20 r">method</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+            <b>return</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#ad4ef0ad81d5c13e" class="i method">TryGetFunc</a>(<span class="r19 r">name</span>, <b>out</b> <span class="r20 r">method</span>);
+        }
+ 
+        <b>internal bool</b> <a id="c9b611fd1a3e3523" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">TryGetMemberEvent</a>(<b>string</b> <span id="r21 rd" class="r21 r">name</span>, <b>out</b> <a href="ComEventDesc.cs.html#32d9fbaf134e06d1" class="t t">ComEventDesc</a> <span id="r22 rd" class="r22 r">@event</span>)
+        {
+            <a href="#e4710dd14d4aafd7" class="i method">EnsureScanDefinedEvents</a>();
+            <b>return</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#faad189cbf5b5464" class="i method">TryGetEvent</a>(<span class="r21 r">name</span>, <b>out</b> <span class="r22 r">@event</span>);
+        }
+ 
+        <b>internal bool</b> <a id="85974bb5cc6699dc" href="../../R/85974bb5cc6699dc.html" target="n" data-glyph="74,1" class="i method">TryGetMemberMethodExplicit</a>(<b>string</b> <span id="r23 rd" class="r23 r">name</span>, <b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r24 rd" class="r24 r">method</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+ 
+            <b>int</b> <span id="r25 rd" class="r25 r">hresult</span> = <a href="#b8435433c408ae81" class="i method">GetIDsOfNames</a>(<a href="#8b419f96345cd29c" class="i property">DispatchObject</a>, <span class="r23 r">name</span>, <b>out int</b> <span id="r26 rd" class="r26 r">dispId</span>);
+ 
+            <b>if</b> (<span class="r25 r">hresult</span> == <a href="ComHresults.cs.html#890ca9a638cd2a41" class="t t">ComHresults</a>.<a href="ComHresults.cs.html#d851a2797f96830e" class="i field">S_OK</a>)
+            {
+                <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r27 rd" class="r27 r">cmd</span> = <b>new</b> <span class="t">ComMethodDesc</span>(<span class="r23 r">name</span>, <span class="r26 r">dispId</span>, <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_FUNC</span>);
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#8f32ff3365116b2f" class="i method">AddFunc</a>(<span class="r23 r">name</span>, <span class="r27 r">cmd</span>);
+                <span class="r24 r">method</span> = <span class="r27 r">cmd</span>;
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r25 r">hresult</span> == <a href="ComHresults.cs.html#890ca9a638cd2a41" class="t t">ComHresults</a>.<a href="ComHresults.cs.html#f5daa801f283d215" class="i field">DISP_E_UNKNOWNNAME</a>)
+            {
+                <span class="r24 r">method</span> = <b>null</b>;
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>throw</b> <a href="Errors.cs.html#9c365d49da3fbe82" class="t t">Error</a>.<span class="i">CouldNotGetDispId</span>(<span class="r23 r">name</span>, <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;0x{0:X})&quot;</span>, <span class="r25 r">hresult</span>));
+        }
+ 
+        <b>internal bool</b> <a id="bf0b9341d7ee4c92" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">TryGetPropertySetterExplicit</a>(<b>string</b> <span id="r28 rd" class="r28 r">name</span>, <b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r29 rd" class="r29 r">method</span>, <span class="i">Type</span> <span id="r30 rd" class="r30 r">limitType</span>, <b>bool</b> <span id="r31 rd" class="r31 r">holdsNull</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+ 
+            <b>int</b> <span id="r32 rd" class="r32 r">hresult</span> = <a href="#b8435433c408ae81" class="i method">GetIDsOfNames</a>(<a href="#8b419f96345cd29c" class="i property">DispatchObject</a>, <span class="r28 r">name</span>, <b>out int</b> <span id="r33 rd" class="r33 r">dispId</span>);
+ 
+            <b>if</b> (<span class="r32 r">hresult</span> == <a href="ComHresults.cs.html#890ca9a638cd2a41" class="t t">ComHresults</a>.<a href="ComHresults.cs.html#d851a2797f96830e" class="i field">S_OK</a>)
+            {
+                <span class="c">// we do not know whether we have put or putref here</span>
+                <span class="c">// and we will not guess and pretend we found both.</span>
+                <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r34 rd" class="r34 r">put</span> = <b>new</b> <span class="t">ComMethodDesc</span>(<span class="r28 r">name</span>, <span class="r33 r">dispId</span>, <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUT</span>);
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#5f00a8b59c9c7979" class="i method">AddPut</a>(<span class="r28 r">name</span>, <span class="r34 r">put</span>);
+ 
+                <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r35 rd" class="r35 r">putref</span> = <b>new</b> <span class="t">ComMethodDesc</span>(<span class="r28 r">name</span>, <span class="r33 r">dispId</span>, <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUTREF</span>);
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#f4f1dc9b24ddb1f1" class="i method">AddPutRef</a>(<span class="r28 r">name</span>, <span class="r35 r">putref</span>);
+ 
+                <b>if</b> (<a href="ComBinderHelpers.cs.html#b21ce42e9ac1755e" class="t t">ComBinderHelpers</a>.<a href="ComBinderHelpers.cs.html#59223fb533c68efd" class="i method">PreferPut</a>(<span class="r30 r">limitType</span>, <span class="r31 r">holdsNull</span>))
+                {
+                    <span class="r29 r">method</span> = <span class="r34 r">put</span>;
+                }
+                <b>else</b>
+                {
+                    <span class="r29 r">method</span> = <span class="r35 r">putref</span>;
+                }
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r32 r">hresult</span> == <a href="ComHresults.cs.html#890ca9a638cd2a41" class="t t">ComHresults</a>.<a href="ComHresults.cs.html#f5daa801f283d215" class="i field">DISP_E_UNKNOWNNAME</a>)
+            {
+                <span class="r29 r">method</span> = <b>null</b>;
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>throw</b> <a href="Errors.cs.html#9c365d49da3fbe82" class="t t">Error</a>.<span class="i">CouldNotGetDispId</span>(<span class="r28 r">name</span>, <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;0x{0:X})&quot;</span>, <span class="r32 r">hresult</span>));
+        }
+ 
+        <b>internal override</b> <span class="i">IList</span>&lt;<b>string</b>&gt; <a id="b81369da652373e2" href="../../R/b81369da652373e2.html" target="n" data-glyph="74,1" class="i method">GetMemberNames</a>(<b>bool</b> <span id="r36 rd" class="r36 r">dataOnly</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+            <a href="#e4710dd14d4aafd7" class="i method">EnsureScanDefinedEvents</a>();
+ 
+            <b>return</b> <a href="#c2e6e826d29dbd61" class="i property">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#2d53529f6635fb68" class="i method">GetMemberNames</a>(<span class="r36 r">dataOnly</span>);
+        }
+ 
+        <b>internal override</b> <span class="i">IList</span>&lt;<span class="i">KeyValuePair</span>&lt;<b>string</b>, <b>object</b>&gt;&gt; <a id="94c223635bb6c179" href="../../R/94c223635bb6c179.html" target="n" data-glyph="74,1" class="i method">GetMembers</a>(<span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r37 rd" class="r37 r">names</span>)
+        {
+            <b>if</b> (<span class="r37 r">names</span> == <b>null</b>)
+            {
+                <span class="r37 r">names</span> = <a href="#b81369da652373e2" class="i method">GetMemberNames</a>(<b>true</b>);
+            }
+ 
+            <span class="i">Type</span> <span id="r38 rd" class="r38 r">comType</span> = <a href="ComObject.cs.html#73486c9294f1d176" class="i property">RuntimeCallableWrapper</a>.<span class="i">GetType</span>();
+ 
+            <b>var</b> <span id="r39 rd" class="r39 r">members</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">KeyValuePair</span>&lt;<b>string</b>, <b>object</b>&gt;&gt;();
+            <b>foreach</b> (<b>string</b> <span id="r40 rd" class="r40 r">name</span> <b>in</b> <span class="r37 r">names</span>)
+            {
+                <b>if</b> (<span class="r40 r">name</span> == <b>null</b>)
+                {
+                    <b>continue</b>;
+                }
+ 
+                <b>if</b> (<a href="#c2e6e826d29dbd61" class="i property">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#ad4ef0ad81d5c13e" class="i method">TryGetFunc</a>(<span class="r40 r">name</span>, <b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r41 rd" class="r41 r">method</span>) &amp;&amp; <span class="r41 r">method</span>.<a href="ComMethodDesc.cs.html#f85f42449ae057b6" class="i property">IsDataMember</a>)
+                {
+                    <b>try</b>
+                    {
+                        <b>object</b> <span id="r42 rd" class="r42 r">value</span> = <span class="r38 r">comType</span>.<span class="i">InvokeMember</span>(
+                            <span class="r41 r">method</span>.<a href="ComMethodDesc.cs.html#84c99f47aa207ca9" class="i property">Name</a>,
+                            <span class="i">BindingFlags</span>.<span class="i">GetProperty</span>,
+                            <b>null</b>,
+                            <a href="ComObject.cs.html#73486c9294f1d176" class="i property">RuntimeCallableWrapper</a>,
+                            <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>object</b>&gt;(),
+                            <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>
+                        );
+                        <span class="r39 r">members</span>.<span class="i">Add</span>(<b>new</b> <span class="i">KeyValuePair</span>&lt;<b>string</b>, <b>object</b>&gt;(<span class="r41 r">method</span>.<a href="ComMethodDesc.cs.html#84c99f47aa207ca9" class="i property">Name</a>, <span class="r42 r">value</span>));
+ 
+                        <span class="c">//evaluation failed for some reason. pass exception out</span>
+                    }
+                    <b>catch</b> (<span class="i">Exception</span> <span id="r43 rd" class="r43 r">ex</span>)
+                    {
+                        <span class="r39 r">members</span>.<span class="i">Add</span>(<b>new</b> <span class="i">KeyValuePair</span>&lt;<b>string</b>, <b>object</b>&gt;(<span class="r41 r">method</span>.<a href="ComMethodDesc.cs.html#84c99f47aa207ca9" class="i property">Name</a>, <span class="r43 r">ex</span>));
+                    }
+                }
+            }
+ 
+            <b>return</b> <span class="r39 r">members</span>.<span class="i">ToArray</span>();
+        }
+ 
+        <span class="i">DynamicMetaObject</span> <span class="i">IDynamicMetaObjectProvider</span>.<a id="ff896ebe7f8528b0" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetMetaObject</a>(<span class="i">Expression</span> <span id="r44 rd" class="r44 r">parameter</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+            <b>return</b> <b>new</b> <a href="IDispatchMetaObject.cs.html#2df885cc6821e159" class="t constructor">IDispatchMetaObject</a>(<span class="r44 r">parameter</span>, <a href="#724858f3900a842d" class="k">this</a>);
+        }
+ 
+        <b>private static void</b> <a id="0aa9873dfdb794d7" href="../../R/0aa9873dfdb794d7.html" target="n" data-glyph="76,1" class="i method">GetFuncDescForDescIndex</a>(<span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r45 rd" class="r45 r">typeInfo</span>, <b>int</b> <span id="r46 rd" class="r46 r">funcIndex</span>, <b>out</b> <span class="i">ComTypes</span>.<span class="i">FUNCDESC</span> <span id="r47 rd" class="r47 r">funcDesc</span>, <b>out</b> <span class="i">IntPtr</span> <span id="r48 rd" class="r48 r">funcDescHandle</span>)
+        {
+            <span class="i">IntPtr</span> <span id="r49 rd" class="r49 r">pFuncDesc</span>;
+            <span class="r45 r">typeInfo</span>.<span class="i">GetFuncDesc</span>(<span class="r46 r">funcIndex</span>, <b>out</b> <span class="r49 r">pFuncDesc</span>);
+ 
+            <span class="c">// GetFuncDesc should never return null, this is just to be safe</span>
+            <b>if</b> (<span class="r49 r">pFuncDesc</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <b>throw</b> <a href="Errors.cs.html#9c365d49da3fbe82" class="t t">Error</a>.<a href="Errors.cs.html#8f69e314158da66c" class="i method">CannotRetrieveTypeInformation</a>();
+            }
+ 
+            <span class="r47 r">funcDesc</span> = (<span class="i">ComTypes</span>.<span class="i">FUNCDESC</span>)<span class="i">Marshal</span>.<span class="i">PtrToStructure</span>(<span class="r49 r">pFuncDesc</span>, <b>typeof</b>(<span class="i">ComTypes</span>.<span class="i">FUNCDESC</span>));
+            <span class="r48 r">funcDescHandle</span> = <span class="r49 r">pFuncDesc</span>;
+        }
+ 
+        <b>private void</b> <a id="e4710dd14d4aafd7" href="../../R/e4710dd14d4aafd7.html" target="n" data-glyph="76,1" class="i method">EnsureScanDefinedEvents</a>()
+        {
+            <span class="c">// _comTypeDesc.Events is null if we have not yet attempted</span>
+            <span class="c">// to scan the object for events.</span>
+            <b>if</b> (<a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>?.<a href="ComTypeDesc.cs.html#65ef23b1a327b6f1" class="i property">Events</a> != <b>null</b>)
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// check type info in the type descriptions cache</span>
+            <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r50 rd" class="r50 r">typeInfo</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#0317f64071600048" class="i method">GetITypeInfoFromIDispatch</a>(<a href="#8b419f96345cd29c" class="i property">DispatchObject</a>);
+            <b>if</b> (<span class="r50 r">typeInfo</span> == <b>null</b>)
+            {
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> = <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#707de7a033d2a52d" class="i method">CreateEmptyTypeDesc</a>();
+                <b>return</b>;
+            }
+ 
+            <span class="i">ComTypes</span>.<span class="i">TYPEATTR</span> <span id="r51 rd" class="r51 r">typeAttr</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#c2932a65159dcc20" class="i method">GetTypeAttrForTypeInfo</a>(<span class="r50 r">typeInfo</span>);
+ 
+            <b>if</b> (<a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> == <b>null</b>)
+            {
+                <b>lock</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>)
+                {
+                    <b>if</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>.<span class="i">TryGetValue</span>(<span class="r51 r">typeAttr</span>.<span class="i">guid</span>, <b>out</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>) &amp;&amp;
+                        <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#65ef23b1a327b6f1" class="i property">Events</a> != <b>null</b>)
+                    {
+                        <b>return</b>;
+                    }
+                }
+            }
+ 
+            <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <span id="r52 rd" class="r52 r">typeDesc</span> = <a href="#c2e6e826d29dbd61" class="i property">ComTypeDesc</a>.<span class="i">FromITypeInfo</span>(<span class="r50 r">typeInfo</span>, <span class="r51 r">typeAttr</span>);
+ 
+            <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r53 rd" class="r53 r">classTypeInfo</span>;
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="ComEventDesc.cs.html#32d9fbaf134e06d1" class="t t">ComEventDesc</a>&gt; <span id="r54 rd" class="r54 r">events</span>;
+ 
+            <b>var</b> <span id="r55 rd" class="r55 r">cpc</span> = <a href="ComObject.cs.html#73486c9294f1d176" class="i property">RuntimeCallableWrapper</a> <b>as</b> <span class="i">ComTypes</span>.<span class="i">IConnectionPointContainer</span>;
+            <b>if</b> (<span class="r55 r">cpc</span> == <b>null</b>)
+            {
+                <span class="c">// No ICPC - this object does not support events</span>
+                <span class="r54 r">events</span> = <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#5be1e30815ad828c" class="i property">EmptyEvents</a>;
+            }
+            <b>else</b> <b>if</b> ((<span class="r53 r">classTypeInfo</span> = <a href="#33168c3e6c553607" class="i method">GetCoClassTypeInfo</a>(<a href="ComObject.cs.html#73486c9294f1d176" class="i property">RuntimeCallableWrapper</a>, <span class="r50 r">typeInfo</span>)) == <b>null</b>)
+            {
+                <span class="c">// no class info found - this object may support events</span>
+                <span class="c">// but we could not discover those</span>
+                <span class="r54 r">events</span> = <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#5be1e30815ad828c" class="i property">EmptyEvents</a>;
+            }
+            <b>else</b>
+            {
+                <span class="r54 r">events</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="ComEventDesc.cs.html#32d9fbaf134e06d1" class="t t">ComEventDesc</a>&gt;();
+ 
+                <span class="i">ComTypes</span>.<span class="i">TYPEATTR</span> <span id="r56 rd" class="r56 r">classTypeAttr</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#c2932a65159dcc20" class="i method">GetTypeAttrForTypeInfo</a>(<span class="r53 r">classTypeInfo</span>);
+                <b>for</b> (<b>int</b> <span id="r57 rd" class="r57 r">i</span> = 0; <span class="r57 r">i</span> &lt; <span class="r56 r">classTypeAttr</span>.<span class="i">cImplTypes</span>; <span class="r57 r">i</span>++)
+                {
+                    <span class="r53 r">classTypeInfo</span>.<span class="i">GetRefTypeOfImplType</span>(<span class="r57 r">i</span>, <b>out int</b> <span id="r58 rd" class="r58 r">hRefType</span>);
+ 
+                    <span class="r53 r">classTypeInfo</span>.<span class="i">GetRefTypeInfo</span>(<span class="r58 r">hRefType</span>, <b>out</b> <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r59 rd" class="r59 r">interfaceTypeInfo</span>);
+ 
+                    <span class="r53 r">classTypeInfo</span>.<span class="i">GetImplTypeFlags</span>(<span class="r57 r">i</span>, <b>out</b> <span class="i">ComTypes</span>.<span class="i">IMPLTYPEFLAGS</span> <span id="r60 rd" class="r60 r">flags</span>);
+                    <b>if</b> ((<span class="r60 r">flags</span> &amp; <span class="i">ComTypes</span>.<span class="i">IMPLTYPEFLAGS</span>.<span class="i">IMPLTYPEFLAG_FSOURCE</span>) != 0)
+                    {
+                        <a href="#820e06082832e102" class="i method">ScanSourceInterface</a>(<span class="r59 r">interfaceTypeInfo</span>, <b>ref</b> <span class="r54 r">events</span>);
+                    }
+                }
+ 
+                <b>if</b> (<span class="r54 r">events</span>.<span class="i">Count</span> == 0)
+                {
+                    <span class="r54 r">events</span> = <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#5be1e30815ad828c" class="i property">EmptyEvents</a>;
+                }
+            }
+ 
+            <b>lock</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>)
+            {
+                <b>if</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>.<span class="i">TryGetValue</span>(<span class="r51 r">typeAttr</span>.<span class="i">guid</span>, <b>out</b> <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <span id="r61 rd" class="r61 r">cachedTypeDesc</span>))
+                {
+                    <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> = <span class="r61 r">cachedTypeDesc</span>;
+                }
+                <b>else</b>
+                {
+                    <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> = <span class="r52 r">typeDesc</span>;
+                    <a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>.<span class="i">Add</span>(<span class="r51 r">typeAttr</span>.<span class="i">guid</span>, <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>);
+                }
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#65ef23b1a327b6f1" class="i property">Events</a> = <span class="r54 r">events</span>;
+            }
+        }
+ 
+        <b>private static void</b> <a id="820e06082832e102" href="../../R/820e06082832e102.html" target="n" data-glyph="76,1" class="i method">ScanSourceInterface</a>(<span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r62 rd" class="r62 r">sourceTypeInfo</span>, <b>ref</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="ComEventDesc.cs.html#32d9fbaf134e06d1" class="t t">ComEventDesc</a>&gt; <span id="r63 rd" class="r63 r">events</span>)
+        {
+            <span class="i">ComTypes</span>.<span class="i">TYPEATTR</span> <span id="r64 rd" class="r64 r">sourceTypeAttribute</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#c2932a65159dcc20" class="i method">GetTypeAttrForTypeInfo</a>(<span class="r62 r">sourceTypeInfo</span>);
+ 
+            <b>for</b> (<b>int</b> <span id="r65 rd" class="r65 r">index</span> = 0; <span class="r65 r">index</span> &lt; <span class="r64 r">sourceTypeAttribute</span>.<span class="i">cFuncs</span>; <span class="r65 r">index</span>++)
+            {
+                <span class="i">IntPtr</span> <span id="r66 rd" class="r66 r">funcDescHandleToRelease</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+ 
+                <b>try</b>
+                {
+                    <a href="#0aa9873dfdb794d7" class="i method">GetFuncDescForDescIndex</a>(<span class="r62 r">sourceTypeInfo</span>, <span class="r65 r">index</span>, <b>out</b> <span class="i">ComTypes</span>.<span class="i">FUNCDESC</span> <span id="r67 rd" class="r67 r">funcDesc</span>, <b>out</b> <span class="r66 r">funcDescHandleToRelease</span>);
+ 
+                    <span class="c">// we are not interested in hidden or restricted functions for now.</span>
+                    <b>if</b> ((<span class="r67 r">funcDesc</span>.<span class="i">wFuncFlags</span> &amp; (<b>int</b>)<span class="i">ComTypes</span>.<span class="i">FUNCFLAGS</span>.<span class="i">FUNCFLAG_FHIDDEN</span>) != 0)
+                    {
+                        <b>continue</b>;
+                    }
+                    <b>if</b> ((<span class="r67 r">funcDesc</span>.<span class="i">wFuncFlags</span> &amp; (<b>int</b>)<span class="i">ComTypes</span>.<span class="i">FUNCFLAGS</span>.<span class="i">FUNCFLAG_FRESTRICTED</span>) != 0)
+                    {
+                        <b>continue</b>;
+                    }
+ 
+                    <b>string</b> <span id="r68 rd" class="r68 r">name</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<span class="i">GetNameOfMethod</span>(<span class="r62 r">sourceTypeInfo</span>, <span class="r67 r">funcDesc</span>.<span class="i">memid</span>);
+                    <span class="r68 r">name</span> = <span class="r68 r">name</span>.<span class="i">ToUpper</span>(<span class="i n">System</span>.<span class="i">Globalization</span>.<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+ 
+                    <span class="c">// Sometimes coclass has multiple source interfaces. Usually this is caused by</span>
+                    <span class="c">// adding new events and putting them on new interfaces while keeping the</span>
+                    <span class="c">// old interfaces around. This may cause name collisions which we are</span>
+                    <span class="c">// resolving by keeping only the first event with the same name.</span>
+                    <b>if</b> (!<span class="r63 r">events</span>.<span class="i">ContainsKey</span>(<span class="r68 r">name</span>))
+                    {
+                        <a href="ComEventDesc.cs.html#32d9fbaf134e06d1" class="t t">ComEventDesc</a> <span id="r69 rd" class="r69 r">eventDesc</span> = <b>new</b> <span class="t">ComEventDesc</span>
+                        {
+                            <a href="ComEventDesc.cs.html#76337d076b7f776a" class="i field">Dispid</a> = <span class="r67 r">funcDesc</span>.<span class="i">memid</span>,
+                            <a href="ComEventDesc.cs.html#8f05dc1dab7d0eff" class="i field">SourceIID</a> = <span class="r64 r">sourceTypeAttribute</span>.<span class="i">guid</span>
+                        };
+                        <span class="r63 r">events</span>.<span class="i">Add</span>(<span class="r68 r">name</span>, <span class="r69 r">eventDesc</span>);
+                    }
+                }
+                <b>finally</b>
+                {
+                    <b>if</b> (<span class="r66 r">funcDescHandleToRelease</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                    {
+                        <span class="r62 r">sourceTypeInfo</span>.<span class="i">ReleaseFuncDesc</span>(<span class="r66 r">funcDescHandleToRelease</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>private static</b> <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <a id="33168c3e6c553607" href="../../R/33168c3e6c553607.html" target="n" data-glyph="76,1" class="i method">GetCoClassTypeInfo</a>(<b>object</b> <span id="r70 rd" class="r70 r">rcw</span>, <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r71 rd" class="r71 r">typeInfo</span>)
+        {
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<span class="r71 r">typeInfo</span> != <b>null</b>);
+ 
+            <b>if</b> (<span class="r70 r">rcw</span> <b>is</b> <a href="ComInterop.cs.html#bea69bf97a8f673b" class="t t">IProvideClassInfo</a> <span id="r72 rd" class="r72 r">provideClassInfo</span>)
+            {
+                <span class="i">IntPtr</span> <span id="r73 rd" class="r73 r">typeInfoPtr</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+                <b>try</b>
+                {
+                    <span class="r72 r">provideClassInfo</span>.<a href="ComInterop.cs.html#33278ae5225642b8" class="i method">GetClassInfo</a>(<b>out</b> <span class="r73 r">typeInfoPtr</span>);
+                    <b>if</b> (<span class="r73 r">typeInfoPtr</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                    {
+                        <b>return</b> <span class="i">Marshal</span>.<span class="i">GetObjectForIUnknown</span>(<span class="r73 r">typeInfoPtr</span>) <b>as</b> <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span>;
+                    }
+                }
+                <b>finally</b>
+                {
+                    <b>if</b> (<span class="r73 r">typeInfoPtr</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                    {
+                        <span class="i">Marshal</span>.<span class="i">Release</span>(<span class="r73 r">typeInfoPtr</span>);
+                    }
+                }
+            }
+ 
+            <span class="c">// retrieving class information through IPCI has failed -</span>
+            <span class="c">// we can try scanning the typelib to find the coclass</span>
+ 
+            <span class="r71 r">typeInfo</span>.<span class="i">GetContainingTypeLib</span>(<b>out</b> <span class="i">ComTypes</span>.<span class="i">ITypeLib</span> <span id="r74 rd" class="r74 r">typeLib</span>, <b>out int _</b>);
+            <b>string</b> <span id="r75 rd" class="r75 r">typeName</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#99aa5e9e7d8de379" class="i method">GetNameOfType</a>(<span class="r71 r">typeInfo</span>);
+ 
+            <a href="ComTypeLibDesc.cs.html#ab0abaf0b443aee2" class="t t">ComTypeLibDesc</a> <span id="r76 rd" class="r76 r">typeLibDesc</span> = <a href="ComTypeLibDesc.cs.html#ab0abaf0b443aee2" class="t t">ComTypeLibDesc</a>.<a href="ComTypeLibDesc.cs.html#b8a562fe3cc6800c" class="i method">GetFromTypeLib</a>(<span class="r74 r">typeLib</span>);
+            <a href="ComTypeClassDesc.cs.html#ee2b245a9ef2faab" class="t t">ComTypeClassDesc</a> <span id="r77 rd" class="r77 r">coclassDesc</span> = <span class="r76 r">typeLibDesc</span>.<a href="ComTypeLibDesc.cs.html#8498e1b16fc06f1d" class="i method">GetCoClassForInterface</a>(<span class="r75 r">typeName</span>);
+            <b>if</b> (<span class="r77 r">coclassDesc</span> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <span class="i">Guid</span> <span id="r78 rd" class="r78 r">coclassGuid</span> = <span class="r77 r">coclassDesc</span>.<a href="ComTypeDesc.cs.html#b7ef2e7017698d39" class="i property">Guid</a>;
+            <span class="r74 r">typeLib</span>.<span class="i">GetTypeInfoOfGuid</span>(<b>ref</b> <span class="r78 r">coclassGuid</span>, <b>out</b> <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r79 rd" class="r79 r">typeInfoCoClass</span>);
+            <b>return</b> <span class="r79 r">typeInfoCoClass</span>;
+        }
+ 
+        <b>private void</b> <a id="66e58b5554a7d095" href="../../R/66e58b5554a7d095.html" target="n" data-glyph="76,1" class="i method">EnsureScanDefinedMethods</a>()
+        {
+            <b>if</b> (<a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>?.<a href="ComTypeDesc.cs.html#2854773f3460ce43" class="i property">Funcs</a> != <b>null</b>)
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="i">ComTypes</span>.<span class="i">ITypeInfo</span> <span id="r80 rd" class="r80 r">typeInfo</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#0317f64071600048" class="i method">GetITypeInfoFromIDispatch</a>(<a href="#8b419f96345cd29c" class="i property">DispatchObject</a>);
+            <b>if</b> (<span class="r80 r">typeInfo</span> == <b>null</b>)
+            {
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> = <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a>.<a href="ComTypeDesc.cs.html#707de7a033d2a52d" class="i method">CreateEmptyTypeDesc</a>();
+                <b>return</b>;
+            }
+ 
+            <span class="i">ComTypes</span>.<span class="i">TYPEATTR</span> <span id="r81 rd" class="r81 r">typeAttr</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#c2932a65159dcc20" class="i method">GetTypeAttrForTypeInfo</a>(<span class="r80 r">typeInfo</span>);
+ 
+            <b>if</b> (<a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> == <b>null</b>)
+            {
+                <b>lock</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>)
+                {
+                    <b>if</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>.<span class="i">TryGetValue</span>(<span class="r81 r">typeAttr</span>.<span class="i">guid</span>, <b>out</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>) &amp;&amp;
+                        <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#2854773f3460ce43" class="i property">Funcs</a> != <b>null</b>)
+                    {
+                        <b>return</b>;
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r81 r">typeAttr</span>.<span class="i">typekind</span> == <span class="i">ComTypes</span>.<span class="i">TYPEKIND</span>.<span class="i">TKIND_INTERFACE</span>)
+            {
+                <span class="c">// We have typeinfo for custom interface. Get typeinfo for Dispatch interface.</span>
+                <span class="r80 r">typeInfo</span> = <a href="../COM/ComTypeInfo.cs.html#cb2cb929589884c9" class="t t">ComTypeInfo</a>.<a href="../COM/ComTypeInfo.cs.html#b26934757fbc4e4d" class="i method">GetDispatchTypeInfoFromCustomInterfaceTypeInfo</a>(<span class="r80 r">typeInfo</span>);
+                <span class="r81 r">typeAttr</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#c2932a65159dcc20" class="i method">GetTypeAttrForTypeInfo</a>(<span class="r80 r">typeInfo</span>);
+            }
+ 
+            <b>if</b> (<span class="r81 r">typeAttr</span>.<span class="i">typekind</span> == <span class="i">ComTypes</span>.<span class="i">TYPEKIND</span>.<span class="i">TKIND_COCLASS</span>)
+            {
+                <span class="c">// We have typeinfo for the COClass.  Find the default interface and get typeinfo for default interface.</span>
+                <span class="r80 r">typeInfo</span> = <a href="../COM/ComTypeInfo.cs.html#cb2cb929589884c9" class="t t">ComTypeInfo</a>.<a href="../COM/ComTypeInfo.cs.html#dca216c558fa88ca" class="i method">GetDispatchTypeInfoFromCoClassTypeInfo</a>(<span class="r80 r">typeInfo</span>);
+                <span class="r81 r">typeAttr</span> = <a href="ComRuntimeHelpers.cs.html#8e9d1fcdd0232224" class="t t">ComRuntimeHelpers</a>.<a href="ComRuntimeHelpers.cs.html#c2932a65159dcc20" class="i method">GetTypeAttrForTypeInfo</a>(<span class="r80 r">typeInfo</span>);
+            }
+ 
+            <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <span id="r82 rd" class="r82 r">typeDesc</span> = <a href="#c2e6e826d29dbd61" class="i property">ComTypeDesc</a>.<span class="i">FromITypeInfo</span>(<span class="r80 r">typeInfo</span>, <span class="r81 r">typeAttr</span>);
+ 
+            <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r83 rd" class="r83 r">getItem</span> = <b>null</b>;
+            <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r84 rd" class="r84 r">setItem</span> = <b>null</b>;
+            <span class="i">Hashtable</span> <span id="r85 rd" class="r85 r">funcs</span> = <b>new</b> <span class="i">Hashtable</span>(<span class="r81 r">typeAttr</span>.<span class="i">cFuncs</span>);
+            <span class="i">Hashtable</span> <span id="r86 rd" class="r86 r">puts</span> = <b>new</b> <span class="i">Hashtable</span>();
+            <span class="i">Hashtable</span> <span id="r87 rd" class="r87 r">putrefs</span> = <b>new</b> <span class="i">Hashtable</span>();
+ 
+            <b>for</b> (<b>int</b> <span id="r88 rd" class="r88 r">definedFuncIndex</span> = 0; <span class="r88 r">definedFuncIndex</span> &lt; <span class="r81 r">typeAttr</span>.<span class="i">cFuncs</span>; <span class="r88 r">definedFuncIndex</span>++)
+            {
+                <span class="i">IntPtr</span> <span id="r89 rd" class="r89 r">funcDescHandleToRelease</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+ 
+                <b>try</b>
+                {
+                    <a href="#0aa9873dfdb794d7" class="i method">GetFuncDescForDescIndex</a>(<span class="r80 r">typeInfo</span>, <span class="r88 r">definedFuncIndex</span>, <b>out</b> <span class="i">ComTypes</span>.<span class="i">FUNCDESC</span> <span id="r90 rd" class="r90 r">funcDesc</span>, <b>out</b> <span class="r89 r">funcDescHandleToRelease</span>);
+ 
+                    <b>if</b> ((<span class="r90 r">funcDesc</span>.<span class="i">wFuncFlags</span> &amp; (<b>int</b>)<span class="i">ComTypes</span>.<span class="i">FUNCFLAGS</span>.<span class="i">FUNCFLAG_FRESTRICTED</span>) != 0)
+                    {
+                        <span class="c">// This function is not meant for the script user to use.</span>
+                        <b>continue</b>;
+                    }
+ 
+                    <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r91 rd" class="r91 r">method</span> = <b>new</b> <span class="t">ComMethodDesc</span>(<span class="r80 r">typeInfo</span>, <span class="r90 r">funcDesc</span>);
+                    <b>string</b> <span id="r92 rd" class="r92 r">name</span> = <span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#84c99f47aa207ca9" class="i property">Name</a>.<span class="i">ToUpper</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+ 
+                    <b>if</b> ((<span class="r90 r">funcDesc</span>.<span class="i">invkind</span> &amp; <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUT</span>) != 0)
+                    {
+                        <span class="c">// If there is a getter for this put, use that ReturnType as the</span>
+                        <span class="c">// PropertyType.</span>
+                        <b>if</b> (<span class="r85 r">funcs</span>.<span class="i">ContainsKey</span>(<span class="r92 r">name</span>))
+                        {
+                            <span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#35eabdc5d5ca17ec" class="i property">InputType</a> = ((<a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a>)<span class="r85 r">funcs</span>[<span class="r92 r">name</span>]).<a href="ComMethodDesc.cs.html#3289160554734a06" class="i property">ReturnType</a>;
+                        }
+ 
+                        <span class="r86 r">puts</span>.<span class="i">Add</span>(<span class="r92 r">name</span>, <span class="r91 r">method</span>);
+ 
+                        <span class="c">// for the special dispId == 0, we need to store</span>
+                        <span class="c">// the method descriptor for the Do(SetItem) binder.</span>
+                        <b>if</b> (<span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#7e4f2fb04612de37" class="i property">DispId</a> == <a href="ComInterop.cs.html#46f652ef43c33cbc" class="t t">ComDispIds</a>.<a href="ComInterop.cs.html#8dfe02ccb4209aff" class="i field">DISPID_VALUE</a> &amp;&amp; <span class="r84 r">setItem</span> == <b>null</b>)
+                        {
+                            <span class="r84 r">setItem</span> = <span class="r91 r">method</span>;
+                        }
+                        <b>continue</b>;
+                    }
+                    <b>if</b> ((<span class="r90 r">funcDesc</span>.<span class="i">invkind</span> &amp; <span class="i">ComTypes</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUTREF</span>) != 0)
+                    {
+                        <span class="c">// If there is a getter for this put, use that ReturnType as the</span>
+                        <span class="c">// PropertyType.</span>
+                        <b>if</b> (<span class="r85 r">funcs</span>.<span class="i">ContainsKey</span>(<span class="r92 r">name</span>))
+                        {
+                            <span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#35eabdc5d5ca17ec" class="i property">InputType</a> = ((<a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a>)<span class="r85 r">funcs</span>[<span class="r92 r">name</span>]).<a href="ComMethodDesc.cs.html#3289160554734a06" class="i property">ReturnType</a>;
+                        }
+ 
+                        <span class="r87 r">putrefs</span>.<span class="i">Add</span>(<span class="r92 r">name</span>, <span class="r91 r">method</span>);
+                        <span class="c">// for the special dispId == 0, we need to store</span>
+                        <span class="c">// the method descriptor for the Do(SetItem) binder.</span>
+                        <b>if</b> (<span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#7e4f2fb04612de37" class="i property">DispId</a> == <a href="ComInterop.cs.html#46f652ef43c33cbc" class="t t">ComDispIds</a>.<a href="ComInterop.cs.html#8dfe02ccb4209aff" class="i field">DISPID_VALUE</a> &amp;&amp; <span class="r84 r">setItem</span> == <b>null</b>)
+                        {
+                            <span class="r84 r">setItem</span> = <span class="r91 r">method</span>;
+                        }
+                        <b>continue</b>;
+                    }
+ 
+                    <b>if</b> (<span class="r90 r">funcDesc</span>.<span class="i">memid</span> == <a href="ComInterop.cs.html#46f652ef43c33cbc" class="t t">ComDispIds</a>.<a href="ComInterop.cs.html#079f353d8fd431f9" class="i field">DISPID_NEWENUM</a>)
+                    {
+                        <span class="r85 r">funcs</span>.<span class="i">Add</span>(<span class="s">&quot;GETENUMERATOR&quot;</span>, <span class="r91 r">method</span>);
+                        <b>continue</b>;
+                    }
+ 
+                    <span class="c">// If there is a setter for this put, update the InputType from our</span>
+                    <span class="c">// ReturnType.</span>
+                    <b>if</b> (<span class="r86 r">puts</span>.<span class="i">ContainsKey</span>(<span class="r92 r">name</span>))
+                    {
+                        ((<a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a>)<span class="r86 r">puts</span>[<span class="r92 r">name</span>]).<a href="ComMethodDesc.cs.html#35eabdc5d5ca17ec" class="i property">InputType</a> = <span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#3289160554734a06" class="i property">ReturnType</a>;
+                    }
+ 
+                    <b>if</b> (<span class="r87 r">putrefs</span>.<span class="i">ContainsKey</span>(<span class="r92 r">name</span>))
+                    {
+                        ((<a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a>)<span class="r87 r">putrefs</span>[<span class="r92 r">name</span>]).<a href="ComMethodDesc.cs.html#35eabdc5d5ca17ec" class="i property">InputType</a> = <span class="r91 r">method</span>.<a href="ComMethodDesc.cs.html#3289160554734a06" class="i property">ReturnType</a>;
+                    }
+ 
+                    <span class="r85 r">funcs</span>.<span class="i">Add</span>(<span class="r92 r">name</span>, <span class="r91 r">method</span>);
+ 
+                    <span class="c">// for the special dispId == 0, we need to store the method descriptor</span>
+                    <span class="c">// for the Do(GetItem) binder.</span>
+                    <b>if</b> (<span class="r90 r">funcDesc</span>.<span class="i">memid</span> == <a href="ComInterop.cs.html#46f652ef43c33cbc" class="t t">ComDispIds</a>.<a href="ComInterop.cs.html#8dfe02ccb4209aff" class="i field">DISPID_VALUE</a>)
+                    {
+                        <span class="r83 r">getItem</span> = <span class="r91 r">method</span>;
+                    }
+                }
+                <b>finally</b>
+                {
+                    <b>if</b> (<span class="r89 r">funcDescHandleToRelease</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                    {
+                        <span class="r80 r">typeInfo</span>.<span class="i">ReleaseFuncDesc</span>(<span class="r89 r">funcDescHandleToRelease</span>);
+                    }
+                }
+            }
+ 
+            <b>lock</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>)
+            {
+                <b>if</b> (<a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>.<span class="i">TryGetValue</span>(<span class="r81 r">typeAttr</span>.<span class="i">guid</span>, <b>out</b> <a href="ComTypeDesc.cs.html#96489cb6051763bf" class="t t">ComTypeDesc</a> <span id="r93 rd" class="r93 r">cachedTypeDesc</span>))
+                {
+                    <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> = <span class="r93 r">cachedTypeDesc</span>;
+                }
+                <b>else</b>
+                {
+                    <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a> = <span class="r82 r">typeDesc</span>;
+                    <a href="#963e72023539b402" class="i field">s_cacheComTypeDesc</a>.<span class="i">Add</span>(<span class="r81 r">typeAttr</span>.<span class="i">guid</span>, <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>);
+                }
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#2854773f3460ce43" class="i property">Funcs</a> = <span class="r85 r">funcs</span>;
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#cf9babac9bc8055d" class="i property">Puts</a> = <span class="r86 r">puts</span>;
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#e158efe52a66a9c2" class="i property">PutRefs</a> = <span class="r87 r">putrefs</span>;
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#cb204cac52d3ac4e" class="i method">EnsureGetItem</a>(<span class="r83 r">getItem</span>);
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#19aeefc97a05d60d" class="i method">EnsureSetItem</a>(<span class="r84 r">setItem</span>);
+            }
+        }
+ 
+        <b>internal bool</b> <a id="5d65e4559bfd63a4" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">TryGetPropertySetter</a>(<b>string</b> <span id="r94 rd" class="r94 r">name</span>, <b>out</b> <a href="ComMethodDesc.cs.html#d3b4c2417c93d32c" class="t t">ComMethodDesc</a> <span id="r95 rd" class="r95 r">method</span>, <span class="i">Type</span> <span id="r96 rd" class="r96 r">limitType</span>, <b>bool</b> <span id="r97 rd" class="r97 r">holdsNull</span>)
+        {
+            <a href="#66e58b5554a7d095" class="i method">EnsureScanDefinedMethods</a>();
+ 
+            <b>if</b> (<a href="ComBinderHelpers.cs.html#b21ce42e9ac1755e" class="t t">ComBinderHelpers</a>.<a href="ComBinderHelpers.cs.html#59223fb533c68efd" class="i method">PreferPut</a>(<span class="r96 r">limitType</span>, <span class="r97 r">holdsNull</span>))
+            {
+                <b>return</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#59afeb2f8599ad44" class="i method">TryGetPut</a>(<span class="r94 r">name</span>, <b>out</b> <span class="r95 r">method</span>) ||
+                    <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#85c8ef838a29ed51" class="i method">TryGetPutRef</a>(<span class="r94 r">name</span>, <b>out</b> <span class="r95 r">method</span>);
+            }
+ 
+            <b>return</b> <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#85c8ef838a29ed51" class="i method">TryGetPutRef</a>(<span class="r94 r">name</span>, <b>out</b> <span class="r95 r">method</span>) ||
+                <a href="#1b4fd0f551344d06" class="i field">_comTypeDesc</a>.<a href="ComTypeDesc.cs.html#59afeb2f8599ad44" class="i method">TryGetPut</a>(<span class="r94 r">name</span>, <b>out</b> <span class="r95 r">method</span>);
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

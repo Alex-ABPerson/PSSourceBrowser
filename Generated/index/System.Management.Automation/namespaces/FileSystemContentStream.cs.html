@@ -1,0 +1,1581 @@
+﻿<!DOCTYPE html>
+<html><head><title>FileSystemContentStream.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(1572);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/namespaces/FileSystemContentStream.cs" target="_top">namespaces\FileSystemContentStream.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Provider</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Tasks</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The content stream class for the file system provider. It implements both</span>
+    <span class="c">///</span><span class="c"> the IContentReader and IContentWriter interfaces.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Note, this class does no specific error handling. All errors are allowed to</span>
+    <span class="c">///</span><span class="c"> propagate to the caller so that they can be written to the error pipeline</span>
+    <span class="c">///</span><span class="c"> if necessary.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="adf1718ab0894286" href="../R/adf1718ab0894286.html" target="n" data-glyph="2,0" class="t t">FileSystemContentReaderWriter</a> : <a href="IContentReader.cs.html#3b9d8a4d37108123" class="t t">IContentReader</a>, <a href="IContentWriter.cs.html#1c68919f6402f8b9" class="t t">IContentWriter</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> tracer
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An instance of the PSTraceSource class used for trace output</span>
+        <span class="c">///</span><span class="c"> using &quot;FileSystemContentStream&quot; as the category.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i n">Dbg</span>.<span class="i">TraceSourceAttribute</span>(
+            <span class="s">&quot;FileSystemContentStream&quot;</span>,
+            <span class="s">&quot;The provider content reader and writer for the file system&quot;</span>)]
+        <b>private static readonly</b> <span class="i n">Dbg</span>.<a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="45ddc0c275518b80" href="../R/45ddc0c275518b80.html" target="n" data-glyph="46,1" class="i field">s_tracer</a> =
+            <span class="i n">Dbg</span>.<a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#697b06ec70e3c537" class="i method">GetTracer</a>(<span class="s">&quot;FileSystemContentStream&quot;</span>,
+            <span class="s">&quot;The provider content reader and writer for the file system&quot;</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> tracer
+ 
+        <b>private readonly string</b> <a id="c9ad18357a241885" href="../R/c9ad18357a241885.html" target="n" data-glyph="46,1" class="i field">_path</a>;
+        <b>private readonly string</b> <a id="87578494beac51a5" href="../R/87578494beac51a5.html" target="n" data-glyph="46,1" class="i field">_streamName</a>;
+        <b>private readonly</b> <span class="i">FileMode</span> <a id="2502d31b0ebde5d3" href="../R/2502d31b0ebde5d3.html" target="n" data-glyph="46,1" class="i field">_mode</a>;
+        <b>private readonly</b> <span class="i">FileAccess</span> <a id="e27a2be22243ef1e" href="../R/e27a2be22243ef1e.html" target="n" data-glyph="46,1" class="i field">_access</a>;
+        <b>private readonly</b> <span class="i">FileShare</span> <a id="07bcdc371eeded2a" href="../R/07bcdc371eeded2a.html" target="n" data-glyph="46,1" class="i field">_share</a>;
+        <b>private readonly</b> <span class="i">Encoding</span> <a id="221ea693a1340fc7" href="../R/221ea693a1340fc7.html" target="n" data-glyph="46,1" class="i field">_encoding</a>;
+        <b>private readonly</b> <a href="../P/71826561229efd99.html#71826561229efd99" class="t t">CmdletProvider</a> <a id="8d5ee2ba3426f6d7" href="../R/8d5ee2ba3426f6d7.html" target="n" data-glyph="46,1" class="i field">_provider</a>;
+ 
+        <b>private</b> <span class="i">FileStream</span> <a id="ae36a65ca54b4978" href="../R/ae36a65ca54b4978.html" target="n" data-glyph="46,1" class="i field">_stream</a>;
+        <b>private</b> <span class="i">StreamReader</span> <a id="5aa837a7b3fe2c09" href="../R/5aa837a7b3fe2c09.html" target="n" data-glyph="46,1" class="i field">_reader</a>;
+        <b>private</b> <span class="i">StreamWriter</span> <a id="0510238d5c419f96" href="../R/0510238d5c419f96.html" target="n" data-glyph="46,1" class="i field">_writer</a>;
+        <b>private readonly bool</b> <a id="e69665e28212a962" href="../R/e69665e28212a962.html" target="n" data-glyph="46,1" class="i field">_usingByteEncoding</a>;
+ 
+        <b>private const char</b> <a id="41851684a730b128" href="../R/41851684a730b128.html" target="n" data-glyph="10,1" class="i field">DefaultDelimiter</a> = <span class="s">&#39;\n&#39;</span>;
+ 
+        <b>private readonly string</b> <a id="d7e3983fbef86670" href="../R/d7e3983fbef86670.html" target="n" data-glyph="46,1" class="i field">_delimiter</a> = <span class="s">$&quot;</span>{<a href="#41851684a730b128" class="i field">DefaultDelimiter</a>}<span class="s">&quot;</span>;
+        <b>private readonly int</b>[] <a id="f923d71166ac3cf8" href="../R/f923d71166ac3cf8.html" target="n" data-glyph="46,1" class="i field">_offsetDictionary</a>;
+        <b>private readonly bool</b> <a id="fc9db3b299f66b6d" href="../R/fc9db3b299f66b6d.html" target="n" data-glyph="46,1" class="i field">_usingDelimiter</a>;
+        <b>private readonly</b> <span class="i">StringBuilder</span> <a id="4aa92c7f2b3d27ae" href="../R/4aa92c7f2b3d27ae.html" target="n" data-glyph="46,1" class="i field">_currentLineContent</a>;
+        <b>private bool</b> <a id="268a88015a338f3b" href="../R/268a88015a338f3b.html" target="n" data-glyph="46,1" class="i field">_waitForChanges</a>;
+        <b>private readonly bool</b> <a id="4d316f3d1fd76283" href="../R/4d316f3d1fd76283.html" target="n" data-glyph="46,1" class="i field">_isRawStream</a>;
+        <b>private long</b> <a id="ce59e9c4ee8a359f" href="../R/ce59e9c4ee8a359f.html" target="n" data-glyph="46,1" class="i field">_fileOffset</a>;
+ 
+        <b>private</b> <span class="i">FileAttributes</span> <a id="c2744a5b13936636" href="../R/c2744a5b13936636.html" target="n" data-glyph="46,1" class="i field">_oldAttributes</a>;
+        <b>private bool</b> <a id="22c7ac06f9a1411c" href="../R/22c7ac06f9a1411c.html" target="n" data-glyph="46,1" class="i field">_haveOldAttributes</a>;
+ 
+        <span class="c">// The reader to read file content backward</span>
+        <b>private</b> <a href="#4d6107b22bb38b47" class="t t">FileStreamBackReader</a> <a id="6d2102583f545b90" href="../R/6d2102583f545b90.html" target="n" data-glyph="46,1" class="i field">_backReader</a>;
+        <b>private bool</b> <a id="4fe00a776623101a" href="../R/4fe00a776623101a.html" target="n" data-glyph="46,1" class="i field">_alreadyDetectEncoding</a> = <b>false</b>;
+ 
+        <span class="c">// False to add a newline to the end of the output string, true if not.</span>
+        <b>private readonly bool</b> <a id="07e7c4c0ce4e52f0" href="../R/07e7c4c0ce4e52f0.html" target="n" data-glyph="46,1" class="i field">_suppressNewline</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor for the content stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The path to the file to get the content from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">mode</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file mode to open the file with.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">access</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file access requested in the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">share</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file share to open the file with</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">encoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The encoding of the file to be read or written.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">usingByteEncoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, bytes will be read from the file. If false, the specified encoding</span>
+        <span class="c">///</span><span class="c"> will be used to read the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">waitForChanges</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, we will perform blocking reads on the file, waiting for new content to be appended</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">provider</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The CmdletProvider invoking this stream</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">isRawStream</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates raw stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="c3902cdfefb37203" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">FileSystemContentReaderWriter</a>(
+            <b>string</b> <span id="r0 rd" class="r0 r">path</span>,
+            <span class="i">FileMode</span> <span id="r1 rd" class="r1 r">mode</span>,
+            <span class="i">FileAccess</span> <span id="r2 rd" class="r2 r">access</span>,
+            <span class="i">FileShare</span> <span id="r3 rd" class="r3 r">share</span>,
+            <span class="i">Encoding</span> <span id="r4 rd" class="r4 r">encoding</span>,
+            <b>bool</b> <span id="r5 rd" class="r5 r">usingByteEncoding</span>,
+            <b>bool</b> <span id="r6 rd" class="r6 r">waitForChanges</span>,
+            <a href="../P/71826561229efd99.html#71826561229efd99" class="t t">CmdletProvider</a> <span id="r7 rd" class="r7 r">provider</span>,
+            <b>bool</b> <span id="r8 rd" class="r8 r">isRawStream</span>)
+            : <a href="#7062b2dcc742fa95" class="k">this</a>(
+                <span class="r0 r">path</span>,
+                <span class="r9 r">streamName</span>: <b>null</b>,
+                <span class="r1 r">mode</span>,
+                <span class="r2 r">access</span>,
+                <span class="r3 r">share</span>,
+                <span class="r4 r">encoding</span>,
+                <span class="r5 r">usingByteEncoding</span>,
+                <span class="r6 r">waitForChanges</span>,
+                <span class="r7 r">provider</span>,
+                <span class="r8 r">isRawStream</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor for the content stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The path to the file to get the content from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">streamName</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The name of the Alternate Data Stream to get the content from. If null or empty, returns</span>
+        <span class="c">///</span><span class="c"> the file&#39;s primary content.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">mode</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file mode to open the file with.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">access</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file access requested in the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">share</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file share to open the file with</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">encoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The encoding of the file to be read or written.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">usingByteEncoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, bytes will be read from the file. If false, the specified encoding</span>
+        <span class="c">///</span><span class="c"> will be used to read the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">waitForChanges</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, we will perform blocking reads on the file, waiting for new content to be appended</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">provider</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The CmdletProvider invoking this stream</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">isRawStream</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates raw stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="7062b2dcc742fa95" href="../R/7062b2dcc742fa95.html" target="n" data-glyph="72,1" class="t constructor">FileSystemContentReaderWriter</a>(
+            <b>string</b> <span id="r10 rd" class="r10 r">path</span>, <b>string</b> <span id="r9 rd" class="r9 r">streamName</span>, <span class="i">FileMode</span> <span id="r11 rd" class="r11 r">mode</span>, <span class="i">FileAccess</span> <span id="r12 rd" class="r12 r">access</span>, <span class="i">FileShare</span> <span id="r13 rd" class="r13 r">share</span>,
+            <span class="i">Encoding</span> <span id="r14 rd" class="r14 r">encoding</span>, <b>bool</b> <span id="r15 rd" class="r15 r">usingByteEncoding</span>, <b>bool</b> <span id="r16 rd" class="r16 r">waitForChanges</span>, <a href="../P/71826561229efd99.html#71826561229efd99" class="t t">CmdletProvider</a> <span id="r17 rd" class="r17 r">provider</span>,
+            <b>bool</b> <span id="r18 rd" class="r18 r">isRawStream</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r10 r">path</span>))
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r10 r">path</span>));
+            }
+ 
+            <b>if</b> (<a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<a href="../utils/StructuredTraceSource.cs.html#f5f0092873f47fa1" class="i property">IsEnabled</a>)
+            {
+                <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<a href="../utils/StructuredTraceSource.cs.html#25b8416175e53218" class="i method">WriteLine</a>(<span class="s">&quot;path = {0}&quot;</span>, <span class="r10 r">path</span>);
+                <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;mode = {0}&quot;</span>, <span class="r11 r">mode</span>);
+                <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;access = {0}&quot;</span>, <span class="r12 r">access</span>);
+            }
+ 
+            <a href="#c9ad18357a241885" class="i field">_path</a> = <span class="r10 r">path</span>;
+            <a href="#87578494beac51a5" class="i field">_streamName</a> = <span class="r9 r">streamName</span>;
+            <a href="#2502d31b0ebde5d3" class="i field">_mode</a> = <span class="r11 r">mode</span>;
+            <a href="#e27a2be22243ef1e" class="i field">_access</a> = <span class="r12 r">access</span>;
+            <a href="#07bcdc371eeded2a" class="i field">_share</a> = <span class="r13 r">share</span>;
+            <a href="#221ea693a1340fc7" class="i field">_encoding</a> = <span class="r14 r">encoding</span>;
+            <a href="#e69665e28212a962" class="i field">_usingByteEncoding</a> = <span class="r15 r">usingByteEncoding</span>;
+            <a href="#268a88015a338f3b" class="i field">_waitForChanges</a> = <span class="r16 r">waitForChanges</span>;
+            <a href="#8d5ee2ba3426f6d7" class="i field">_provider</a> = <span class="r17 r">provider</span>;
+            <a href="#4d316f3d1fd76283" class="i field">_isRawStream</a> = <span class="r18 r">isRawStream</span>;
+ 
+            <a href="#131f604489ff164d" class="i method">CreateStreams</a>(<span class="r10 r">path</span>, <span class="r9 r">streamName</span>, <span class="r11 r">mode</span>, <span class="r12 r">access</span>, <span class="r13 r">share</span>, <span class="r14 r">encoding</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor for the content stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The path to the file to get the content from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">streamName</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The name of the Alternate Data Stream to get the content from. If null or empty, returns</span>
+        <span class="c">///</span><span class="c"> the file&#39;s primary content.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">mode</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file mode to open the file with.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">access</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file access requested in the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">share</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file share to open the file with</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">encoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The encoding of the file to be read or written.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">usingByteEncoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, bytes will be read from the file. If false, the specified encoding</span>
+        <span class="c">///</span><span class="c"> will be used to read the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">waitForChanges</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, we will perform blocking reads on the file, waiting for new content to be appended</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">provider</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The CmdletProvider invoking this stream</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">isRawStream</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates raw stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">suppressNewline</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> False to add a newline to the end of the output string, true if not.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="83d42a7d23b1401d" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">FileSystemContentReaderWriter</a>(
+            <b>string</b> <span id="r19 rd" class="r19 r">path</span>, <b>string</b> <span id="r20 rd" class="r20 r">streamName</span>, <span class="i">FileMode</span> <span id="r21 rd" class="r21 r">mode</span>, <span class="i">FileAccess</span> <span id="r22 rd" class="r22 r">access</span>, <span class="i">FileShare</span> <span id="r23 rd" class="r23 r">share</span>,
+            <span class="i">Encoding</span> <span id="r24 rd" class="r24 r">encoding</span>, <b>bool</b> <span id="r25 rd" class="r25 r">usingByteEncoding</span>, <b>bool</b> <span id="r26 rd" class="r26 r">waitForChanges</span>, <a href="../P/71826561229efd99.html#71826561229efd99" class="t t">CmdletProvider</a> <span id="r27 rd" class="r27 r">provider</span>,
+            <b>bool</b> <span id="r28 rd" class="r28 r">isRawStream</span>, <b>bool</b> <span id="r29 rd" class="r29 r">suppressNewline</span>)
+                : <a href="#7062b2dcc742fa95" class="k">this</a>(<span class="r19 r">path</span>, <span class="r20 r">streamName</span>, <span class="r21 r">mode</span>, <span class="r22 r">access</span>, <span class="r23 r">share</span>, <span class="r24 r">encoding</span>, <span class="r25 r">usingByteEncoding</span>, <span class="r26 r">waitForChanges</span>, <span class="r27 r">provider</span>, <span class="r28 r">isRawStream</span>)
+        {
+            <a href="#07e7c4c0ce4e52f0" class="i field">_suppressNewline</a> = <span class="r29 r">suppressNewline</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor for the content stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The path to the file to get the content from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">streamName</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The name of the Alternate Data Stream to get the content from. If null or empty, returns</span>
+        <span class="c">///</span><span class="c"> the file&#39;s primary content.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">mode</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file mode to open the file with.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">access</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The file access requested in the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">  </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">share</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">    The file share to open the file with</span>
+        <span class="c">///</span><span class="c">  </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">delimiter</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The delimiter to use when reading strings. Each time read is called, all contents up to an including</span>
+        <span class="c">///</span><span class="c"> the delimiter is read.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">encoding</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The encoding of the file to be read or written.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">waitForChanges</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, we will perform blocking reads on the file, waiting for new content to be appended</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">provider</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The CmdletProvider invoking this stream</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">isRawStream</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates raw stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="9b1163783c48f88e" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">FileSystemContentReaderWriter</a>(
+            <b>string</b> <span id="r30 rd" class="r30 r">path</span>,
+            <b>string</b> <span id="r31 rd" class="r31 r">streamName</span>,
+            <span class="i">FileMode</span> <span id="r32 rd" class="r32 r">mode</span>,
+            <span class="i">FileAccess</span> <span id="r33 rd" class="r33 r">access</span>,
+            <span class="i">FileShare</span> <span id="r34 rd" class="r34 r">share</span>,
+            <b>string</b> <span id="r35 rd" class="r35 r">delimiter</span>,
+            <span class="i">Encoding</span> <span id="r36 rd" class="r36 r">encoding</span>,
+            <b>bool</b> <span id="r37 rd" class="r37 r">waitForChanges</span>,
+            <a href="../P/71826561229efd99.html#71826561229efd99" class="t t">CmdletProvider</a> <span id="r38 rd" class="r38 r">provider</span>,
+            <b>bool</b> <span id="r39 rd" class="r39 r">isRawStream</span>)
+            : <a href="#7062b2dcc742fa95" class="k">this</a>(<span class="r30 r">path</span>, <span class="r31 r">streamName</span>, <span class="r32 r">mode</span>, <span class="r33 r">access</span>, <span class="r34 r">share</span>, <span class="r36 r">encoding</span>, <b>false</b>, <span class="r37 r">waitForChanges</span>, <span class="r38 r">provider</span>, <span class="r39 r">isRawStream</span>)
+        {
+            <span class="c">// If the delimiter is default (&#39;\n&#39;) we&#39;ll use ReadLine() method.</span>
+            <span class="c">// Otherwise allocate temporary structures for ReadDelimited() method.</span>
+            <b>if</b> (!(<span class="r35 r">delimiter</span>.<span class="i">Length</span> == 1 &amp;&amp; <span class="r35 r">delimiter</span>[0] == <a href="#41851684a730b128" class="i field">DefaultDelimiter</a>))
+            {
+                <a href="#d7e3983fbef86670" class="i field">_delimiter</a> = <span class="r35 r">delimiter</span>;
+                <a href="#fc9db3b299f66b6d" class="i field">_usingDelimiter</a> = <b>true</b>;
+ 
+                <span class="c">// We expect that we are parsing files where line lengths can be relatively long.</span>
+                <b>const int</b> <span id="r40 rd" class="r40 r">DefaultLineLength</span> = 256;
+                <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a> = <b>new</b> <span class="i">StringBuilder</span>(<span class="r40 r">DefaultLineLength</span>);
+ 
+                <span class="c">// For Boyer-Moore string search algorithm.</span>
+                <span class="c">// Populate the offset lookups.</span>
+                <span class="c">// These will tell us the maximum number of characters</span>
+                <span class="c">// we can read to generate another possible match (safe shift).</span>
+                <span class="c">// If we read more characters than this, we risk consuming</span>
+                <span class="c">// more of the stream than we need.</span>
+                <span class="c">//</span>
+                <span class="c">// Because an unicode character size is 2 byte we would to have use</span>
+                <span class="c">// very large array with 65535 size to keep this safe offsets.</span>
+                <span class="c">// One solution is to pack unicode character to byte.</span>
+                <span class="c">// The workaround is to use low byte from unicode character.</span>
+                <span class="c">// This allow us to use small array with size 256.</span>
+                <span class="c">// This workaround is the fastest and provides excellent results</span>
+                <span class="c">// in regular search scenarios when the file contains</span>
+                <span class="c">// mostly characters from the same alphabet.</span>
+                <a href="#f923d71166ac3cf8" class="i field">_offsetDictionary</a> = <b>new</b> <b>int</b>[256];
+ 
+                <span class="c">// If next char from file is not in search pattern safe shift is the search pattern length.</span>
+                <b>for</b> (<b>var</b> <span id="r41 rd" class="r41 r">n</span> = 0; <span class="r41 r">n</span> &lt; <a href="#f923d71166ac3cf8" class="i field">_offsetDictionary</a>.<span class="i">Length</span>; <span class="r41 r">n</span>++)
+                {
+                    <a href="#f923d71166ac3cf8" class="i field">_offsetDictionary</a>[<span class="r41 r">n</span>] = <a href="#d7e3983fbef86670" class="i field">_delimiter</a>.<span class="i">Length</span>;
+                }
+ 
+                <span class="c">// If next char from file is in search pattern we should calculate a safe shift.</span>
+                <b>char</b> <span id="r42 rd" class="r42 r">currentChar</span>;
+                <b>byte</b> <span id="r43 rd" class="r43 r">lowByte</span>;
+                <b>for</b> (<b>var</b> <span id="r44 rd" class="r44 r">i</span> = 0; <span class="r44 r">i</span> &lt; <a href="#d7e3983fbef86670" class="i field">_delimiter</a>.<span class="i">Length</span>; <span class="r44 r">i</span>++)
+                {
+                    <span class="r42 r">currentChar</span> = <a href="#d7e3983fbef86670" class="i field">_delimiter</a>[<span class="r44 r">i</span>];
+                    <span class="r43 r">lowByte</span> = <span class="i">Unsafe</span>.<span class="i">As</span>&lt;<b>char</b>, <b>byte</b>&gt;(<b>ref</b> <span class="r42 r">currentChar</span>);
+                    <a href="#f923d71166ac3cf8" class="i field">_offsetDictionary</a>[<span class="r43 r">lowByte</span>] = <a href="#d7e3983fbef86670" class="i field">_delimiter</a>.<span class="i">Length</span> - <span class="r44 r">i</span> - 1;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reads the specified number of characters or a lines from the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">readCount</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If less than 1, then the entire file is read at once. If 1 or greater, then</span>
+        <span class="c">///</span><span class="c"> readCount is used to determine how many items (ie: lines, bytes, delimited tokens)</span>
+        <span class="c">///</span><span class="c"> to read per call.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An array of strings representing the character(s) or line(s) read from</span>
+        <span class="c">///</span><span class="c"> the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IList</span> <a id="5e4ae57158236841" href="../R/5e4ae57158236841.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>long</b> <span id="r45 rd" class="r45 r">readCount</span>)
+        {
+            <b>if</b> (<a href="#4d316f3d1fd76283" class="i field">_isRawStream</a> &amp;&amp; <a href="#268a88015a338f3b" class="i field">_waitForChanges</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">FileSystemProviderStrings</span>.<span class="i">RawAndWaitCannotCoexist</span>);
+            }
+ 
+            <b>bool</b> <span id="r46 rd" class="r46 r">waitChanges</span> = <a href="#268a88015a338f3b" class="i field">_waitForChanges</a>;
+ 
+            <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<a href="../utils/StructuredTraceSource.cs.html#25fe29b46cfb1e10" class="i method">WriteLine</a>(<span class="s">&quot;blocks requested = {0}&quot;</span>, <span class="r45 r">readCount</span>);
+ 
+            <b>var</b> <span id="r47 rd" class="r47 r">blocks</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <b>bool</b> <span id="r48 rd" class="r48 r">readToEnd</span> = (<span class="r45 r">readCount</span> &lt;= 0);
+ 
+            <b>if</b> (<a href="#4fe00a776623101a" class="i field">_alreadyDetectEncoding</a> &amp;&amp; <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">BaseStream</span>.<span class="i">Position</span> == 0)
+            {
+                <span class="i">Encoding</span> <span id="r49 rd" class="r49 r">curEncoding</span> = <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">CurrentEncoding</span>;
+                <span class="c">// Close the stream, and reopen the stream to make the BOM correctly processed.</span>
+                <span class="c">// The reader has already detected encoding, so if we don&#39;t reopen the stream, the BOM (if there is any)</span>
+                <span class="c">// will be treated as a regular character.</span>
+                <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Dispose</span>();
+                <a href="#131f604489ff164d" class="i method">CreateStreams</a>(<a href="#c9ad18357a241885" class="i field">_path</a>, <b>null</b>, <a href="#2502d31b0ebde5d3" class="i field">_mode</a>, <a href="#e27a2be22243ef1e" class="i field">_access</a>, <a href="#07bcdc371eeded2a" class="i field">_share</a>, <span class="r49 r">curEncoding</span>);
+                <a href="#4fe00a776623101a" class="i field">_alreadyDetectEncoding</a> = <b>false</b>;
+            }
+ 
+            <b>try</b>
+            {
+                <b>for</b> (<b>long</b> <span id="r50 rd" class="r50 r">currentBlock</span> = 0; (<span class="r50 r">currentBlock</span> &lt; <span class="r45 r">readCount</span>) || (<span class="r48 r">readToEnd</span>); ++<span class="r50 r">currentBlock</span>)
+                {
+                    <b>if</b> (<span class="r46 r">waitChanges</span> &amp;&amp; <a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#7f198513b75d23b5" class="i property">Stopping</a>)
+                        <span class="r46 r">waitChanges</span> = <b>false</b>;
+ 
+                    <b>if</b> (<a href="#e69665e28212a962" class="i field">_usingByteEncoding</a>)
+                    {
+                        <b>if</b> (!<a href="#6f76fae5ce3786d1" class="i method">ReadByteEncoded</a>(<span class="r46 r">waitChanges</span>, <span class="r47 r">blocks</span>, <span class="r51 r">readBackward</span>: <b>false</b>))
+                            <b>break</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <b>if</b> (<a href="#fc9db3b299f66b6d" class="i field">_usingDelimiter</a> || <a href="#4d316f3d1fd76283" class="i field">_isRawStream</a>)
+                        {
+                            <b>if</b> (!<a href="#93b7b35ae28ee896" class="i method">ReadDelimited</a>(<span class="r46 r">waitChanges</span>, <span class="r47 r">blocks</span>, <span class="r52 r">readBackward</span>: <b>false</b>, <a href="#d7e3983fbef86670" class="i field">_delimiter</a>))
+                                <b>break</b>;
+                        }
+                        <b>else</b>
+                        {
+                            <b>if</b> (!<a href="#4c1c6aacedc3bda8" class="i method">ReadByLine</a>(<span class="r46 r">waitChanges</span>, <span class="r47 r">blocks</span>, <span class="r53 r">readBackward</span>: <b>false</b>))
+                                <b>break</b>;
+                        }
+                    }
+                }
+ 
+                <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;blocks read = {0}&quot;</span>, <span class="r47 r">blocks</span>.<span class="i">Count</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r54 rd" class="r54 r">e</span>)
+            {
+                <b>if</b> ((<span class="r54 r">e</span> <b>is</b> <span class="i">IOException</span>) ||
+                    (<span class="r54 r">e</span> <b>is</b> <span class="i">ArgumentException</span>) ||
+                    (<span class="r54 r">e</span> <b>is</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityException</span>) ||
+                    (<span class="r54 r">e</span> <b>is</b> <span class="i">UnauthorizedAccessException</span>) ||
+                    (<span class="r54 r">e</span> <b>is</b> <span class="i">ArgumentNullException</span>))
+                {
+                    <span class="c">// Exception contains specific message about the error occured and so no need for errordetails.</span>
+                    <a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#83bb4484e6f0cc5d" class="i method">WriteError</a>(<b>new</b> <a href="../engine/ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r54 r">e</span>, <span class="s">&quot;GetContentReaderIOError&quot;</span>, <a href="../engine/ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../engine/ErrorPackage.cs.html#cad1e0e3e13dc1f3" class="i field">ReadError</a>, <a href="#c9ad18357a241885" class="i field">_path</a>));
+                    <b>return</b> <b>null</b>;
+                }
+                <b>else</b>
+                    <b>throw</b>;
+            }
+ 
+            <b>return</b> <span class="r47 r">blocks</span>.<span class="i">ToArray</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read the content regardless of the &#39;waitForChanges&#39; flag.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">readCount</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">IList</span> <a id="d9ce1822ab5af84f" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ReadWithoutWaitingChanges</a>(<b>long</b> <span id="r55 rd" class="r55 r">readCount</span>)
+        {
+            <b>bool</b> <span id="r56 rd" class="r56 r">oldWaitChanges</span> = <a href="#268a88015a338f3b" class="i field">_waitForChanges</a>;
+            <a href="#268a88015a338f3b" class="i field">_waitForChanges</a> = <b>false</b>;
+            <b>try</b>
+            {
+                <b>return</b> <a href="#5e4ae57158236841" class="i method">Read</a>(<span class="r55 r">readCount</span>);
+            }
+            <b>finally</b>
+            {
+                <a href="#268a88015a338f3b" class="i field">_waitForChanges</a> = <span class="r56 r">oldWaitChanges</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Move the pointer of the stream to the position where there are &#39;backCount&#39; number</span>
+        <span class="c">///</span><span class="c"> of items (depends on what we are using: delimiter? line? byts?) to the end of the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">backCount</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="923ecff046b1e910" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">SeekItemsBackward</a>(<b>int</b> <span id="r57 rd" class="r57 r">backCount</span>)
+        {
+            <b>if</b> (<span class="r57 r">backCount</span> &lt; 0)
+            {
+                <span class="c">// The caller needs to guarantee that &#39;backCount&#39; is greater or equals to 0</span>
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r57 r">backCount</span>));
+            }
+ 
+            <b>if</b> (<a href="#4d316f3d1fd76283" class="i field">_isRawStream</a> &amp;&amp; <a href="#268a88015a338f3b" class="i field">_waitForChanges</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">FileSystemProviderStrings</span>.<span class="i">RawAndWaitCannotCoexist</span>);
+            }
+ 
+            <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<a href="../utils/StructuredTraceSource.cs.html#70ee671c8687bfbd" class="i method">WriteLine</a>(<span class="s">&quot;blocks seek backwards = {0}&quot;</span>, <span class="r57 r">backCount</span>);
+ 
+            <b>var</b> <span id="r58 rd" class="r58 r">blocks</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <b>if</b> (<a href="#5aa837a7b3fe2c09" class="i field">_reader</a> != <b>null</b>)
+            {
+                <span class="c">// Make the reader automatically detect the encoding</span>
+                <span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+                <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Peek</span>();
+                <a href="#4fe00a776623101a" class="i field">_alreadyDetectEncoding</a> = <b>true</b>;
+            }
+ 
+            <span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">End</span>);
+ 
+            <b>if</b> (<span class="r57 r">backCount</span> == 0)
+            {
+                <span class="c">// If backCount is 0, we should move the position to the end of the file.</span>
+                <span class="c">// Maybe the &quot;waitForChanges&quot; is true in this case, which means that we are waiting for new inputs.</span>
+                <b>return</b>;
+            }
+ 
+            <b>string</b> <span id="r59 rd" class="r59 r">actualDelimiter</span> = <b>string</b>.<span class="i">Create</span>(
+                <a href="#d7e3983fbef86670" class="i field">_delimiter</a>.<span class="i">Length</span>,
+                <a href="#d7e3983fbef86670" class="i field">_delimiter</a>,
+                (<span id="r60 rd" class="r60 r">chars</span>, <span id="r61 rd" class="r61 r">buf</span>) =&gt;
+                {
+                    <b>for</b> (<b>int</b> <span id="r62 rd" class="r62 r">i</span> = 0, <span id="r63 rd" class="r63 r">j</span> = <span class="r61 r">buf</span>.<span class="i">Length</span> - 1; <span class="r62 r">i</span> &lt; <span class="r60 r">chars</span>.<span class="i">Length</span>; <span class="r62 r">i</span>++, <span class="r63 r">j</span>--)
+                    {
+                        <span class="r60 r">chars</span>[<span class="r62 r">i</span>] = <span class="r61 r">buf</span>[<span class="r63 r">j</span>];
+                    }
+                });
+ 
+            <b>long</b> <span id="r64 rd" class="r64 r">currentBlock</span> = 0;
+            <b>string</b> <span id="r65 rd" class="r65 r">lastDelimiterMatch</span> = <b>null</b>;
+ 
+            <b>try</b>
+            {
+                <b>if</b> (<a href="#4d316f3d1fd76283" class="i field">_isRawStream</a>)
+                {
+                    <span class="c">// We always read to the end for the raw data.</span>
+                    <span class="c">// If it&#39;s indicated as RawStream, we move the pointer to the</span>
+                    <span class="c">// beginning of the file</span>
+                    <span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+                    <b>return</b>;
+                }
+ 
+                <b>for</b> (; <span class="r64 r">currentBlock</span> &lt; <span class="r57 r">backCount</span>; ++<span class="r64 r">currentBlock</span>)
+                {
+                    <b>if</b> (<a href="#e69665e28212a962" class="i field">_usingByteEncoding</a>)
+                    {
+                        <b>if</b> (!<a href="#6f76fae5ce3786d1" class="i method">ReadByteEncoded</a>(<span class="r66 r">waitChanges</span>: <b>false</b>, <span class="r58 r">blocks</span>, <span class="r51 r">readBackward</span>: <b>true</b>))
+                            <b>break</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <b>if</b> (<a href="#fc9db3b299f66b6d" class="i field">_usingDelimiter</a>)
+                        {
+                            <b>if</b> (!<a href="#93b7b35ae28ee896" class="i method">ReadDelimited</a>(<span class="r67 r">waitChanges</span>: <b>false</b>, <span class="r58 r">blocks</span>, <span class="r52 r">readBackward</span>: <b>true</b>, <span class="r59 r">actualDelimiter</span>))
+                                <b>break</b>;
+                            <span class="c">// If the delimiter is at the end of the file, we need to read one more</span>
+                            <span class="c">// to get to the right position. For example:</span>
+                            <span class="c">//      ua123ua456ua -- -Tail 1</span>
+                            <span class="c">// If we read backward only once, we get &#39;ua&#39;, and cannot get to the right position</span>
+                            <span class="c">// So we read one more time, get &#39;ua456ua&#39;, and then we can get the right position</span>
+                            <span class="r65 r">lastDelimiterMatch</span> = (<b>string</b>)<span class="r58 r">blocks</span>[0];
+                            <b>if</b> (<span class="r64 r">currentBlock</span> == 0 &amp;&amp; <span class="r65 r">lastDelimiterMatch</span>.<span class="i">Equals</span>(<span class="r59 r">actualDelimiter</span>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>))
+                                <span class="r57 r">backCount</span>++;
+                        }
+                        <b>else</b>
+                        {
+                            <b>if</b> (!<a href="#4c1c6aacedc3bda8" class="i method">ReadByLine</a>(<span class="r68 r">waitChanges</span>: <b>false</b>, <span class="r58 r">blocks</span>, <span class="r53 r">readBackward</span>: <b>true</b>))
+                                <b>break</b>;
+                        }
+                    }
+ 
+                    <span class="r58 r">blocks</span>.<span class="i">Clear</span>();
+                }
+ 
+                <span class="c">// If usingByteEncoding is true, we don&#39;t create the reader and _backReader</span>
+                <b>if</b> (!<a href="#e69665e28212a962" class="i field">_usingByteEncoding</a>)
+                {
+                    <b>long</b> <span id="r69 rd" class="r69 r">curStreamPosition</span> = <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#b1e6c3cc33b7f847" class="i method">GetCurrentPosition</a>();
+                    <b>if</b> (<a href="#fc9db3b299f66b6d" class="i field">_usingDelimiter</a>)
+                    {
+                        <b>if</b> (<span class="r64 r">currentBlock</span> == <span class="r57 r">backCount</span>)
+                        {
+                            <span class="i n">Dbg</span>.<a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r65 r">lastDelimiterMatch</span> != <b>null</b>, <span class="s">&quot;lastDelimiterMatch should not be null when currentBlock == backCount&quot;</span>);
+                            <b>if</b> (<span class="r65 r">lastDelimiterMatch</span>.<span class="i">EndsWith</span>(<span class="r59 r">actualDelimiter</span>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>))
+                            {
+                                <span class="r69 r">curStreamPosition</span> += <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#829a6a9950a5cf54" class="i method">GetByteCount</a>(<a href="#d7e3983fbef86670" class="i field">_delimiter</a>);
+                            }
+                        }
+                    }
+ 
+                    <span class="i">Seek</span>(<span class="r69 r">curStreamPosition</span>, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+                }
+ 
+                <a href="#45ddc0c275518b80" class="i field">s_tracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;blocks seek position = {0}&quot;</span>, <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Position</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r70 rd" class="r70 r">e</span>)
+            {
+                <b>if</b> ((<span class="r70 r">e</span> <b>is</b> <span class="i">IOException</span>) ||
+                    (<span class="r70 r">e</span> <b>is</b> <span class="i">ArgumentException</span>) ||
+                    (<span class="r70 r">e</span> <b>is</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityException</span>) ||
+                    (<span class="r70 r">e</span> <b>is</b> <span class="i">UnauthorizedAccessException</span>) ||
+                    (<span class="r70 r">e</span> <b>is</b> <span class="i">ArgumentNullException</span>))
+                {
+                    <span class="c">// Exception contains specific message about the error occurred and so no need for errordetails.</span>
+                    <a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#83bb4484e6f0cc5d" class="i method">WriteError</a>(<b>new</b> <a href="../engine/ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r70 r">e</span>, <span class="s">&quot;GetContentReaderIOError&quot;</span>, <a href="../engine/ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../engine/ErrorPackage.cs.html#cad1e0e3e13dc1f3" class="i field">ReadError</a>, <a href="#c9ad18357a241885" class="i field">_path</a>));
+                }
+                <b>else</b>
+                    <b>throw</b>;
+            }
+        }
+ 
+        <b>private bool</b> <a id="4c1c6aacedc3bda8" href="../R/4c1c6aacedc3bda8.html" target="n" data-glyph="76,1" class="i method">ReadByLine</a>(<b>bool</b> <span id="r68 rd" class="r68 r">waitChanges</span>, <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r71 rd" class="r71 r">blocks</span>, <b>bool</b> <span id="r53 rd" class="r53 r">readBackward</span>)
+        {
+            <span class="c">// Reading lines as strings</span>
+            <b>string</b> <span id="r72 rd" class="r72 r">line</span> = <span class="r53 r">readBackward</span> ? <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#631bae44be2201f7" class="i method">ReadLine</a>() : <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">ReadLine</span>();
+ 
+            <b>if</b> (<span class="r72 r">line</span> == <b>null</b>)
+            {
+                <b>if</b> (<span class="r68 r">waitChanges</span>)
+                {
+                    <span class="c">// We only wait for changes when read forwards. So here we use reader, instead of &#39;localReader&#39;</span>
+                    <b>do</b>
+                    {
+                        <span class="i">WaitForChanges</span>(<a href="#c9ad18357a241885" class="i field">_path</a>, <a href="#2502d31b0ebde5d3" class="i field">_mode</a>, <a href="#e27a2be22243ef1e" class="i field">_access</a>, <a href="#07bcdc371eeded2a" class="i field">_share</a>, <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">CurrentEncoding</span>);
+                        <span class="r72 r">line</span> = <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">ReadLine</span>();
+                    }
+                    <b>while</b> ((<span class="r72 r">line</span> == <b>null</b>) &amp;&amp; (!<a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#7f198513b75d23b5" class="i property">Stopping</a>));
+                }
+            }
+ 
+            <b>if</b> (<span class="r72 r">line</span> != <b>null</b>)
+            {
+                <span class="r71 r">blocks</span>.<span class="i">Add</span>(<span class="r72 r">line</span>);
+            }
+ 
+            <b>int</b> <span id="r73 rd" class="r73 r">peekResult</span> = <span class="r53 r">readBackward</span> ? <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#dbd47c139b11886b" class="i method">Peek</a>() : <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Peek</span>();
+            <b>if</b> (<span class="r73 r">peekResult</span> == -1)
+            {
+                <b>return</b> <b>false</b>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <b>true</b>;
+            }
+        }
+ 
+        <b>private bool</b> <a id="93b7b35ae28ee896" href="../R/93b7b35ae28ee896.html" target="n" data-glyph="76,1" class="i method">ReadDelimited</a>(<b>bool</b> <span id="r67 rd" class="r67 r">waitChanges</span>, <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r74 rd" class="r74 r">blocks</span>, <b>bool</b> <span id="r52 rd" class="r52 r">readBackward</span>, <b>string</b> <span id="r75 rd" class="r75 r">actualDelimiter</span>)
+        {
+            <b>if</b> (<a href="#4d316f3d1fd76283" class="i field">_isRawStream</a>)
+            {
+                <span class="c">// when -Raw is used we want to anyway read the whole thing</span>
+                <span class="c">// so avoiding the while loop by reading the entire content.</span>
+                <b>string</b> <span id="r76 rd" class="r76 r">contentRead</span> = <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">ReadToEnd</span>();
+                <b>if</b> (<span class="r76 r">contentRead</span>.<span class="i">Length</span> &gt; 0)
+                {
+                    <span class="r74 r">blocks</span>.<span class="i">Add</span>(<span class="r76 r">contentRead</span>);
+                }
+ 
+                <span class="c">// We already read whole file so return EOF.</span>
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <span class="c">// Since the delimiter is a string, we&#39;re essentially</span>
+            <span class="c">// dealing with a &quot;find the substring&quot; algorithm, but with</span>
+            <span class="c">// the additional restriction that we cannot read past the</span>
+            <span class="c">// end of the delimiter. If we read past the end of the delimiter,</span>
+            <span class="c">// then we&#39;ll eat up bytes that we need from the filestream.</span>
+            <span class="c">// The solution is a modified Boyer-Moore string search algorithm.</span>
+            <span class="c">// This version retains the sub-linear search performance (via the</span>
+            <span class="c">// lookup tables).</span>
+            <b>int</b> <span id="r77 rd" class="r77 r">numRead</span> = 0;
+            <b>int</b> <span id="r78 rd" class="r78 r">currentOffset</span> = <span class="r75 r">actualDelimiter</span>.<span class="i">Length</span>;
+            <span class="i">Span</span>&lt;<b>char</b>&gt; <span id="r79 rd" class="r79 r">readBuffer</span> = <b>stackalloc char</b>[<span class="r78 r">currentOffset</span>];
+            <b>bool</b> <span id="r80 rd" class="r80 r">delimiterNotFound</span> = <b>true</b>;
+            <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Clear</span>();
+ 
+            <b>do</b>
+            {
+                <span class="c">// Read in the required batch of characters</span>
+                <span class="r77 r">numRead</span> = <span class="r52 r">readBackward</span>
+                                ? <a href="#6d2102583f545b90" class="i field">_backReader</a>.<span class="i">Read</span>(<span class="r79 r">readBuffer</span>.<span class="i">Slice</span>(0, <span class="r78 r">currentOffset</span>))
+                                : <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Read</span>(<span class="r79 r">readBuffer</span>.<span class="i">Slice</span>(0, <span class="r78 r">currentOffset</span>));
+ 
+                <span class="c">// If we want to wait for changes, then we&#39;ll keep on attempting to read</span>
+                <span class="c">// until we fill the buffer.</span>
+                <b>if</b> (<span class="r77 r">numRead</span> == 0)
+                {
+                    <b>if</b> (<span class="r67 r">waitChanges</span>)
+                    {
+                        <span class="c">// But stop reading if the provider is stopping</span>
+                        <b>while</b> ((<span class="r77 r">numRead</span> &lt; <span class="r78 r">currentOffset</span>) &amp;&amp; (!<a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#7f198513b75d23b5" class="i property">Stopping</a>))
+                        {
+                            <span class="c">// Get the change, and try to read more characters</span>
+                            <span class="c">// We only wait for changes when read forwards, so here we don&#39;t need to check if &#39;readBackward&#39; is</span>
+                            <span class="c">// true or false, we only use &#39;reader&#39;. The member &#39;reader&#39; will be updated by WaitForChanges.</span>
+                            <span class="i">WaitForChanges</span>(<a href="#c9ad18357a241885" class="i field">_path</a>, <a href="#2502d31b0ebde5d3" class="i field">_mode</a>, <a href="#e27a2be22243ef1e" class="i field">_access</a>, <a href="#07bcdc371eeded2a" class="i field">_share</a>, <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">CurrentEncoding</span>);
+                            <span class="r77 r">numRead</span> += <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Read</span>(<span class="r79 r">readBuffer</span>.<span class="i">Slice</span>(0, <span class="r78 r">currentOffset</span> - <span class="r77 r">numRead</span>));
+                        }
+                    }
+                }
+ 
+                <b>if</b> (<span class="r77 r">numRead</span> &gt; 0)
+                {
+                    <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Append</span>(<span class="r79 r">readBuffer</span>.<span class="i">Slice</span>(0, <span class="r77 r">numRead</span>));
+ 
+                    <span class="c">// Look up the final character in our offset table.</span>
+                    <span class="c">// If the character doesn&#39;t exist in the lookup table, then it&#39;s not in</span>
+                    <span class="c">// our search key.  That means the match must happen strictly /after/ the</span>
+                    <span class="c">// current position.  Because of that, we can feel confident reading in the</span>
+                    <span class="c">// number of characters in the search key, without the risk of reading too many.</span>
+                    <b>var</b> <span id="r81 rd" class="r81 r">currentChar</span> = <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>[<a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Length</span> - 1];
+                    <span class="r78 r">currentOffset</span> = <a href="#f923d71166ac3cf8" class="i field">_offsetDictionary</a>[<span class="i">Unsafe</span>.<span class="i">As</span>&lt;<b>char</b>, <b>byte</b>&gt;(<b>ref</b> <span class="r81 r">currentChar</span>)];
+ 
+                    <span class="c">// We want to keep reading if delimiter not found and we haven&#39;t hit the end of file</span>
+                    <span class="r80 r">delimiterNotFound</span> = <b>true</b>;
+ 
+                    <span class="c">// If the final letters matched, then we will get an offset of &quot;0&quot;.</span>
+                    <span class="c">// In that case, we&#39;ll either have a match (and break from the while loop,)</span>
+                    <span class="c">// or we need to move the scan forward one position.</span>
+                    <b>if</b> (<span class="r78 r">currentOffset</span> == 0)
+                    {
+                        <span class="r78 r">currentOffset</span> = 1;
+ 
+                        <b>if</b> (<span class="r75 r">actualDelimiter</span>.<span class="i">Length</span> &lt;= <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Length</span>)
+                        {
+                            <span class="r80 r">delimiterNotFound</span> = <b>false</b>;
+                            <b>int</b> <span id="r82 rd" class="r82 r">i</span> = 0;
+                            <b>int</b> <span id="r83 rd" class="r83 r">j</span> = <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Length</span> - <span class="r75 r">actualDelimiter</span>.<span class="i">Length</span>;
+                            <b>for</b> (; <span class="r82 r">i</span> &lt; <span class="r75 r">actualDelimiter</span>.<span class="i">Length</span>; <span class="r82 r">i</span>++, <span class="r83 r">j</span>++)
+                            {
+                                <b>if</b> (<span class="r75 r">actualDelimiter</span>[<span class="r82 r">i</span>] != <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>[<span class="r83 r">j</span>])
+                                {
+                                    <span class="r80 r">delimiterNotFound</span> = <b>true</b>;
+                                    <b>break</b>;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            <b>while</b> (<span class="r80 r">delimiterNotFound</span> &amp;&amp; (<span class="r77 r">numRead</span> != 0));
+ 
+            <span class="c">// We&#39;ve reached the end of file or end of line.</span>
+            <b>if</b> (<a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Length</span> &gt; 0)
+            {
+                <span class="c">// Add the block read to the ouptut array list, trimming a trailing delimiter, if present.</span>
+                <span class="c">// Note: If -Tail was specified, we get here in the course of 2 distinct passes:</span>
+                <span class="c">//  - Once while reading backward simply to determine the appropriate *start position* for later forward reading, ignoring the content of the blocks read (in reverse).</span>
+                <span class="c">//  - Then again during forward reading, for regular output processing; it is only then that trimming the delimiter is necessary.</span>
+                <span class="c">//    (Trimming it during backward reading would not only be unnecessary, but could interfere with determining the correct start position.)</span>
+                <span class="r74 r">blocks</span>.<span class="i">Add</span>(
+                    !<span class="r52 r">readBackward</span> &amp;&amp; !<span class="r80 r">delimiterNotFound</span>
+                        ? <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">ToString</span>(0, <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Length</span> - <span class="r75 r">actualDelimiter</span>.<span class="i">Length</span>)
+                        : <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">ToString</span>());
+            }
+ 
+            <b>int</b> <span id="r84 rd" class="r84 r">peekResult</span> = <span class="r52 r">readBackward</span> ? <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#dbd47c139b11886b" class="i method">Peek</a>() : <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Peek</span>();
+            <b>if</b> (<span class="r84 r">peekResult</span> != -1)
+            {
+                <b>return</b> <b>true</b>;
+            }
+            <b>else</b>
+            {
+                <b>if</b> (<span class="r52 r">readBackward</span> &amp;&amp; <a href="#4aa92c7f2b3d27ae" class="i field">_currentLineContent</a>.<span class="i">Length</span> &gt; 0)
+                {
+                    <b>return</b> <b>true</b>;
+                }
+ 
+                <b>return</b> <b>false</b>;
+            }
+        }
+ 
+        <b>private bool</b> <a id="6f76fae5ce3786d1" href="../R/6f76fae5ce3786d1.html" target="n" data-glyph="76,1" class="i method">ReadByteEncoded</a>(<b>bool</b> <span id="r66 rd" class="r66 r">waitChanges</span>, <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r85 rd" class="r85 r">blocks</span>, <b>bool</b> <span id="r51 rd" class="r51 r">readBackward</span>)
+        {
+            <b>if</b> (<a href="#4d316f3d1fd76283" class="i field">_isRawStream</a>)
+            {
+                <span class="c">// if RawSteam, read all bytes and return. When RawStream is used, we dont</span>
+                <span class="c">// support -first, -last</span>
+                <b>byte</b>[] <span id="r86 rd" class="r86 r">bytes</span> = <b>new</b> <b>byte</b>[<a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Length</span>];
+                <b>int</b> <span id="r87 rd" class="r87 r">numBytesToRead</span> = (<b>int</b>)<a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Length</span>;
+                <b>int</b> <span id="r88 rd" class="r88 r">numBytesRead</span> = 0;
+                <b>while</b> (<span class="r87 r">numBytesToRead</span> &gt; 0)
+                {
+                    <span class="c">// Read may return anything from 0 to numBytesToRead.</span>
+                    <b>int</b> <span id="r89 rd" class="r89 r">n</span> = <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Read</span>(<span class="r86 r">bytes</span>, <span class="r88 r">numBytesRead</span>, <span class="r87 r">numBytesToRead</span>);
+ 
+                    <span class="c">// Break when the end of the file is reached.</span>
+                    <b>if</b> (<span class="r89 r">n</span> == 0)
+                    {
+                        <b>break</b>;
+                    }
+ 
+                    <span class="r88 r">numBytesRead</span> += <span class="r89 r">n</span>;
+                    <span class="r87 r">numBytesToRead</span> -= <span class="r89 r">n</span>;
+                }
+ 
+                <b>if</b> (<span class="r88 r">numBytesRead</span> == 0)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+                <b>else</b>
+                {
+                    <span class="r85 r">blocks</span>.<span class="i">Add</span>(<span class="r86 r">bytes</span>);
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r51 r">readBackward</span>)
+            {
+                <b>if</b> (<a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Position</span> == 0)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Position</span>--;
+                <span class="r85 r">blocks</span>.<span class="i">Add</span>((<b>byte</b>)<a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">ReadByte</span>());
+                <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Position</span>--;
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <span class="c">// Reading bytes not strings</span>
+            <b>int</b> <span id="r90 rd" class="r90 r">byteRead</span> = <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">ReadByte</span>();
+ 
+            <span class="c">// We&#39;ve found the end of the file.</span>
+            <b>if</b> (<span class="r90 r">byteRead</span> == -1)
+            {
+                <span class="c">// If we want to tail the file, wait for</span>
+                <span class="c">// the changes</span>
+                <b>if</b> (<span class="r66 r">waitChanges</span>)
+                {
+                    <a href="#30ed79f692f35915" class="i method">WaitForChanges</a>(<a href="#c9ad18357a241885" class="i field">_path</a>, <a href="#2502d31b0ebde5d3" class="i field">_mode</a>, <a href="#e27a2be22243ef1e" class="i field">_access</a>, <a href="#07bcdc371eeded2a" class="i field">_share</a>, <a href="../utils/ClrFacade.cs.html#a9a016478ec73a42" class="t t">ClrFacade</a>.<a href="../utils/ClrFacade.cs.html#0c8a7fc2b80117dd" class="i method">GetDefaultEncoding</a>());
+                    <span class="r90 r">byteRead</span> = <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">ReadByte</span>();
+                }
+            }
+ 
+            <span class="c">// Add the byte we read to the list of blocks</span>
+            <b>if</b> (<span class="r90 r">byteRead</span> != -1)
+            {
+                <span class="r85 r">blocks</span>.<span class="i">Add</span>((<b>byte</b>)<span class="r90 r">byteRead</span>);
+                <b>return</b> <b>true</b>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <b>false</b>;
+            }
+        }
+ 
+        <b>private void</b> <a id="131f604489ff164d" href="../R/131f604489ff164d.html" target="n" data-glyph="76,1" class="i method">CreateStreams</a>(<b>string</b> <span id="r91 rd" class="r91 r">filePath</span>, <b>string</b> <span id="r92 rd" class="r92 r">streamName</span>, <span class="i">FileMode</span> <span id="r93 rd" class="r93 r">fileMode</span>, <span class="i">FileAccess</span> <span id="r94 rd" class="r94 r">fileAccess</span>, <span class="i">FileShare</span> <span id="r95 rd" class="r95 r">fileShare</span>, <span class="i">Encoding</span> <span id="r96 rd" class="r96 r">fileEncoding</span>)
+        {
+            <span class="c">// Try to mask off the ReadOnly, and Hidden attributes</span>
+            <span class="c">// if they&#39;ve specified Force.</span>
+            <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r91 r">filePath</span>) &amp;&amp; <a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#e3c4d51f13fbfcaa" class="i property">Force</a>)
+            {
+                <span class="c">// Store the old attributes so that we can recover them</span>
+                <span class="c">// in the Close();</span>
+                <a href="#c2744a5b13936636" class="i field">_oldAttributes</a> = <span class="i">File</span>.<span class="i">GetAttributes</span>(<span class="r91 r">filePath</span>);
+                <a href="#22c7ac06f9a1411c" class="i field">_haveOldAttributes</a> = <b>true</b>;
+ 
+                <span class="c">// Clear the hidden attribute, and if we&#39;re writing, also clear readonly.</span>
+                <b>var</b> <span id="r97 rd" class="r97 r">attributesToClear</span> = <span class="i">FileAttributes</span>.<span class="i">Hidden</span>;
+                <b>if</b> ((<span class="r94 r">fileAccess</span> &amp; (<span class="i">FileAccess</span>.<span class="i">Write</span>)) != 0)
+                {
+                    <span class="r97 r">attributesToClear</span> |= <span class="i">FileAttributes</span>.<span class="i">ReadOnly</span>;
+                }
+ 
+                <span class="i">File</span>.<span class="i">SetAttributes</span>(<a href="#c9ad18357a241885" class="i field">_path</a>, (<span class="i">File</span>.<span class="i">GetAttributes</span>(<span class="r91 r">filePath</span>) &amp; ~<span class="r97 r">attributesToClear</span>));
+            }
+ 
+            <span class="c">// If we want to write to the stream, attempt to open it for reading as well</span>
+            <span class="c">// so that we can determine the file encoding as we append to it</span>
+            <span class="i">FileAccess</span> <span id="r98 rd" class="r98 r">requestedAccess</span> = <span class="r94 r">fileAccess</span>;
+            <b>if</b> ((<span class="r94 r">fileAccess</span> &amp; (<span class="i">FileAccess</span>.<span class="i">Write</span>)) != 0)
+            {
+                <span class="r94 r">fileAccess</span> = <span class="i">FileAccess</span>.<span class="i">ReadWrite</span>;
+            }
+ 
+            <b>try</b>
+            {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+                <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r92 r">streamName</span>))
+                {
+                    <a href="#ae36a65ca54b4978" class="i field">_stream</a> = <a href="FileSystemProvider.cs.html#28276e8c322107d7" class="t t">AlternateDataStreamUtilities</a>.<a href="FileSystemProvider.cs.html#a2e973b96e499bce" class="i method">CreateFileStream</a>(<span class="r91 r">filePath</span>, <span class="r92 r">streamName</span>, <span class="r93 r">fileMode</span>, <span class="r94 r">fileAccess</span>, <span class="r95 r">fileShare</span>);
+                }
+                <b>else</b>
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                {
+                    <a href="#ae36a65ca54b4978" class="i field">_stream</a> = <b>new</b> <span class="i">FileStream</span>(<span class="r91 r">filePath</span>, <span class="r93 r">fileMode</span>, <span class="r94 r">fileAccess</span>, <span class="r95 r">fileShare</span>);
+                }
+            }
+            <b>catch</b> (<span class="i">IOException</span>)
+            {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+                <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r92 r">streamName</span>))
+                {
+                    <a href="#ae36a65ca54b4978" class="i field">_stream</a> = <a href="FileSystemProvider.cs.html#28276e8c322107d7" class="t t">AlternateDataStreamUtilities</a>.<a href="FileSystemProvider.cs.html#a2e973b96e499bce" class="i method">CreateFileStream</a>(<span class="r91 r">filePath</span>, <span class="r92 r">streamName</span>, <span class="r93 r">fileMode</span>, <span class="r98 r">requestedAccess</span>, <span class="r95 r">fileShare</span>);
+                }
+                <b>else</b>
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                {
+                    <a href="#ae36a65ca54b4978" class="i field">_stream</a> = <b>new</b> <span class="i">FileStream</span>(<span class="r91 r">filePath</span>, <span class="r93 r">fileMode</span>, <span class="r98 r">requestedAccess</span>, <span class="r95 r">fileShare</span>);
+                }
+            }
+ 
+            <b>if</b> (!<a href="#e69665e28212a962" class="i field">_usingByteEncoding</a>)
+            {
+                <span class="c">// Open the reader stream</span>
+                <b>if</b> ((<span class="r94 r">fileAccess</span> &amp; (<span class="i">FileAccess</span>.<span class="i">Read</span>)) != 0)
+                {
+                    <a href="#5aa837a7b3fe2c09" class="i field">_reader</a> = <b>new</b> <span class="i">StreamReader</span>(<a href="#ae36a65ca54b4978" class="i field">_stream</a>, <span class="r96 r">fileEncoding</span>);
+                    <a href="#6d2102583f545b90" class="i field">_backReader</a> = <b>new</b> <a href="#435d3529cd245a0a" class="t constructor">FileStreamBackReader</a>(<a href="#ae36a65ca54b4978" class="i field">_stream</a>, <span class="r96 r">fileEncoding</span>);
+                }
+ 
+                <span class="c">// Open the writer stream</span>
+                <b>if</b> ((<span class="r94 r">fileAccess</span> &amp; (<span class="i">FileAccess</span>.<span class="i">Write</span>)) != 0)
+                {
+                    <span class="c">// Ensure we are using the proper encoding</span>
+                    <b>if</b> ((<a href="#5aa837a7b3fe2c09" class="i field">_reader</a> != <b>null</b>) &amp;&amp;
+                        ((<span class="r94 r">fileAccess</span> &amp; (<span class="i">FileAccess</span>.<span class="i">Read</span>)) != 0))
+                    {
+                        <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Peek</span>();
+                        <span class="r96 r">fileEncoding</span> = <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">CurrentEncoding</span>;
+                    }
+ 
+                    <a href="#0510238d5c419f96" class="i field">_writer</a> = <b>new</b> <span class="i">StreamWriter</span>(<a href="#ae36a65ca54b4978" class="i field">_stream</a>, <span class="r96 r">fileEncoding</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Waits for changes to the specified file.  To do this, it closes the file</span>
+        <span class="c">///</span><span class="c"> and then monitors for changes.  Once a change appears, it reopens the streams</span>
+        <span class="c">///</span><span class="c"> and seeks to the last read position.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r99 r">filePath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The path of the file to read / monitor.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r100 r">fileMode</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The FileMode of the file (ie: Open / Append).</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r101 r">fileAccess</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The access properties of the file (ie: Read / Write).</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r102 r">fileShare</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The sharing properties of the file (ie: Read / ReadWrite).</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r103 r">fileEncoding</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The encoding of the file.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="30ed79f692f35915" href="../R/30ed79f692f35915.html" target="n" data-glyph="76,1" class="i method">WaitForChanges</a>(<b>string</b> <span id="r99 rd" class="r99 r">filePath</span>, <span class="i">FileMode</span> <span id="r100 rd" class="r100 r">fileMode</span>, <span class="i">FileAccess</span> <span id="r101 rd" class="r101 r">fileAccess</span>, <span class="i">FileShare</span> <span id="r102 rd" class="r102 r">fileShare</span>, <span class="i">Encoding</span> <span id="r103 rd" class="r103 r">fileEncoding</span>)
+        {
+            <span class="c">// Close the old stream, and store our current position.</span>
+            <b>if</b> (<a href="#ae36a65ca54b4978" class="i field">_stream</a> != <b>null</b>)
+            {
+                <a href="#ce59e9c4ee8a359f" class="i field">_fileOffset</a> = <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Position</span>;
+                <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Dispose</span>();
+            }
+ 
+            <span class="c">// Watch for changes, as a blocking call.</span>
+            <span class="i">FileInfo</span> <span id="r104 rd" class="r104 r">watchFile</span> = <b>new</b> <span class="i">FileInfo</span>(<span class="r99 r">filePath</span>);
+            <b>long</b> <span id="r105 rd" class="r105 r">originalLength</span> = <span class="r104 r">watchFile</span>.<span class="i">Length</span>;
+ 
+            <b>using</b> (<span class="i">FileSystemWatcher</span> <span id="r106 rd" class="r106 r">watcher</span> = <b>new</b> <span class="i">FileSystemWatcher</span>(<span class="r104 r">watchFile</span>.<span class="i">DirectoryName</span>, <span class="r104 r">watchFile</span>.<span class="i">Name</span>))
+            {
+                <span class="i">ErrorEventArgs</span> <span id="r107 rd" class="r107 r">errorEventArgs</span> = <b>null</b>;
+                <b>var</b> <span id="r108 rd" class="r108 r">tcs</span> = <b>new</b> <span class="i">TaskCompletionSource</span>&lt;<span class="i">FileSystemEventArgs</span>&gt;();
+                <span class="i">FileSystemEventHandler</span> <span id="r109 rd" class="r109 r">onChangedHandler</span> = (<b>object</b> <span id="r110 rd" class="r110 r">source</span>, <span class="i">FileSystemEventArgs</span> <span id="r111 rd" class="r111 r">e</span>) =&gt; <span class="r108 r">tcs</span>.<span class="i">TrySetResult</span>(<span class="r111 r">e</span>);
+                <span class="i">RenamedEventHandler</span> <span id="r112 rd" class="r112 r">onRenamedHandler</span> = (<b>object</b> <span id="r113 rd" class="r113 r">source</span>, <span class="i">RenamedEventArgs</span> <span id="r114 rd" class="r114 r">e</span>) =&gt; <span class="r108 r">tcs</span>.<span class="i">TrySetResult</span>(<span class="r114 r">e</span>);
+                <span class="i">ErrorEventHandler</span> <span id="r115 rd" class="r115 r">onErrorHandler</span> = (<b>object</b> <span id="r116 rd" class="r116 r">source</span>, <span class="i">ErrorEventArgs</span> <span id="r117 rd" class="r117 r">e</span>) =&gt;
+                {
+                    <span class="r107 r">errorEventArgs</span> = <span class="r117 r">e</span>;
+                    <span class="r108 r">tcs</span>.<span class="i">TrySetResult</span>(<b>new</b> <span class="i">FileSystemEventArgs</span>(<span class="i">WatcherChangeTypes</span>.<span class="i">All</span>, <span class="r104 r">watchFile</span>.<span class="i">DirectoryName</span>, <span class="r104 r">watchFile</span>.<span class="i">Name</span>));
+                };
+ 
+                <span class="c">// With WaitForChanged, we registered for all change types, so we do the same here.</span>
+                <span class="r106 r">watcher</span>.<span class="i">Changed</span> += <span class="r109 r">onChangedHandler</span>;
+                <span class="r106 r">watcher</span>.<span class="i">Created</span> += <span class="r109 r">onChangedHandler</span>;
+                <span class="r106 r">watcher</span>.<span class="i">Deleted</span> += <span class="r109 r">onChangedHandler</span>;
+                <span class="r106 r">watcher</span>.<span class="i">Renamed</span> += <span class="r112 r">onRenamedHandler</span>;
+                <span class="r106 r">watcher</span>.<span class="i">Error</span> += <span class="r115 r">onErrorHandler</span>;
+ 
+                <b>try</b>
+                {
+                    <span class="r106 r">watcher</span>.<span class="i">EnableRaisingEvents</span> = <b>true</b>;
+ 
+                    <b>while</b> (!<a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#7f198513b75d23b5" class="i property">Stopping</a>)
+                    {
+                        <b>bool</b> <span id="r118 rd" class="r118 r">isTaskCompleted</span> = <span class="r108 r">tcs</span>.<span class="i">Task</span>.<span class="i">Wait</span>(500);
+ 
+                        <b>if</b> (<span class="r107 r">errorEventArgs</span> != <b>null</b>)
+                        {
+                            <b>throw</b> <span class="r107 r">errorEventArgs</span>.<span class="i">GetException</span>();
+                        }
+ 
+                        <b>if</b> (<span class="r118 r">isTaskCompleted</span>)
+                            <b>break</b>;
+ 
+                        <span class="c">// If a process is still writing, .NET doesn&#39;t generate a change notification.</span>
+                        <span class="c">// So do a simple comparison on file size</span>
+                        <span class="r104 r">watchFile</span>.<span class="i">Refresh</span>();
+                        <b>if</b> (<span class="r105 r">originalLength</span> != <span class="r104 r">watchFile</span>.<span class="i">Length</span>)
+                        {
+                            <b>break</b>;
+                        }
+                    }
+                }
+                <b>finally</b>
+                {
+                    <span class="c">// Done here to guarantee that the handlers are removed prior</span>
+                    <span class="c">// to the call to ManualResetEvent&#39;s Dispose() method.</span>
+                    <span class="r106 r">watcher</span>.<span class="i">EnableRaisingEvents</span> = <b>false</b>;
+                    <span class="r106 r">watcher</span>.<span class="i">Changed</span> -= <span class="r109 r">onChangedHandler</span>;
+                    <span class="r106 r">watcher</span>.<span class="i">Created</span> -= <span class="r109 r">onChangedHandler</span>;
+                    <span class="r106 r">watcher</span>.<span class="i">Deleted</span> -= <span class="r109 r">onChangedHandler</span>;
+                    <span class="r106 r">watcher</span>.<span class="i">Renamed</span> -= <span class="r112 r">onRenamedHandler</span>;
+                    <span class="r106 r">watcher</span>.<span class="i">Error</span> -= <span class="r115 r">onErrorHandler</span>;
+                }
+            }
+ 
+            <span class="c">// Let the change complete.</span>
+            <span class="c">// This is a fairly arbitrary number.  Without it, though,</span>
+            <span class="c">// some of the filesystem streams cannot be reopened.</span>
+            <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Thread</span>.<span class="i">Sleep</span>(100);
+ 
+            <span class="c">// Reopen the streams.</span>
+            <a href="#131f604489ff164d" class="i method">CreateStreams</a>(<span class="r99 r">filePath</span>, <b>null</b>, <span class="r100 r">fileMode</span>, <span class="r101 r">fileAccess</span>, <span class="r102 r">fileShare</span>, <span class="r103 r">fileEncoding</span>);
+ 
+            <span class="c">// If the file has been shortened, restart from zero.</span>
+            <span class="c">// That will let us catch log roll-overs.</span>
+            <b>if</b> (<a href="#ce59e9c4ee8a359f" class="i field">_fileOffset</a> &gt; <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Length</span>)
+                <a href="#ce59e9c4ee8a359f" class="i field">_fileOffset</a> = 0;
+ 
+            <span class="c">// Seek to the place we last left off.</span>
+            <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Seek</span>(<a href="#ce59e9c4ee8a359f" class="i field">_fileOffset</a>, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+            <b>if</b> (<a href="#5aa837a7b3fe2c09" class="i field">_reader</a> != <b>null</b>) { <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">DiscardBufferedData</span>(); }
+ 
+            <b>if</b> (<a href="#6d2102583f545b90" class="i field">_backReader</a> != <b>null</b>) { <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#41d81609eb2b55fd" class="i method">DiscardBufferedData</a>(); }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Moves the current stream position in the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r119 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The offset from the origin to move the position to.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r120 r">origin</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The origin from which the offset is calculated.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="d2c3e842cbf1a461" href="../R/d2c3e842cbf1a461.html" target="n" data-glyph="72,1" class="i method">Seek</a>(<b>long</b> <span id="r119 rd" class="r119 r">offset</span>, <span class="i">SeekOrigin</span> <span id="r120 rd" class="r120 r">origin</span>)
+        {
+            <b>if</b> (<a href="#0510238d5c419f96" class="i field">_writer</a> != <b>null</b>) { <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">Flush</span>(); }
+ 
+            <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Seek</span>(<span class="r119 r">offset</span>, <span class="r120 r">origin</span>);
+ 
+            <b>if</b> (<a href="#0510238d5c419f96" class="i field">_writer</a> != <b>null</b>) { <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">Flush</span>(); }
+ 
+            <b>if</b> (<a href="#5aa837a7b3fe2c09" class="i field">_reader</a> != <b>null</b>) { <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">DiscardBufferedData</span>(); }
+ 
+            <b>if</b> (<a href="#6d2102583f545b90" class="i field">_backReader</a> != <b>null</b>) { <a href="#6d2102583f545b90" class="i field">_backReader</a>.<a href="#41d81609eb2b55fd" class="i method">DiscardBufferedData</a>(); }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Closes the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="72d17410a7739bb4" href="../R/72d17410a7739bb4.html" target="n" data-glyph="72,1" class="i method">Close</a>()
+        {
+            <b>bool</b> <span id="r121 rd" class="r121 r">streamClosed</span> = <b>false</b>;
+ 
+            <b>if</b> (<a href="#0510238d5c419f96" class="i field">_writer</a> != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">Flush</span>();
+                    <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">Dispose</span>();
+                }
+                <b>finally</b>
+                {
+                    <span class="r121 r">streamClosed</span> = <b>true</b>;
+                }
+            }
+ 
+            <b>if</b> (<a href="#5aa837a7b3fe2c09" class="i field">_reader</a> != <b>null</b>)
+            {
+                <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Dispose</span>();
+                <span class="r121 r">streamClosed</span> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<a href="#6d2102583f545b90" class="i field">_backReader</a> != <b>null</b>)
+            {
+                <a href="#6d2102583f545b90" class="i field">_backReader</a>.<span class="i">Dispose</span>();
+                <span class="r121 r">streamClosed</span> = <b>true</b>;
+            }
+ 
+            <b>if</b> (!<span class="r121 r">streamClosed</span>)
+            {
+                <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Flush</span>();
+                <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Dispose</span>();
+            }
+ 
+            <span class="c">// Reset the attributes</span>
+            <b>if</b> (<a href="#22c7ac06f9a1411c" class="i field">_haveOldAttributes</a> &amp;&amp; <a href="#8d5ee2ba3426f6d7" class="i field">_provider</a>.<a href="ProviderBase.cs.html#e3c4d51f13fbfcaa" class="i property">Force</a>)
+            {
+                <span class="i">File</span>.<span class="i">SetAttributes</span>(<a href="#c9ad18357a241885" class="i field">_path</a>, <a href="#c2744a5b13936636" class="i field">_oldAttributes</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Writes the specified object to the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r122 r">content</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The objects to write to the file</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The objects written to the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IList</span> <a id="eb22aa50ea64a13f" href="../R/eb22aa50ea64a13f.html" target="n" data-glyph="72,1" class="i method">Write</a>(<span class="i">IList</span> <span id="r122 rd" class="r122 r">content</span>)
+        {
+            <b>foreach</b> (<b>object</b> <span id="r123 rd" class="r123 r">line</span> <b>in</b> <span class="r122 r">content</span>)
+            {
+                <b>object</b>[] <span id="r124 rd" class="r124 r">contentArray</span> = <span class="r123 r">line</span> <b>as object</b>[];
+                <b>if</b> (<span class="r124 r">contentArray</span> != <b>null</b>)
+                {
+                    <b>foreach</b> (<b>object</b> <span id="r125 rd" class="r125 r">obj</span> <b>in</b> <span class="r124 r">contentArray</span>)
+                    {
+                        <a href="#14655d54390e68a8" class="i method">WriteObject</a>(<span class="r125 r">obj</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <a href="#14655d54390e68a8" class="i method">WriteObject</a>(<span class="r123 r">line</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r122 r">content</span>;
+        }
+ 
+        <b>private void</b> <a id="14655d54390e68a8" href="../R/14655d54390e68a8.html" target="n" data-glyph="76,1" class="i method">WriteObject</a>(<b>object</b> <span id="r126 rd" class="r126 r">content</span>)
+        {
+            <b>if</b> (<span class="r126 r">content</span> == <b>null</b>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<a href="#e69665e28212a962" class="i field">_usingByteEncoding</a>)
+            {
+                <b>try</b>
+                {
+                    <b>byte</b> <span id="r127 rd" class="r127 r">byteToWrite</span> = (<b>byte</b>)<span class="r126 r">content</span>;
+ 
+                    <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">WriteByte</span>(<span class="r127 r">byteToWrite</span>);
+                }
+                <b>catch</b> (<span class="i">InvalidCastException</span>)
+                {
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r126 r">content</span>), <span class="i">FileSystemProviderStrings</span>.<span class="i">ByteEncodingError</span>);
+                }
+            }
+            <b>else</b>
+            {
+                <b>if</b> (<a href="#07e7c4c0ce4e52f0" class="i field">_suppressNewline</a>)
+                {
+                    <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">Write</span>(<span class="r126 r">content</span>.<span class="i">ToString</span>());
+                }
+                <b>else</b>
+                {
+                    <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">WriteLine</span>(<span class="r126 r">content</span>.<span class="i">ToString</span>());
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Closes the file stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="a1a9c8fca764062b" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#1424bf6e9e5cdcf1" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#adf1718ab0894286" class="k">this</a>);
+        }
+ 
+        <b>internal void</b> <a id="1424bf6e9e5cdcf1" href="../R/1424bf6e9e5cdcf1.html" target="n" data-glyph="74,1" class="i method">Dispose</a>(<b>bool</b> <span id="r128 rd" class="r128 r">isDisposing</span>)
+        {
+            <b>if</b> (<span class="r128 r">isDisposing</span>)
+            {
+                <b>if</b> (<a href="#ae36a65ca54b4978" class="i field">_stream</a> != <b>null</b>)
+                    <a href="#ae36a65ca54b4978" class="i field">_stream</a>.<span class="i">Dispose</span>();
+                <b>if</b> (<a href="#5aa837a7b3fe2c09" class="i field">_reader</a> != <b>null</b>)
+                    <a href="#5aa837a7b3fe2c09" class="i field">_reader</a>.<span class="i">Dispose</span>();
+                <b>if</b> (<a href="#6d2102583f545b90" class="i field">_backReader</a> != <b>null</b>)
+                    <a href="#6d2102583f545b90" class="i field">_backReader</a>.<span class="i">Dispose</span>();
+                <b>if</b> (<a href="#0510238d5c419f96" class="i field">_writer</a> != <b>null</b>)
+                    <a href="#0510238d5c419f96" class="i field">_writer</a>.<span class="i">Dispose</span>();
+            }
+        }
+    }
+ 
+    <b>internal sealed class</b> <a id="4d6107b22bb38b47" href="../R/4d6107b22bb38b47.html" target="n" data-glyph="2,0" class="t t">FileStreamBackReader</a> : <span class="i">StreamReader</span>
+    {
+        <b>internal</b> <a id="435d3529cd245a0a" href="../R/435d3529cd245a0a.html" target="n" data-glyph="74,1" class="t constructor">FileStreamBackReader</a>(<span class="i">FileStream</span> <span id="r129 rd" class="r129 r">fileStream</span>, <span class="i">Encoding</span> <span id="r130 rd" class="r130 r">encoding</span>)
+            : <b>base</b>(<span class="r129 r">fileStream</span>, <span class="r130 r">encoding</span>)
+        {
+            <a href="#29e91d9225eef7ea" class="i field">_stream</a> = <span class="r129 r">fileStream</span>;
+            <b>if</b> (<a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Length</span> &gt; 0)
+            {
+                <b>long</b> <span id="r131 rd" class="r131 r">curPosition</span> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>;
+                <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+                <b>base</b>.<span class="i">Peek</span>();
+                <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span> = <span class="r131 r">curPosition</span>;
+                <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a> = <b>base</b>.<span class="i">CurrentEncoding</span>;
+                <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>;
+ 
+                <span class="c">// Get the oem encoding and system current ANSI code page</span>
+                <a href="#d3b04583eb73a43f" class="i field">_oemEncoding</a> = <a href="../utils/EncodingUtils.cs.html#60f6ffa4e5dbe760" class="t t">EncodingConversion</a>.<a href="../utils/EncodingUtils.cs.html#a9430c5f25a0f1d2" class="i method">Convert</a>(<b>null</b>, <a href="../utils/EncodingUtils.cs.html#60f6ffa4e5dbe760" class="t t">EncodingConversion</a>.<a href="../utils/EncodingUtils.cs.html#6f43e9cc3f9b36e1" class="i field">OEM</a>);
+                <a href="#569f0ee56df862eb" class="i field">_defaultAnsiEncoding</a> = <a href="../utils/EncodingUtils.cs.html#60f6ffa4e5dbe760" class="t t">EncodingConversion</a>.<a href="../utils/EncodingUtils.cs.html#a9430c5f25a0f1d2" class="i method">Convert</a>(<b>null</b>, <a href="../utils/EncodingUtils.cs.html#60f6ffa4e5dbe760" class="t t">EncodingConversion</a>.<a href="../utils/EncodingUtils.cs.html#6cd2f84956f5df17" class="i field">Default</a>);
+            }
+        }
+ 
+        <b>private readonly</b> <span class="i">FileStream</span> <a id="29e91d9225eef7ea" href="../R/29e91d9225eef7ea.html" target="n" data-glyph="46,1" class="i field">_stream</a>;
+        <b>private readonly</b> <span class="i">Encoding</span> <a id="d527ce4c7253dac1" href="../R/d527ce4c7253dac1.html" target="n" data-glyph="46,1" class="i field">_currentEncoding</a>;
+        <b>private readonly</b> <span class="i">Encoding</span> <a id="d3b04583eb73a43f" href="../R/d3b04583eb73a43f.html" target="n" data-glyph="46,1" class="i field">_oemEncoding</a>;
+        <b>private readonly</b> <span class="i">Encoding</span> <a id="569f0ee56df862eb" href="../R/569f0ee56df862eb.html" target="n" data-glyph="46,1" class="i field">_defaultAnsiEncoding</a>;
+ 
+        <b>private const int</b> <a id="a4963c77ea117901" href="../R/a4963c77ea117901.html" target="n" data-glyph="10,1" class="i field">BuffSize</a> = 4096;
+ 
+        <b>private readonly byte</b>[] <a id="6fcf55bf89988218" href="../R/6fcf55bf89988218.html" target="n" data-glyph="46,1" class="i field">_byteBuff</a> = <b>new</b> <b>byte</b>[<a href="#a4963c77ea117901" class="i field">BuffSize</a>];
+        <b>private readonly char</b>[] <a id="c7607ef6978d52fc" href="../R/c7607ef6978d52fc.html" target="n" data-glyph="46,1" class="i field">_charBuff</a> = <b>new</b> <b>char</b>[<a href="#a4963c77ea117901" class="i field">BuffSize</a>];
+        <b>private int</b> <a id="e65e3a1d4ad71914" href="../R/e65e3a1d4ad71914.html" target="n" data-glyph="46,1" class="i field">_byteCount</a> = 0;
+        <b>private int</b> <a id="da505383fdf74739" href="../R/da505383fdf74739.html" target="n" data-glyph="46,1" class="i field">_charCount</a> = 0;
+        <b>private long</b> <a id="9c64048aa4185c4d" href="../R/9c64048aa4185c4d.html" target="n" data-glyph="46,1" class="i field">_currentPosition</a> = 0;
+        <b>private bool</b>? <a id="49d812077bfce825" href="../R/49d812077bfce825.html" target="n" data-glyph="46,1" class="i field">_singleByteCharSet</a> = <b>null</b>;
+ 
+        <b>private const byte</b> <a id="5ee5d8c2ed201d4b" href="../R/5ee5d8c2ed201d4b.html" target="n" data-glyph="10,1" class="i field">BothTopBitsSet</a> = 0xC0;
+        <b>private const byte</b> <a id="cc510a486fc93c08" href="../R/cc510a486fc93c08.html" target="n" data-glyph="10,1" class="i field">TopBitUnset</a> = 0x80;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the given encoding is OEM or Default, check to see if the code page</span>
+        <span class="c">///</span><span class="c"> is SBCS(single byte character set).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="e1e2e9ee3206eb8d" href="../R/e1e2e9ee3206eb8d.html" target="n" data-glyph="76,1" class="i method">IsSingleByteCharacterSet</a>()
+        {
+            <b>if</b> (<a href="#49d812077bfce825" class="i field">_singleByteCharSet</a> != <b>null</b>)
+                <b>return</b> (<b>bool</b>)<a href="#49d812077bfce825" class="i field">_singleByteCharSet</a>;
+ 
+            <span class="c">// Porting note: only UTF-8 is supported on Linux, which is not an SBCS</span>
+            <b>if</b> ((<a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">Equals</span>(<a href="#d3b04583eb73a43f" class="i field">_oemEncoding</a>) ||
+                 <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">Equals</span>(<a href="#569f0ee56df862eb" class="i field">_defaultAnsiEncoding</a>))
+                &amp;&amp; <a href="../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+            {
+                <a href="#3e214bf17f742e5d" class="t t">NativeMethods</a>.<a href="#5382a20aae20d5ec" class="t t">CPINFO</a> <span id="r132 rd" class="r132 r">cpInfo</span>;
+                <b>if</b> (<a href="#3e214bf17f742e5d" class="t t">NativeMethods</a>.<a href="#52c329be8adc1edb" class="i method">GetCPInfo</a>((<b>uint</b>)<a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">CodePage</span>, <b>out</b> <span class="r132 r">cpInfo</span>) &amp;&amp;
+                    <span class="r132 r">cpInfo</span>.<a href="#8f4695b6d1af884c" class="i field">MaxCharSize</a> == 1)
+                {
+                    <a href="#49d812077bfce825" class="i field">_singleByteCharSet</a> = <b>true</b>;
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <a href="#49d812077bfce825" class="i field">_singleByteCharSet</a> = <b>false</b>;
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We don&#39;t support this method because it is not used by the ReadBackward method in FileStreamContentReaderWriter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r133 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r134 r">index</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r135 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="ccfeef699e9023a4" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ReadBlock</a>(<b>char</b>[] <span id="r133 rd" class="r133 r">buffer</span>, <b>int</b> <span id="r134 rd" class="r134 r">index</span>, <b>int</b> <span id="r135 rd" class="r135 r">count</span>)
+        {
+            <span class="c">// This method is not supposed to be used</span>
+            <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#18f73963f5ead5c2" class="i method">NewNotSupportedException</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We don&#39;t support this method because it is not used by the ReadBackward method in FileStreamContentReaderWriter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="625a42b495c8895e" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ReadToEnd</a>()
+        {
+            <span class="c">// This method is not supposed to be used</span>
+            <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#18f73963f5ead5c2" class="i method">NewNotSupportedException</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reset the internal character buffer. Use it only when the position of the internal buffer and</span>
+        <span class="c">///</span><span class="c"> the base stream do not match. These positions can become mismatch when the user read the data</span>
+        <span class="c">///</span><span class="c"> into the buffer and then seek a new position in the underlying stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <b>new</b> <b>void</b> <a id="41d81609eb2b55fd" href="../R/41d81609eb2b55fd.html" target="n" data-glyph="74,1" class="i method">DiscardBufferedData</a>()
+        {
+            <b>base</b>.<span class="i">DiscardBufferedData</span>();
+            <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>;
+            <a href="#da505383fdf74739" class="i field">_charCount</a> = 0;
+            <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a> = 0;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return the current actual stream position.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal long</b> <a id="b1e6c3cc33b7f847" href="../R/b1e6c3cc33b7f847.html" target="n" data-glyph="74,1" class="i method">GetCurrentPosition</a>()
+        {
+            <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> == 0)
+                <b>return</b> <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a>;
+ 
+            <span class="c">// _charCount &gt; 0</span>
+            <b>int</b> <span id="r136 rd" class="r136 r">byteCount</span> = <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">GetByteCount</span>(<a href="#c7607ef6978d52fc" class="i field">_charBuff</a>, 0, <a href="#da505383fdf74739" class="i field">_charCount</a>);
+            <b>return</b> (<a href="#9c64048aa4185c4d" class="i field">_currentPosition</a> + <span class="r136 r">byteCount</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the number of bytes the delimiter will</span>
+        <span class="c">///</span><span class="c"> be encoded to.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r137 r">delimiter</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal int</b> <a id="829a6a9950a5cf54" href="../R/829a6a9950a5cf54.html" target="n" data-glyph="74,1" class="i method">GetByteCount</a>(<b>string</b> <span id="r137 rd" class="r137 r">delimiter</span>)
+        {
+            <b>char</b>[] <span id="r138 rd" class="r138 r">chars</span> = <span class="r137 r">delimiter</span>.<span class="i">ToCharArray</span>();
+            <b>return</b> <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">GetByteCount</span>(<span class="r138 r">chars</span>, 0, <span class="r138 r">chars</span>.<span class="i">Length</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Peek the next character.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Return -1 if we reach the head of the file.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="dbd47c139b11886b" href="../R/dbd47c139b11886b.html" target="n" data-glyph="72,1" class="i method">Peek</a>()
+        {
+            <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> == 0)
+            {
+                <b>if</b> (<a href="#b4a9a12a8ad81cce" class="i method">RefillCharBuffer</a>() == -1)
+                {
+                    <b>return</b> -1;
+                }
+            }
+ 
+            <span class="c">// Return the next available character, but DONT consume it (don&#39;t advance the _charCount)</span>
+            <b>return</b> (<b>int</b>)<a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a> - 1];
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read the next character.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Return -1 if we reach the head of the file.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="b8bf9dff826aea2e" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Read</a>()
+        {
+            <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> == 0)
+            {
+                <b>if</b> (<a href="#b4a9a12a8ad81cce" class="i method">RefillCharBuffer</a>() == -1)
+                {
+                    <b>return</b> -1;
+                }
+            }
+ 
+            <a href="#da505383fdf74739" class="i field">_charCount</a>--;
+            <b>return</b> <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a>];
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a specific maximum of characters from the current stream into a buffer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r139 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Output buffer.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r140 r">index</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Start position to write with.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r141 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Number of bytes to read.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Return the number of characters read, or -1 if we reach the head of the file.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Return the number of characters read, or -1 if we reach the head of the file.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="ac0d02798ae9c207" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>char</b>[] <span id="r139 rd" class="r139 r">buffer</span>, <b>int</b> <span id="r140 rd" class="r140 r">index</span>, <b>int</b> <span id="r141 rd" class="r141 r">count</span>)
+        {
+            <b>return</b> <a href="#6c70e6e2c497b8b2" class="i method">ReadSpan</a>(<b>new</b> <span class="i">Span</span>&lt;<b>char</b>&gt;(<span class="r139 r">buffer</span>, <span class="r140 r">index</span>, <span class="r141 r">count</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read characters from the current stream into a Span buffer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r142 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Output buffer.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Return the number of characters read, or -1 if we reach the head of the file.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="e2273531fef7549c" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Read</a>(<span class="i">Span</span>&lt;<b>char</b>&gt; <span id="r142 rd" class="r142 r">buffer</span>)
+        {
+            <b>return</b> <a href="#6c70e6e2c497b8b2" class="i method">ReadSpan</a>(<span class="r142 r">buffer</span>);
+        }
+ 
+        <b>private int</b> <a id="6c70e6e2c497b8b2" href="../R/6c70e6e2c497b8b2.html" target="n" data-glyph="76,1" class="i method">ReadSpan</a>(<span class="i">Span</span>&lt;<b>char</b>&gt; <span id="r143 rd" class="r143 r">buffer</span>)
+        {
+            <span class="c">// deal with the argument validation</span>
+            <b>int</b> <span id="r144 rd" class="r144 r">charRead</span> = 0;
+            <b>int</b> <span id="r145 rd" class="r145 r">index</span> = 0;
+            <b>int</b> <span id="r146 rd" class="r146 r">count</span> = <span class="r143 r">buffer</span>.<span class="i">Length</span>;
+ 
+            <b>do</b>
+            {
+                <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> == 0)
+                {
+                    <b>if</b> (<a href="#b4a9a12a8ad81cce" class="i method">RefillCharBuffer</a>() == -1)
+                    {
+                        <b>return</b> <span class="r144 r">charRead</span>;
+                    }
+                }
+ 
+                <b>int</b> <span id="r147 rd" class="r147 r">toRead</span> = <a href="#da505383fdf74739" class="i field">_charCount</a> &gt; <span class="r146 r">count</span> ? <span class="r146 r">count</span> : <a href="#da505383fdf74739" class="i field">_charCount</a>;
+ 
+                <b>for</b> (; <span class="r147 r">toRead</span> &gt; 0; <span class="r147 r">toRead</span>--, <span class="r146 r">count</span>--, <span class="r144 r">charRead</span>++)
+                {
+                    <span class="r143 r">buffer</span>[<span class="r145 r">index</span>++] = <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[--<a href="#da505383fdf74739" class="i field">_charCount</a>];
+                }
+            }
+            <b>while</b> (<span class="r146 r">count</span> &gt; 0);
+ 
+            <b>return</b> <span class="r144 r">charRead</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a line from the current stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Return null if we reach the head of the file.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="631bae44be2201f7" href="../R/631bae44be2201f7.html" target="n" data-glyph="72,1" class="i method">ReadLine</a>()
+        {
+            <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> == 0 &amp;&amp; <a href="#b4a9a12a8ad81cce" class="i method">RefillCharBuffer</a>() == -1)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>int</b> <span id="r148 rd" class="r148 r">charsToRemove</span> = 0;
+            <span class="i">StringBuilder</span> <span id="r149 rd" class="r149 r">line</span> = <b>new</b> <span class="i">StringBuilder</span>();
+ 
+            <b>if</b> (<a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a> - 1] == <span class="s">&#39;\r&#39;</span> ||
+                <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a> - 1] == <span class="s">&#39;\n&#39;</span>)
+            {
+                <span class="r148 r">charsToRemove</span>++;
+                <span class="r149 r">line</span>.<span class="i">Insert</span>(0, <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[--<a href="#da505383fdf74739" class="i field">_charCount</a>]);
+ 
+                <b>if</b> (<a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a>] == <span class="s">&#39;\n&#39;</span>)
+                {
+                    <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> == 0 &amp;&amp; <a href="#b4a9a12a8ad81cce" class="i method">RefillCharBuffer</a>() == -1)
+                    {
+                        <b>return</b> <b>string</b>.<span class="i">Empty</span>;
+                    }
+ 
+                    <b>if</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> &gt; 0 &amp;&amp; <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a> - 1] == <span class="s">&#39;\r&#39;</span>)
+                    {
+                        <span class="r148 r">charsToRemove</span>++;
+                        <span class="r149 r">line</span>.<span class="i">Insert</span>(0, <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[--<a href="#da505383fdf74739" class="i field">_charCount</a>]);
+                    }
+                }
+            }
+ 
+            <b>while</b> (<b>true</b>)
+            {
+                <b>while</b> (<a href="#da505383fdf74739" class="i field">_charCount</a> &gt; 0)
+                {
+                    <b>if</b> (<a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a> - 1] == <span class="s">&#39;\r&#39;</span> ||
+                        <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[<a href="#da505383fdf74739" class="i field">_charCount</a> - 1] == <span class="s">&#39;\n&#39;</span>)
+                    {
+                        <span class="r149 r">line</span>.<span class="i">Remove</span>(<span class="r149 r">line</span>.<span class="i">Length</span> - <span class="r148 r">charsToRemove</span>, <span class="r148 r">charsToRemove</span>);
+                        <b>return</b> <span class="r149 r">line</span>.<span class="i">ToString</span>();
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r149 r">line</span>.<span class="i">Insert</span>(0, <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>[--<a href="#da505383fdf74739" class="i field">_charCount</a>]);
+                    }
+                }
+ 
+                <b>if</b> (<a href="#b4a9a12a8ad81cce" class="i method">RefillCharBuffer</a>() == -1)
+                {
+                    <span class="r149 r">line</span>.<span class="i">Remove</span>(<span class="r149 r">line</span>.<span class="i">Length</span> - <span class="r148 r">charsToRemove</span>, <span class="r148 r">charsToRemove</span>);
+                    <b>return</b> <span class="r149 r">line</span>.<span class="i">ToString</span>();
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Refill the internal character buffer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private int</b> <a id="b4a9a12a8ad81cce" href="../R/b4a9a12a8ad81cce.html" target="n" data-glyph="76,1" class="i method">RefillCharBuffer</a>()
+        {
+            <b>if</b> ((<a href="#843cda3972fa4c9b" class="i method">RefillByteBuff</a>()) == -1)
+            {
+                <b>return</b> -1;
+            }
+ 
+            <a href="#da505383fdf74739" class="i field">_charCount</a> = <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">GetChars</span>(<a href="#6fcf55bf89988218" class="i field">_byteBuff</a>, 0, <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a>, <a href="#c7607ef6978d52fc" class="i field">_charBuff</a>, 0);
+            <b>return</b> <a href="#da505383fdf74739" class="i field">_charCount</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Refill the internal byte buffer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private int</b> <a id="843cda3972fa4c9b" href="../R/843cda3972fa4c9b.html" target="n" data-glyph="76,1" class="i method">RefillByteBuff</a>()
+        {
+            <b>long</b> <span id="r150 rd" class="r150 r">lengthLeft</span> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>;
+ 
+            <b>if</b> (<span class="r150 r">lengthLeft</span> == 0)
+            {
+                <b>return</b> -1;
+            }
+ 
+            <b>int</b> <span id="r151 rd" class="r151 r">toRead</span> = <span class="r150 r">lengthLeft</span> &gt; <a href="#a4963c77ea117901" class="i field">BuffSize</a> ? <a href="#a4963c77ea117901" class="i field">BuffSize</a> : (<b>int</b>)<span class="r150 r">lengthLeft</span>;
+            <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Seek</span>(-<span class="r151 r">toRead</span>, <span class="i">SeekOrigin</span>.<span class="i">Current</span>);
+ 
+            <b>if</b> (<a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a> <b>is</b> <span class="i">UTF8Encoding</span>)
+            {
+                <span class="c">// It&#39;s UTF-8, we need to detect the starting byte of a character</span>
+                <b>do</b>
+                {
+                    <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>;
+                    <b>byte</b> <span id="r152 rd" class="r152 r">curByte</span> = (<b>byte</b>)<a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">ReadByte</span>();
+                    <b>if</b> ((<span class="r152 r">curByte</span> &amp; <a href="#5ee5d8c2ed201d4b" class="i field">BothTopBitsSet</a>) == <a href="#5ee5d8c2ed201d4b" class="i field">BothTopBitsSet</a> ||
+                        (<span class="r152 r">curByte</span> &amp; <a href="#cc510a486fc93c08" class="i field">TopBitUnset</a>) == 0x00)
+                    {
+                        <a href="#6fcf55bf89988218" class="i field">_byteBuff</a>[0] = <span class="r152 r">curByte</span>;
+                        <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a> = 1;
+                        <b>break</b>;
+                    }
+                } <b>while</b> (<span class="r150 r">lengthLeft</span> &gt; <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>);
+ 
+                <b>if</b> (<span class="r150 r">lengthLeft</span> == <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>)
+                {
+                    <span class="c">// Cannot find a starting byte. The file is NOT UTF-8 format. Read &#39;toRead&#39; number of bytes</span>
+                    <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Seek</span>(-<span class="r151 r">toRead</span>, <span class="i">SeekOrigin</span>.<span class="i">Current</span>);
+                    <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a> = 0;
+                }
+ 
+                <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a> += <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Read</span>(<a href="#6fcf55bf89988218" class="i field">_byteBuff</a>, <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a>, (<b>int</b>)(<span class="r150 r">lengthLeft</span> - <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>));
+                <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span> = <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a>;
+            }
+            <b>else</b> <b>if</b> (<a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a> <b>is</b> <span class="i">UnicodeEncoding</span> ||
+                <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a> <b>is</b> <span class="i">UTF32Encoding</span> ||
+                <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a> <b>is</b> <span class="i">ASCIIEncoding</span> ||
+                <a href="#e1e2e9ee3206eb8d" class="i method">IsSingleByteCharacterSet</a>())
+            {
+                <span class="c">// Unicode -- two bytes per character</span>
+                <span class="c">// UTF-32 -- four bytes per character</span>
+                <span class="c">// ASCII -- one byte per character</span>
+                <span class="c">// The BufferSize will be a multiple of 4, so we can just read toRead number of bytes</span>
+                <span class="c">// if the current file is encoded by any of these formatting</span>
+ 
+                <span class="c">// If IsSingleByteCharacterSet() returns true, we are sure that the given encoding is OEM</span>
+                <span class="c">// or Default, and it is SBCS(single byte character set) code page -- one byte per character</span>
+                <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span>;
+                <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a> = <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Read</span>(<a href="#6fcf55bf89988218" class="i field">_byteBuff</a>, 0, <span class="r151 r">toRead</span>);
+                <a href="#29e91d9225eef7ea" class="i field">_stream</a>.<span class="i">Position</span> = <a href="#9c64048aa4185c4d" class="i field">_currentPosition</a>;
+            }
+            <b>else</b>
+            {
+                <span class="c">// OEM and ANSI code pages include multibyte CJK code pages. If the current code page</span>
+                <span class="c">// is MBCS(multibyte character set), we cannot detect a starting byte.</span>
+                <span class="c">// UTF-7 has some characters encoded into UTF-16 and then in Modified Base64,</span>
+                <span class="c">// the start of these characters is indicated by a &#39;+&#39; sign, and the end is</span>
+                <span class="c">// indicated by a character that is not in Modified Base64 set.</span>
+                <span class="c">// For these encodings, we cannot detect a starting byte with confidence when</span>
+                <span class="c">// reading bytes backward. Throw out exception in these cases.</span>
+                <b>string</b> <span id="r153 rd" class="r153 r">errMsg</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                    <span class="i">FileSystemProviderStrings</span>.<span class="i">ReadBackward_Encoding_NotSupport</span>,
+                    <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">EncodingName</span>);
+                <b>throw</b> <b>new</b> <span class="t">BackReaderEncodingNotSupportedException</span>(<span class="r153 r">errMsg</span>, <a href="#d527ce4c7253dac1" class="i field">_currentEncoding</a>.<span class="i">EncodingName</span>);
+            }
+ 
+            <b>return</b> <a href="#e65e3a1d4ad71914" class="i field">_byteCount</a>;
+        }
+ 
+        <b>private static class</b> <a id="3e214bf17f742e5d" href="../R/3e214bf17f742e5d.html" target="n" data-glyph="4,1" class="t t">NativeMethods</a>
+        {
+            <span class="c">// Default values</span>
+            <b>private const int</b> <a id="ec22e8abec514940" href="../R/ec22e8abec514940.html" target="n" data-glyph="10,2" class="i field">MAX_DEFAULTCHAR</a> = 2;
+            <b>private const int</b> <a id="33e8e20463c741e8" href="../R/33e8e20463c741e8.html" target="n" data-glyph="10,2" class="i field">MAX_LEADBYTES</a> = 12;
+ 
+            [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Sequential</span>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>)]
+            <b>internal struct</b> <a id="5382a20aae20d5ec" href="../R/5382a20aae20d5ec.html" target="n" data-glyph="110,2" class="t t"><span id="3d9ea7608f44ece4">CPINFO</span></a>
+            {
+                [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">U4</span>)]
+                <b>internal int</b> <a id="8f4695b6d1af884c" href="../R/8f4695b6d1af884c.html" target="n" data-glyph="44,3" class="i field">MaxCharSize</a>;
+ 
+                [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">ByValArray</span>, <span class="i">SizeConst</span> = <a href="#ec22e8abec514940" class="i field">MAX_DEFAULTCHAR</a>)]
+                <b>public byte</b>[] <a id="83fe0cd45162a90a" href="../R/../../0000000000.html" target="n" data-glyph="42,3" class="i field">DefaultChar</a>;
+ 
+                [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">ByValArray</span>, <span class="i">SizeConst</span> = <a href="#33e8e20463c741e8" class="i field">MAX_LEADBYTES</a>)]
+                <b>public byte</b>[] <a id="f8daee6d6e31fea4" href="../R/../../0000000000.html" target="n" data-glyph="42,3" class="i field">LeadBytes</a>;
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Get information on a named code page.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r154 r">codePage</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r155 r">lpCpInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+            [<span class="i">DllImport</span>(<a href="../utils/PInvokeDllNames.cs.html#6c73838805dd2f2a" class="t t">PinvokeDllNames</a>.<a href="../utils/PInvokeDllNames.cs.html#c82de0ef4094fc0f" class="i field">GetCPInfoDllName</a>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>, <span class="i">SetLastError</span> = <b>true</b>)]
+            [<b>return</b>: <span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">Bool</span>)]
+            <b>internal static extern bool</b> <a id="52c329be8adc1edb" href="../R/52c329be8adc1edb.html" target="n" data-glyph="74,2" class="i method">GetCPInfo</a>(<b>uint</b> <span id="r154 rd" class="r154 r">codePage</span>, <b>out</b> <a href="#5382a20aae20d5ec" class="t t">CPINFO</a> <span id="r155 rd" class="r155 r">lpCpInfo</span>);
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The exception that indicates the encoding is not supported when reading backward.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Usage&quot;</span>, <span class="s">&quot;CA2237:MarkISerializableTypesWithSerializable&quot;</span>, <span class="i">Justification</span> = <span class="s">&quot;This exception is internal and never thrown by any public API&quot;</span>)]
+    [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Design&quot;</span>, <span class="s">&quot;CA1032:ImplementStandardExceptionConstructors&quot;</span>, <span class="i">Justification</span> = <span class="s">&quot;This exception is internal and never thrown by any public API&quot;</span>)]
+    <b>internal sealed class</b> <a id="774f58c0e28fc41d" href="../R/../../0000000000.html" target="n" data-glyph="2,0" class="t t">BackReaderEncodingNotSupportedException</a> : <span class="i">NotSupportedException</span>
+    {
+        <b>internal</b> <a id="5d29323540f1d63b" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">BackReaderEncodingNotSupportedException</a>(<b>string</b> <span id="r156 rd" class="r156 r">message</span>, <b>string</b> <span id="r157 rd" class="r157 r">encodingName</span>)
+            : <b>base</b>(<span class="r156 r">message</span>)
+        {
+            <a href="#e94dc534ba566ca7" class="i property">EncodingName</a> = <span class="r157 r">encodingName</span>;
+        }
+ 
+        <b>internal</b> <a id="c49ab6ab154f5517" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">BackReaderEncodingNotSupportedException</a>(<b>string</b> <span id="r158 rd" class="r158 r">encodingName</span>)
+        {
+            <a href="#e94dc534ba566ca7" class="i property">EncodingName</a> = <span class="r158 r">encodingName</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the encoding name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="e94dc534ba566ca7" href="../R/e94dc534ba566ca7.html" target="n" data-glyph="104,1" class="i property">EncodingName</a> { <b>get</b>; }
+    }
+}
+</pre></td></tr></table></div></body></html>

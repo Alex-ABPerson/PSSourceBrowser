@@ -1,0 +1,992 @@
+﻿<!DOCTYPE html>
+<html><head><title>TypeResolver.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(983);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/parser/TypeResolver.cs" target="_top">engine\parser\TypeResolver.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">DirectoryServices</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>.<span class="i">Mail</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>.<span class="i">NetworkInformation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Numerics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">AccessControl</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Cryptography</span>.<span class="i">X509Certificates</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">RegularExpressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Xml</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Management</span>.<span class="i">Infrastructure</span>;
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>
+{
+    <b>internal static class</b> <a id="f665f2b4b8d028cd" href="../../R/f665f2b4b8d028cd.html" target="n" data-glyph="2,0" class="t t">TypeResolver</a>
+    {
+        <span class="c">// our interface</span>
+        <span class="c">//    internal static Type ConvertTypeNameToType(TypeName typeName, out Exception exception)</span>
+        <span class="c">//        Used by TypeName.GetReflectionType and in TypeResolver</span>
+        <span class="c">//    internal static bool TryResolveType(string typeName, out Type type)</span>
+        <span class="c">//        Used in a bunch of places</span>
+        <span class="c">//    internal static Type ConvertStringToType(string typeName, out Exception exception)</span>
+        <span class="c">//        Used primarily in LanguagePrimitives.ConvertTo</span>
+ 
+        <b>private static</b> <span class="i">Type</span> <a id="8aa2625b03fa5d92" href="../../R/8aa2625b03fa5d92.html" target="n" data-glyph="76,1" class="i method">LookForTypeInSingleAssembly</a>(<span class="i">Assembly</span> <span id="r0 rd" class="r0 r">assembly</span>, <b>string</b> <span id="r1 rd" class="r1 r">typename</span>)
+        {
+            <span class="i">Type</span> <span id="r2 rd" class="r2 r">targetType</span> = <span class="r0 r">assembly</span>.<span class="i">GetType</span>(<span class="r1 r">typename</span>, <b>false</b>, <b>true</b>);
+            <b>if</b> (<span class="r2 r">targetType</span> != <b>null</b> &amp;&amp; <a href="#4060500316c13cf6" class="i method">IsPublic</a>(<span class="r2 r">targetType</span>))
+            {
+                <b>return</b> <span class="r2 r">targetType</span>;
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Inherited from InvalidCastException, because it happens in [string] -&gt; [Type] conversion.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal class</b> <a id="72137bec408a3b52" href="../../R/72137bec408a3b52.html" target="n" data-glyph="2,1" class="t t">AmbiguousTypeException</a> : <span class="i">InvalidCastException</span>
+        {
+            <b>public string</b>[] <a id="fa32e16c2c766c6e" href="../../R/fa32e16c2c766c6e.html" target="n" data-glyph="102,2" class="i property">Candidates</a> { <b>get</b>; }
+ 
+            <b>public</b> <a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <a id="df19f76aef8c59e5" href="../../R/df19f76aef8c59e5.html" target="n" data-glyph="102,2" class="i property">TypeName</a> { <b>get</b>; }
+ 
+            <b>public</b> <a id="7c64e7c4732c3cdc" href="../../R/../../0000000000.html" target="n" data-glyph="72,2" class="t constructor">AmbiguousTypeException</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r3 rd" class="r3 r">typeName</span>, <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r4 rd" class="r4 r">candidates</span>)
+            {
+                <a href="#fa32e16c2c766c6e" class="i property">Candidates</a> = <span class="r4 r">candidates</span>.<span class="i">ToArray</span>();
+                <a href="#df19f76aef8c59e5" class="i property">TypeName</a> = <span class="r3 r">typeName</span>;
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#fa32e16c2c766c6e" class="i property">Candidates</a>.<span class="i">Length</span> &gt; 1, <span class="s">&quot;AmbiguousTypeException can be created only when there are more then 1 candidate.&quot;</span>);
+            }
+        }
+ 
+        <b>private static</b> <span class="i">Type</span> <a id="f3ff007215342891" href="../../R/f3ff007215342891.html" target="n" data-glyph="76,1" class="i method">LookForTypeInAssemblies</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r5 rd" class="r5 r">typeName</span>,
+                                                    <span class="i">IEnumerable</span>&lt;<span class="i">Assembly</span>&gt; <span id="r6 rd" class="r6 r">assemblies</span>,
+                                                    <span class="i">HashSet</span>&lt;<span class="i">Assembly</span>&gt; <span id="r7 rd" class="r7 r">searchedAssemblies</span>,
+                                                    <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r8 rd" class="r8 r">typeResolutionState</span>,
+                                                    <b>bool</b> <span id="r9 rd" class="r9 r">reportAmbiguousException</span>,
+                                                    <b>out</b> <span class="i">Exception</span> <span id="r10 rd" class="r10 r">exception</span>)
+        {
+            <span class="r10 r">exception</span> = <b>null</b>;
+            <b>string</b> <span id="r11 rd" class="r11 r">alternateNameToFind</span> = <span class="r8 r">typeResolutionState</span>.<a href="#40c65c3ab33e7ce0" class="i method">GetAlternateTypeName</a>(<span class="r5 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>);
+            <span class="i">Type</span> <span id="r12 rd" class="r12 r">foundType</span> = <b>null</b>;
+            <span class="i">Type</span> <span id="r13 rd" class="r13 r">foundType2</span> = <b>null</b>;
+            <b>foreach</b> (<span class="i">Assembly</span> <span id="r14 rd" class="r14 r">assembly</span> <b>in</b> <span class="r6 r">assemblies</span>)
+            {
+                <span class="c">// Skip the assemblies that we already searched and found no matching type.</span>
+                <b>if</b> (<span class="r7 r">searchedAssemblies</span>.<span class="i">Contains</span>(<span class="r14 r">assembly</span>)) { <b>continue</b>; }
+ 
+                <b>try</b>
+                {
+                    <span class="i">Type</span> <span id="r15 rd" class="r15 r">targetType</span> = <a href="#8aa2625b03fa5d92" class="i method">LookForTypeInSingleAssembly</a>(<span class="r14 r">assembly</span>, <span class="r5 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>);
+                    <b>if</b> (<span class="r15 r">targetType</span> == <b>null</b> &amp;&amp; <span class="r11 r">alternateNameToFind</span> != <b>null</b>)
+                    {
+                        <span class="r15 r">targetType</span> = <a href="#8aa2625b03fa5d92" class="i method">LookForTypeInSingleAssembly</a>(<span class="r14 r">assembly</span>, <span class="r11 r">alternateNameToFind</span>);
+                    }
+ 
+                    <b>if</b> (<span class="r15 r">targetType</span> != <b>null</b>)
+                    {
+                        <b>if</b> (!<span class="r9 r">reportAmbiguousException</span>)
+                        {
+                            <span class="c">// accelerator for the common case, when we are not interested in ambiguity exception.</span>
+                            <b>return</b> <span class="r15 r">targetType</span>;
+                        }
+ 
+                        <span class="c">// .NET has forward notation for types, when they declared in one assembly and implemented in another one.</span>
+                        <span class="c">// We want to support both scenarios:</span>
+                        <span class="c">// 1) When we pass assembly with declared forwarded type (CoreCLR)</span>
+                        <span class="c">// 2) When we pass assembly with declared forwarded type and assembly with implemented forwarded type (FullCLR)</span>
+                        <span class="c">// In the case (2) we should not report duplicate, hence this check</span>
+                        <b>if</b> (<span class="r12 r">foundType</span> != <span class="r15 r">targetType</span>)
+                        {
+                            <b>if</b> (<span class="r12 r">foundType</span> != <b>null</b>)
+                            {
+                                <span class="r13 r">foundType2</span> = <span class="r15 r">targetType</span>;
+                                <b>break</b>;
+                            }
+                            <b>else</b>
+                            {
+                                <span class="r12 r">foundType</span> = <span class="r15 r">targetType</span>;
+                            }
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// We didn&#39;t find a match from the current assembly, so update the searchedAssemblies set.</span>
+                        <span class="r7 r">searchedAssemblies</span>.<span class="i">Add</span>(<span class="r14 r">assembly</span>);
+                    }
+                }
+                <b>catch</b> (<span class="i">Exception</span>) <span class="c">// Assembly.GetType might throw unadvertised exceptions</span>
+                {
+                }
+            }
+ 
+            <b>if</b> (<span class="r13 r">foundType2</span> != <b>null</b>)
+            {
+                <span class="r10 r">exception</span> = <b>new</b> <span class="t">AmbiguousTypeException</span>(<span class="r5 r">typeName</span>, <b>new</b> <b>string</b>[] { <span class="r12 r">foundType</span>.<span class="i">AssemblyQualifiedName</span>, <span class="r13 r">foundType2</span>.<span class="i">AssemblyQualifiedName</span> });
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>return</b> <span class="r12 r">foundType</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A type IsPublic if IsPublic or (IsNestedPublic and is nested in public type(s))</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="4060500316c13cf6" href="../../R/4060500316c13cf6.html" target="n" data-glyph="74,1" class="i method">IsPublic</a>(<span class="i">Type</span> <span id="r16 rd" class="r16 r">type</span>)
+        {
+            <b>if</b> (<span class="r16 r">type</span>.<span class="i">IsPublic</span>)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (!<span class="r16 r">type</span>.<span class="i">IsNestedPublic</span>)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>while</b> ((<span class="r16 r">type</span> = <span class="r16 r">type</span>.<span class="i">DeclaringType</span>) != <b>null</b>)
+            {
+                <b>if</b> (!(<span class="r16 r">type</span>.<span class="i">IsPublic</span> || <span class="r16 r">type</span>.<span class="i">IsNestedPublic</span>))
+                {
+                    <b>return</b> <b>false</b>;
+                }
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>private static</b> <span class="i">Type</span> <a id="86338ac091e0d8e4" href="../../R/86338ac091e0d8e4.html" target="n" data-glyph="76,1" class="i method">ResolveTypeNameWorker</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r17 rd" class="r17 r">typeName</span>,
+                                                  <a href="../SessionStateScope.cs.html#460261155e0163cb" class="t t">SessionStateScope</a> <span id="r18 rd" class="r18 r">currentScope</span>,
+                                                  <span class="i">IEnumerable</span>&lt;<span class="i">Assembly</span>&gt; <span id="r19 rd" class="r19 r">loadedAssemblies</span>,
+                                                  <span class="i">HashSet</span>&lt;<span class="i">Assembly</span>&gt; <span id="r20 rd" class="r20 r">searchedAssemblies</span>,
+                                                  <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r21 rd" class="r21 r">typeResolutionState</span>,
+                                                  <b>bool</b> <span id="r22 rd" class="r22 r">onlySearchInGivenAssemblies</span>,
+                                                  <b>bool</b> <span id="r23 rd" class="r23 r">reportAmbiguousException</span>,
+                                                  <b>out</b> <span class="i">Exception</span> <span id="r24 rd" class="r24 r">exception</span>)
+        {
+            <span class="i">Type</span> <span id="r25 rd" class="r25 r">result</span>;
+            <span class="r24 r">exception</span> = <b>null</b>;
+ 
+            <b>if</b> (!<span class="r22 r">onlySearchInGivenAssemblies</span>)
+            {
+                <b>while</b> (<span class="r18 r">currentScope</span> != <b>null</b>)
+                {
+                    <span class="r25 r">result</span> = <span class="r18 r">currentScope</span>.<a href="../SessionStateScope.cs.html#94b4cf2b5d0cb334" class="i method">LookupType</a>(<span class="r17 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>);
+                    <b>if</b> (<span class="r25 r">result</span> != <b>null</b>)
+                    {
+                        <b>return</b> <span class="r25 r">result</span>;
+                    }
+ 
+                    <span class="r18 r">currentScope</span> = <span class="r18 r">currentScope</span>.<a href="../SessionStateScope.cs.html#ec04fff24436a018" class="i property">Parent</a>;
+                }
+ 
+                <b>if</b> (<a href="#c299defb2b5f7804" class="t t">TypeAccelerators</a>.<a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">TryGetValue</span>(<span class="r17 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>, <b>out</b> <span class="r25 r">result</span>))
+                {
+                    <b>return</b> <span class="r25 r">result</span>;
+                }
+            }
+ 
+            <span class="r25 r">result</span> = <a href="#f3ff007215342891" class="i method">LookForTypeInAssemblies</a>(<span class="r17 r">typeName</span>, <span class="r19 r">loadedAssemblies</span>, <span class="r20 r">searchedAssemblies</span>, <span class="r21 r">typeResolutionState</span>, <span class="r23 r">reportAmbiguousException</span>, <b>out</b> <span class="r24 r">exception</span>);
+            <b>if</b> (<span class="r24 r">exception</span> != <b>null</b>)
+            {
+                <span class="c">// skip the rest of lookups, if exception reported.</span>
+                <b>return</b> <span class="r25 r">result</span>;
+            }
+ 
+            <b>if</b> (!<span class="r22 r">onlySearchInGivenAssemblies</span> &amp;&amp; <span class="r25 r">result</span> == <b>null</b>)
+            {
+                <b>lock</b> (<a href="#c299defb2b5f7804" class="t t">TypeAccelerators</a>.<a href="#b7ec1fc0eedf1a67" class="i field">userTypeAccelerators</a>)
+                {
+                    <a href="#c299defb2b5f7804" class="t t">TypeAccelerators</a>.<a href="#b7ec1fc0eedf1a67" class="i field">userTypeAccelerators</a>.<span class="i">TryGetValue</span>(<span class="r17 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>, <b>out</b> <span class="r25 r">result</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r25 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A set of assemblies that we have searched from but found no matching type. By checking this set, we can</span>
+        <span class="c">///</span><span class="c"> avoid searching from some assemblies multiple times.</span>
+        <span class="c">///</span><span class="c"> This set is made thread static, so that type resolution happens on the same thread can reuse the HashSet</span>
+        <span class="c">///</span><span class="c"> without having to create a new HashSet instance every time. This will reduce GC given that type resolution</span>
+        <span class="c">///</span><span class="c"> is a frequent operation in powershell script.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This set should be used directly only in the method CallResolveTypeNameWorkerHelper.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        [<span class="i">ThreadStatic</span>]
+        <b>private static</b> <span class="i">HashSet</span>&lt;<span class="i">Assembly</span>&gt; <a id="3f75c1588000f1b3" href="../../R/3f75c1588000f1b3.html" target="n" data-glyph="46,1" class="i field">t_searchedAssemblies</a> = <b>null</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A helper method to call ResolveTypeNameWorker in steps.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">Type</span> <a id="a1212d4968fd6a10" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CallResolveTypeNameWorkerHelper</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r26 rd" class="r26 r">typeName</span>,
+                                                            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r27 rd" class="r27 r">context</span>,
+                                                            <span class="i">IEnumerable</span>&lt;<span class="i">Assembly</span>&gt; <span id="r28 rd" class="r28 r">assemblies</span>,
+                                                            <b>bool</b> <span id="r29 rd" class="r29 r">isAssembliesExplicitlyPassedIn</span>,
+                                                            <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r30 rd" class="r30 r">typeResolutionState</span>,
+                                                            <b>out</b> <span class="i">Exception</span> <span id="r31 rd" class="r31 r">exception</span>)
+        {
+            <b>if</b> (<a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a> == <b>null</b>)
+            {
+                <a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">Assembly</span>&gt;();
+            }
+            <b>else</b>
+            {
+                <span class="c">// Clear the set before starting a full search to make sure we have a clean start.</span>
+                <a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a>.<span class="i">Clear</span>();
+            }
+ 
+            <b>try</b>
+            {
+                <span class="r31 r">exception</span> = <b>null</b>;
+                <a href="../SessionStateScope.cs.html#460261155e0163cb" class="k">var</a> <span id="r32 rd" class="r32 r">currentScope</span> = <span class="r27 r">context</span>?.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>;
+                <span class="i">Type</span> <span id="r33 rd" class="r33 r">result</span> = <span class="i">ResolveTypeNameWorker</span>(<span class="r26 r">typeName</span>, <span class="r32 r">currentScope</span>, <span class="r30 r">typeResolutionState</span>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>, <a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a>, <span class="r30 r">typeResolutionState</span>,
+                                                    <span class="c">/*onlySearchInGivenAssemblies*/</span> <b>false</b>, <span class="c">/* reportAmbiguousException */</span> <b>true</b>, <b>out</b> <span class="r31 r">exception</span>);
+                <b>if</b> (<span class="r31 r">exception</span> == <b>null</b> &amp;&amp; <span class="r33 r">result</span> == <b>null</b>)
+                {
+                    <b>if</b> (<span class="r27 r">context</span> != <b>null</b> &amp;&amp; !<span class="r29 r">isAssembliesExplicitlyPassedIn</span>)
+                    {
+                        <span class="c">// If the assemblies to search from is not specified by the caller of &#39;ResolveTypeNameWithContext&#39;,</span>
+                        <span class="c">// then we search our assembly cache first, so as to give preference to resolving the type against</span>
+                        <span class="c">// assemblies explicitly loaded by powershell, for example, via importing module/snapin.</span>
+                        <span class="r33 r">result</span> = <span class="i">ResolveTypeNameWorker</span>(<span class="r26 r">typeName</span>, <span class="r32 r">currentScope</span>, <span class="r27 r">context</span>.<a href="../ExecutionContext.cs.html#1d21e5a1ed78a821" class="i property">AssemblyCache</a>.<span class="i">Values</span>, <a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a>, <span class="r30 r">typeResolutionState</span>,
+                                                    <span class="c">/*onlySearchInGivenAssemblies*/</span> <b>true</b>, <span class="c">/* reportAmbiguousException */</span> <b>false</b>, <b>out</b> <span class="r31 r">exception</span>);
+                    }
+ 
+                    <b>if</b> (<span class="r33 r">result</span> == <b>null</b>)
+                    {
+                        <span class="c">// Search from the assembly list passed in.</span>
+                        <span class="r33 r">result</span> = <a href="#86338ac091e0d8e4" class="i method">ResolveTypeNameWorker</a>(<span class="r26 r">typeName</span>, <span class="r32 r">currentScope</span>, <span class="r28 r">assemblies</span>, <a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a>, <span class="r30 r">typeResolutionState</span>,
+                                                    <span class="c">/*onlySearchInGivenAssemblies*/</span> <b>true</b>, <span class="c">/* reportAmbiguousException */</span> <b>false</b>, <b>out</b> <span class="r31 r">exception</span>);
+                    }
+                }
+ 
+                <b>return</b> <span class="r33 r">result</span>;
+            }
+            <b>finally</b>
+            {
+                <span class="c">// Clear the set after a full search, so dynamic assemblies can get reclaimed as needed.</span>
+                <a href="#3f75c1588000f1b3" class="i field">t_searchedAssemblies</a>.<span class="i">Clear</span>();
+            }
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="f003353c4dde0718" href="../../R/f003353c4dde0718.html" target="n" data-glyph="74,1" class="i method">ResolveAssemblyQualifiedTypeName</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r34 rd" class="r34 r">typeName</span>, <b>out</b> <span class="i">Exception</span> <span id="r35 rd" class="r35 r">exception</span>)
+        {
+            <span class="c">// If an assembly name was specified, we let Type.GetType deal with loading the assembly</span>
+            <span class="c">// and resolving the type.</span>
+            <span class="r35 r">exception</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <span class="c">// We shouldn&#39;t really bother looking for the type in System namespace, but</span>
+                <span class="c">// we&#39;ve always done that.  We explicitly are not supporting arbitrary</span>
+                <span class="c">// &#39;using namespace&#39; here because there is little value, if you need the assembly</span>
+                <span class="c">// qualifier, it&#39;s best to just fully specify the type.</span>
+                <b>var</b> <span id="r36 rd" class="r36 r">result</span> = <span class="i">Type</span>.<span class="i">GetType</span>(<span class="r34 r">typeName</span>.<a href="ast.cs.html#5d27e8e58d692064" class="i property">FullName</a>, <b>false</b>, <b>true</b>) ??
+                             <span class="i">Type</span>.<span class="i">GetType</span>(<span class="s">&quot;System.&quot;</span> + <span class="r34 r">typeName</span>.<a href="ast.cs.html#5d27e8e58d692064" class="i property">FullName</a>, <b>false</b>, <b>true</b>);
+ 
+                <b>if</b> (<span class="r36 r">result</span> != <b>null</b> &amp;&amp; <span class="i">IsPublic</span>(<span class="r36 r">result</span>))
+                {
+                    <b>return</b> <span class="r36 r">result</span>;
+                }
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r37 rd" class="r37 r">e</span>)
+            {
+                <span class="r35 r">exception</span> = <span class="r37 r">e</span>;
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="a61c87d9e27d6f91" href="../../R/a61c87d9e27d6f91.html" target="n" data-glyph="74,1" class="i method">ResolveTypeNameWithContext</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r38 rd" class="r38 r">typeName</span>, <b>out</b> <span class="i">Exception</span> <span id="r39 rd" class="r39 r">exception</span>, <span class="i">Assembly</span>[] <span id="r40 rd" class="r40 r">assemblies</span>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r41 rd" class="r41 r">typeResolutionState</span>)
+        {
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r42 rd" class="r42 r">context</span> = <b>null</b>;
+            <span class="r39 r">exception</span> = <b>null</b>;
+ 
+            <b>if</b> (<span class="r41 r">typeResolutionState</span> == <b>null</b>)
+            {
+                <span class="c">// Usings from script scope (and if no script scope, fall back to default &#39;using namespace system&#39;)</span>
+                <span class="r42 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+                <span class="r41 r">typeResolutionState</span> = <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>.<a href="#140e18e0d186d2d7" class="i method">GetDefaultUsingState</a>(<span class="r42 r">context</span>);
+            }
+ 
+            <span class="c">// We can do the cache lookup only if we don&#39;t define type in the current scope (cache would be invalid in this case).</span>
+            <b>var</b> <span id="r43 rd" class="r43 r">result</span> = <span class="r41 r">typeResolutionState</span>.<a href="#1ac18a7f2f3f5154" class="i method">ContainsTypeDefined</a>(<span class="r38 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>)
+                ? <b>null</b>
+                : <a href="#bfedb6d1965806c6" class="t t">TypeCache</a>.<a href="#e38c7967b73a39e6" class="i method">Lookup</a>(<span class="r38 r">typeName</span>, <span class="r41 r">typeResolutionState</span>);
+            <b>if</b> (<span class="r43 r">result</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r43 r">result</span>;
+            }
+ 
+            <b>if</b> (<span class="r38 r">typeName</span>.<a href="ast.cs.html#e32629caa327873e" class="i property">AssemblyName</a> != <b>null</b>)
+            {
+                <span class="r43 r">result</span> = <a href="#f003353c4dde0718" class="i method">ResolveAssemblyQualifiedTypeName</a>(<span class="r38 r">typeName</span>, <b>out</b> <span class="r39 r">exception</span>);
+                <a href="#bfedb6d1965806c6" class="t t">TypeCache</a>.<a href="#6553890b1701ceca" class="i method">Add</a>(<span class="r38 r">typeName</span>, <span class="r41 r">typeResolutionState</span>, <span class="r43 r">result</span>);
+                <b>return</b> <span class="r43 r">result</span>;
+            }
+ 
+            <span class="c">// Simple typename (no generics, no arrays, no assembly name)</span>
+            <span class="c">// We use the following search order, using the specified name (assumed to be fully namespace qualified):</span>
+            <span class="c">//</span>
+            <span class="c">//     * Search scope table (includes &#39;using type x = ...&#39; aliases)</span>
+            <span class="c">//     * Built in type accelerators (implicit &#39;using type x = ...&#39; aliases that are effectively in global scope</span>
+            <span class="c">//     * typeResolutionState.assemblies, which contains:</span>
+            <span class="c">//          - Assemblies with PS types, added by &#39;using module&#39;</span>
+            <span class="c">//          - Assemblies added by &#39;using assembly&#39;.</span>
+            <span class="c">//          For this case, we REPORT ambiguity, since user explicitly specifies the set of assemblies.</span>
+            <span class="c">//     * All other loaded assemblies (excluding dynamic assemblies created for PS defined types).</span>
+            <span class="c">//          IGNORE ambiguity. It mimics PS v4. There are two reasons:</span>
+            <span class="c">//          1) If we report ambiguity, we need to fix our caching logic accordingly.</span>
+            <span class="c">//             Consider this code</span>
+            <span class="c">//                  Add-Type &#39;public class Q {}&#39; # ok</span>
+            <span class="c">//                  Add-Type &#39;public class Q { }&#39; # get error about the same name</span>
+            <span class="c">//                  [Q] # we would get error about ambiguous type, because we added assembly with duplicated type</span>
+            <span class="c">//                      # before we can report TYPE_ALREADY_EXISTS error.</span>
+            <span class="c">//</span>
+            <span class="c">//                  Add-Type &#39;public class Q2 {}&#39; # ok</span>
+            <span class="c">//                  [Q2] # caching Q2 type</span>
+            <span class="c">//                  Add-Type &#39;public class Q2 { }&#39; # get error about the same name</span>
+            <span class="c">//                  [Q2] # we don&#39;t get an error about ambiguous type, because it&#39;s cached already</span>
+            <span class="c">//          2) NuGet (VS Package Management console) uses MEF extensibility model.</span>
+            <span class="c">//             Different assemblies includes same interface (i.e. NuGet.VisualStudio.IVsPackageInstallerServices),</span>
+            <span class="c">//             where they include only methods that they are interested in the interface declaration (result interfaces are different!).</span>
+            <span class="c">//             Then, at runtime VS provides an instance. Everything work as far as instance has compatible API.</span>
+            <span class="c">//             So [NuGet.VisualStudio.IVsPackageInstallerServices] can be resolved to several different assemblies and it&#39;s ok.</span>
+            <span class="c">//     * User defined type accelerators (rare - interface was never public)</span>
+            <span class="c">//</span>
+            <span class="c">// If nothing is found, we search again, this time applying any &#39;using namespace ...&#39; declarations including the implicit &#39;using namespace System&#39;.</span>
+            <span class="c">// We must search all using aliases and REPORT an error if there is an ambiguity.</span>
+ 
+            <span class="c">// If this is TypeDefinition we should not cache anything in TypeCache.</span>
+            <b>if</b> (<span class="r38 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a> != <b>null</b>)
+            {
+                <b>return</b> <span class="r38 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a>.<a href="ast.cs.html#238185060b3af590" class="i property">Type</a>;
+            }
+ 
+            <b>if</b> (<span class="r42 r">context</span> == <b>null</b>)
+            {
+                <span class="r42 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            }
+ 
+            <span class="c">// Use the explicitly passed-in assembly list when it&#39;s specified by the caller.</span>
+            <span class="c">// Otherwise, retrieve all currently loaded assemblies.</span>
+            <b>var</b> <span id="r44 rd" class="r44 r">assemList</span> = <span class="r40 r">assemblies</span> ?? <a href="../../utils/ClrFacade.cs.html#a9a016478ec73a42" class="t t">ClrFacade</a>.<a href="../../utils/ClrFacade.cs.html#dcc937adf7d0cfeb" class="i method">GetAssemblies</a>(<span class="r41 r">typeResolutionState</span>, <span class="r38 r">typeName</span>);
+            <b>var</b> <span id="r45 rd" class="r45 r">isAssembliesExplicitlyPassedIn</span> = <span class="r40 r">assemblies</span> != <b>null</b>;
+ 
+            <span class="r43 r">result</span> = <span class="i">CallResolveTypeNameWorkerHelper</span>(<span class="r38 r">typeName</span>, <span class="r42 r">context</span>, <span class="r44 r">assemList</span>, <span class="r45 r">isAssembliesExplicitlyPassedIn</span>, <span class="r41 r">typeResolutionState</span>, <b>out</b> <span class="r39 r">exception</span>);
+ 
+            <b>if</b> (<span class="r43 r">result</span> != <b>null</b>)
+            {
+                <a href="#bfedb6d1965806c6" class="t t">TypeCache</a>.<a href="#6553890b1701ceca" class="i method">Add</a>(<span class="r38 r">typeName</span>, <span class="r41 r">typeResolutionState</span>, <span class="r43 r">result</span>);
+                <b>return</b> <span class="r43 r">result</span>;
+            }
+ 
+            <b>if</b> (<span class="r39 r">exception</span> == <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r46 rd" class="r46 r">ns</span> <b>in</b> <span class="r41 r">typeResolutionState</span>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>)
+                {
+                    <b>var</b> <span id="r47 rd" class="r47 r">newTypeNameToSearch</span> = <span class="r46 r">ns</span> + <span class="s">&quot;.&quot;</span> + <span class="r38 r">typeName</span>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>;
+                    <span class="r47 r">newTypeNameToSearch</span> = <span class="r41 r">typeResolutionState</span>.<span class="i">GetAlternateTypeName</span>(<span class="r47 r">newTypeNameToSearch</span>) ??
+                                          <span class="r47 r">newTypeNameToSearch</span>;
+                    <a href="ast.cs.html#83b43c1855a09e15" class="k">var</a> <span id="r48 rd" class="r48 r">newTypeName</span> = <b>new</b> <span class="t">TypeName</span>(<span class="r38 r">typeName</span>.<a href="ast.cs.html#1ce6d6f63fe6922f" class="i property">Extent</a>, <span class="r47 r">newTypeNameToSearch</span>);
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">CORECLR</span>
+                    <b>if</b> (!<span class="r45 r">isAssembliesExplicitlyPassedIn</span>)
+                    {
+                        <span class="c">// We called &#39;ClrFacade.GetAssemblies&#39; to get assemblies. That means the assemblies to search from</span>
+                        <span class="c">// are not pre-defined, and thus we have to refetch assembly again based on the new type name.</span>
+                        <span class="r44 r">assemList</span> = <a href="../../utils/ClrFacade.cs.html#a9a016478ec73a42" class="t t">ClrFacade</a>.<a href="../../utils/ClrFacade.cs.html#dcc937adf7d0cfeb" class="i method">GetAssemblies</a>(<span class="r41 r">typeResolutionState</span>, <span class="r48 r">newTypeName</span>);
+                    }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                    <b>var</b> <span id="r49 rd" class="r49 r">newResult</span> = <span class="i">CallResolveTypeNameWorkerHelper</span>(<span class="r48 r">newTypeName</span>, <span class="r42 r">context</span>, <span class="r44 r">assemList</span>, <span class="r45 r">isAssembliesExplicitlyPassedIn</span>, <span class="r41 r">typeResolutionState</span>, <b>out</b> <span class="r39 r">exception</span>);
+ 
+                    <b>if</b> (<span class="r39 r">exception</span> != <b>null</b>)
+                    {
+                        <b>break</b>;
+                    }
+ 
+                    <b>if</b> (<span class="r49 r">newResult</span> != <b>null</b>)
+                    {
+                        <b>if</b> (<span class="r43 r">result</span> == <b>null</b>)
+                        {
+                            <span class="r43 r">result</span> = <span class="r49 r">newResult</span>;
+                        }
+                        <b>else</b>
+                        {
+                            <span class="r39 r">exception</span> = <b>new</b> <span class="t">AmbiguousTypeException</span>(<span class="r38 r">typeName</span>, <b>new</b> <b>string</b>[] { <span class="r43 r">result</span>.<span class="i">FullName</span>, <span class="r49 r">newResult</span>.<span class="i">FullName</span> });
+                            <span class="r43 r">result</span> = <b>null</b>;
+                            <b>break</b>;
+                        }
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r39 r">exception</span> != <b>null</b>)
+            {
+                <span class="c">// AmbiguousTypeException is for internal representation only.</span>
+                <a href="#72137bec408a3b52" class="k">var</a> <span id="r50 rd" class="r50 r">ambiguousException</span> = <span class="r39 r">exception</span> <b>as</b> <a href="#72137bec408a3b52" class="t t">AmbiguousTypeException</a>;
+                <b>if</b> (<span class="r50 r">ambiguousException</span> != <b>null</b>)
+                {
+                    <span class="r39 r">exception</span> = <b>new</b> <span class="t">PSInvalidCastException</span>(<span class="s">&quot;AmbiguousTypeReference&quot;</span>, <span class="r39 r">exception</span>,
+                    <span class="i">ParserStrings</span>.<span class="i">AmbiguousTypeReference</span>, <span class="r50 r">ambiguousException</span>.<a href="#df19f76aef8c59e5" class="i property">TypeName</a>.<a href="ast.cs.html#a9592c89dfa9c9ad" class="i property">Name</a>,
+                                    <span class="r50 r">ambiguousException</span>.<a href="#fa32e16c2c766c6e" class="i property">Candidates</a>[0], <span class="r50 r">ambiguousException</span>.<a href="#fa32e16c2c766c6e" class="i property">Candidates</a>[1]);
+                }
+            }
+ 
+            <b>if</b> (<span class="r43 r">result</span> != <b>null</b>)
+            {
+                <a href="#bfedb6d1965806c6" class="t t">TypeCache</a>.<a href="#6553890b1701ceca" class="i method">Add</a>(<span class="r38 r">typeName</span>, <span class="r41 r">typeResolutionState</span>, <span class="r43 r">result</span>);
+            }
+ 
+            <b>return</b> <span class="r43 r">result</span>;
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="ccee6c3af985d76a" href="../../R/ccee6c3af985d76a.html" target="n" data-glyph="74,1" class="i method">ResolveTypeName</a>(<a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a> <span id="r51 rd" class="r51 r">typeName</span>, <b>out</b> <span class="i">Exception</span> <span id="r52 rd" class="r52 r">exception</span>)
+        {
+            <b>return</b> <a href="#a61c87d9e27d6f91" class="i method">ResolveTypeNameWithContext</a>(<span class="r51 r">typeName</span>, <b>out</b> <span class="r52 r">exception</span>, <b>null</b>, <b>null</b>);
+        }
+ 
+        <b>internal static bool</b> <a id="3fb063578567b37c" href="../../R/3fb063578567b37c.html" target="n" data-glyph="74,1" class="i method">TryResolveType</a>(<b>string</b> <span id="r53 rd" class="r53 r">typeName</span>, <b>out</b> <span class="i">Type</span> <span id="r54 rd" class="r54 r">type</span>)
+        {
+            <span class="i">Exception</span> <span id="r55 rd" class="r55 r">exception</span>;
+            <span class="r54 r">type</span> = <a href="#22e33db4a9b99496" class="i method">ResolveType</a>(<span class="r53 r">typeName</span>, <b>out</b> <span class="r55 r">exception</span>);
+            <b>return</b> (<span class="r54 r">type</span> != <b>null</b>);
+        }
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="6b551d638ac1965a" href="../../R/6b551d638ac1965a.html" target="n" data-glyph="74,1" class="i method">ResolveITypeName</a>(<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a> <span id="r56 rd" class="r56 r">iTypeName</span>, <b>out</b> <span class="i">Exception</span> <span id="r57 rd" class="r57 r">exception</span>)
+        {
+            <span class="r57 r">exception</span> = <b>null</b>;
+            <a href="ast.cs.html#83b43c1855a09e15" class="k">var</a> <span id="r58 rd" class="r58 r">typeName</span> = <span class="r56 r">iTypeName</span> <b>as</b> <a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a>;
+            <b>if</b> (<span class="r58 r">typeName</span> == <b>null</b>)
+            {
+                <span class="c">// The type is something more complicated - generic or array.</span>
+                <b>try</b>
+                {
+                    <b>return</b> <span class="r56 r">iTypeName</span>.<a href="ast.cs.html#eba83ef9fd0feedd" class="i method">GetReflectionType</a>();
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r59 rd" class="r59 r">e</span>)
+                {
+                    <span class="r57 r">exception</span> = <span class="r59 r">e</span>;
+                    <b>return</b> <b>null</b>;
+                }
+            }
+ 
+            <b>return</b> <a href="#ccee6c3af985d76a" class="i method">ResolveTypeName</a>(<span class="r58 r">typeName</span>, <b>out</b> <span class="r57 r">exception</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This routine converts a string into a Type object using the msh rules.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">strTypeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A string representing the name of the type to convert.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exception, if one happened, trying to find the type.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A type if the conversion was successful, null otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">Type</span> <a id="22e33db4a9b99496" href="../../R/22e33db4a9b99496.html" target="n" data-glyph="74,1" class="i method">ResolveType</a>(<b>string</b> <span id="r60 rd" class="r60 r">strTypeName</span>, <b>out</b> <span class="i">Exception</span> <span id="r61 rd" class="r61 r">exception</span>)
+        {
+            <span class="r61 r">exception</span> = <b>null</b>;
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrWhiteSpace</span>(<span class="r60 r">strTypeName</span>))
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <a href="ast.cs.html#a422e1772da6dbc8" class="k">var</a> <span id="r62 rd" class="r62 r">iTypeName</span> = <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a>.<a href="Parser.cs.html#48b79e78a1e64334" class="i method">ScanType</a>(<span class="r60 r">strTypeName</span>, <span class="r63 r">ignoreErrors</span>: <b>false</b>);
+            <b>if</b> (<span class="r62 r">iTypeName</span> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>return</b> <a href="#6b551d638ac1965a" class="i method">ResolveITypeName</a>(<span class="r62 r">iTypeName</span>, <b>out</b> <span class="r61 r">exception</span>);
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The idea behind this class is: I should be able to re-use expensive</span>
+    <span class="c">///</span><span class="c"> type resolution operation result in the same context.</span>
+    <span class="c">///</span><span class="c"> Hence, this class is a key for TypeCache dictionary.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Every SessionStateScope has TypeResolutionState.</span>
+    <span class="c">///</span><span class="c"> typesDefined contains PowerShell types names defined in the current scope and all scopes above.</span>
+    <span class="c">///</span><span class="c"> Same for namespaces.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> If TypeResolutionState doesn&#39;t add anything new compare to it&#39;s parent, we represent it as null.</span>
+    <span class="c">///</span><span class="c"> So, when we do lookup, we need to find first non-null TypeResolutionState.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="55992be0fa5b3b24" href="../../R/55992be0fa5b3b24.html" target="n" data-glyph="2,0" class="t t">TypeResolutionState</a>
+    {
+        <b>internal static readonly string</b>[] <a id="9b5b1252013f68f5" href="../../R/9b5b1252013f68f5.html" target="n" data-glyph="44,1" class="i field">systemNamespace</a> = { <span class="s">&quot;System&quot;</span> };
+        <b>internal static readonly</b> <span class="i">Assembly</span>[] <a id="033134ff91b978e0" href="../../R/033134ff91b978e0.html" target="n" data-glyph="44,1" class="i field">emptyAssemblies</a> = <span class="i">Array</span>.<span class="i">Empty</span>&lt;<span class="i">Assembly</span>&gt;();
+        <b>internal static readonly</b> <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <a id="1575db53b7fecb70" href="../../R/1575db53b7fecb70.html" target="n" data-glyph="44,1" class="i field">UsingSystem</a> = <b>new</b> <a href="#5afa7bd5051a59ac" class="t constructor">TypeResolutionState</a>();
+ 
+        <b>internal readonly string</b>[] <a id="f4622e1693db9cfc" href="../../R/f4622e1693db9cfc.html" target="n" data-glyph="44,1" class="i field">namespaces</a>;
+        <b>internal readonly</b> <span class="i">Assembly</span>[] <a id="be33acc8ea8f48a2" href="../../R/be33acc8ea8f48a2.html" target="n" data-glyph="44,1" class="i field">assemblies</a>;
+        <b>private readonly</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt; <a id="0239ea4bd6696921" href="../../R/0239ea4bd6696921.html" target="n" data-glyph="46,1" class="i field">_typesDefined</a>;
+        <b>internal readonly int</b> <a id="29813e5e65039f72" href="../../R/29813e5e65039f72.html" target="n" data-glyph="44,1" class="i field">genericArgumentCount</a>;
+        <b>internal readonly bool</b> <a id="51bdb7d1434fc630" href="../../R/51bdb7d1434fc630.html" target="n" data-glyph="44,1" class="i field">attribute</a>;
+ 
+        <b>private</b> <a id="5afa7bd5051a59ac" href="../../R/5afa7bd5051a59ac.html" target="n" data-glyph="76,1" class="t constructor">TypeResolutionState</a>()
+            : <a href="#da3e3447d7715cbe" class="k">this</a>(<a href="#9b5b1252013f68f5" class="i field">systemNamespace</a>, <a href="#033134ff91b978e0" class="i field">emptyAssemblies</a>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> TypeResolutionState can be shared and that&#39;s why it should be represented as an immutable object.</span>
+        <span class="c">///</span><span class="c"> So, we use this API to alternate TypeResolutionState, but instead of mutating existing one, we clone it.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r64 r">types</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <a id="be57af75f6802cb5" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">CloneWithAddTypesDefined</a>(<span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r64 rd" class="r64 r">types</span>)
+        {
+            <b>var</b> <span id="r65 rd" class="r65 r">newTypesDefined</span> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<a href="#0239ea4bd6696921" class="i field">_typesDefined</a>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+            <b>foreach</b> (<b>var</b> <span id="r66 rd" class="r66 r">type</span> <b>in</b> <span class="r64 r">types</span>)
+            {
+                <span class="r65 r">newTypesDefined</span>.<span class="i">Add</span>(<span class="r66 r">type</span>);
+            }
+ 
+            <b>return</b> <b>new</b> <a href="#b442d0ac2213dc19" class="t constructor">TypeResolutionState</a>(<a href="#55992be0fa5b3b24" class="k">this</a>, <span class="r65 r">newTypesDefined</span>);
+        }
+ 
+        <b>internal bool</b> <a id="1ac18a7f2f3f5154" href="../../R/1ac18a7f2f3f5154.html" target="n" data-glyph="74,1" class="i method">ContainsTypeDefined</a>(<b>string</b> <span id="r67 rd" class="r67 r">type</span>)
+        {
+            <b>return</b> <a href="#0239ea4bd6696921" class="i field">_typesDefined</a>.<span class="i">Contains</span>(<span class="r67 r">type</span>);
+        }
+ 
+        <b>internal</b> <a id="da3e3447d7715cbe" href="../../R/da3e3447d7715cbe.html" target="n" data-glyph="74,1" class="t constructor">TypeResolutionState</a>(<b>string</b>[] <span id="r68 rd" class="r68 r">namespaces</span>, <span class="i">Assembly</span>[] <span id="r69 rd" class="r69 r">assemblies</span>)
+        {
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a> = <span class="r68 r">namespaces</span> ?? <a href="#9b5b1252013f68f5" class="i field">systemNamespace</a>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a> = <span class="r69 r">assemblies</span> ?? <a href="#033134ff91b978e0" class="i field">emptyAssemblies</a>;
+            <a href="#0239ea4bd6696921" class="i field">_typesDefined</a> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+        }
+ 
+        <b>internal</b> <a id="02c7bbffeaaa844e" href="../../R/02c7bbffeaaa844e.html" target="n" data-glyph="74,1" class="t constructor">TypeResolutionState</a>(<a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r70 rd" class="r70 r">other</span>, <b>int</b> <span id="r71 rd" class="r71 r">genericArgumentCount</span>, <b>bool</b> <span id="r72 rd" class="r72 r">attribute</span>)
+        {
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a> = <span class="r70 r">other</span>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a> = <span class="r70 r">other</span>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>;
+            <a href="#0239ea4bd6696921" class="i field">_typesDefined</a> = <span class="r70 r">other</span>.<a href="#0239ea4bd6696921" class="i field">_typesDefined</a>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a> = <span class="r71 r">genericArgumentCount</span>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#51bdb7d1434fc630" class="i field">attribute</a> = <span class="r72 r">attribute</span>;
+        }
+ 
+        <b>private</b> <a id="b442d0ac2213dc19" href="../../R/b442d0ac2213dc19.html" target="n" data-glyph="76,1" class="t constructor">TypeResolutionState</a>(<a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r73 rd" class="r73 r">other</span>, <span class="i">HashSet</span>&lt;<b>string</b>&gt; <span id="r74 rd" class="r74 r">typesDefined</span>)
+        {
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a> = <span class="r73 r">other</span>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a> = <span class="r73 r">other</span>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>;
+            <a href="#0239ea4bd6696921" class="i field">_typesDefined</a> = <span class="r74 r">typesDefined</span>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a> = <span class="r73 r">other</span>.<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a>;
+            <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#51bdb7d1434fc630" class="i field">attribute</a> = <span class="r73 r">other</span>.<a href="#51bdb7d1434fc630" class="i field">attribute</a>;
+        }
+ 
+        <b>internal static</b> <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <a id="140e18e0d186d2d7" href="../../R/140e18e0d186d2d7.html" target="n" data-glyph="74,1" class="i method">GetDefaultUsingState</a>(<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r75 rd" class="r75 r">context</span>)
+        {
+            <b>if</b> (<span class="r75 r">context</span> == <b>null</b>)
+            {
+                <span class="r75 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            }
+ 
+            <b>if</b> (<span class="r75 r">context</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r75 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>.<a href="../SessionStateScope.cs.html#bdd9f0dc3f98ba22" class="i property">TypeResolutionState</a>;
+            }
+ 
+            <b>return</b> <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>.<a href="#1575db53b7fecb70" class="i field">UsingSystem</a>;
+        }
+ 
+        <b>internal string</b> <a id="40c65c3ab33e7ce0" href="../../R/40c65c3ab33e7ce0.html" target="n" data-glyph="74,1" class="i method">GetAlternateTypeName</a>(<b>string</b> <span id="r76 rd" class="r76 r">typeName</span>)
+        {
+            <b>string</b> <span id="r77 rd" class="r77 r">alternateName</span> = <b>null</b>;
+            <b>if</b> (<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a> &gt; 0 &amp;&amp; <span class="r76 r">typeName</span>.<span class="i">IndexOf</span>(<span class="s">&#39;`&#39;</span>) &lt; 0)
+            {
+                <span class="r77 r">alternateName</span> = <span class="r76 r">typeName</span> + <span class="s">&quot;`&quot;</span> + <a href="#29813e5e65039f72" class="i field">genericArgumentCount</a>;
+            }
+            <b>else</b> <b>if</b> (<a href="#51bdb7d1434fc630" class="i field">attribute</a> &amp;&amp; !<span class="r76 r">typeName</span>.<span class="i">EndsWith</span>(<span class="s">&quot;Attribute&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <span class="r77 r">alternateName</span> = <span class="r76 r">typeName</span> + <span class="s">&quot;Attribute&quot;</span>;
+            }
+ 
+            <b>return</b> <span class="r77 r">alternateName</span>;
+        }
+ 
+        <b>public override bool</b> <a id="e802924818522ca3" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Equals</a>(<b>object</b> <span id="r78 rd" class="r78 r">obj</span>)
+        {
+            <b>if</b> (<b>object</b>.<span class="i">ReferenceEquals</span>(<a href="#55992be0fa5b3b24" class="k">this</a>, <span class="r78 r">obj</span>))
+                <b>return</b> <b>true</b>;
+ 
+            <b>if</b> (!(<span class="r78 r">obj</span> <b>is</b> <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r79 rd" class="r79 r">other</span>))
+                <b>return</b> <b>false</b>;
+ 
+            <b>if</b> (<a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#51bdb7d1434fc630" class="i field">attribute</a> != <span class="r79 r">other</span>.<a href="#51bdb7d1434fc630" class="i field">attribute</a>)
+                <b>return</b> <b>false</b>;
+ 
+            <b>if</b> (<a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a> != <span class="r79 r">other</span>.<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a>)
+                <b>return</b> <b>false</b>;
+ 
+            <b>if</b> (<a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>.<span class="i">Length</span> != <span class="r79 r">other</span>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>.<span class="i">Length</span>)
+                <b>return</b> <b>false</b>;
+ 
+            <b>if</b> (<a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>.<span class="i">Length</span> != <span class="r79 r">other</span>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>.<span class="i">Length</span>)
+                <b>return</b> <b>false</b>;
+ 
+            <b>for</b> (<b>int</b> <span id="r80 rd" class="r80 r">i</span> = 0; <span class="r80 r">i</span> &lt; <a href="#f4622e1693db9cfc" class="i field">namespaces</a>.<span class="i">Length</span>; <span class="r80 r">i</span>++)
+            {
+                <b>if</b> (!<a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>[<span class="r80 r">i</span>].<span class="i">Equals</span>(<span class="r79 r">other</span>.<a href="#f4622e1693db9cfc" class="i field">namespaces</a>[<span class="r80 r">i</span>], <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    <b>return</b> <b>false</b>;
+            }
+ 
+            <b>for</b> (<b>int</b> <span id="r81 rd" class="r81 r">i</span> = 0; <span class="r81 r">i</span> &lt; <a href="#be33acc8ea8f48a2" class="i field">assemblies</a>.<span class="i">Length</span>; <span class="r81 r">i</span>++)
+            {
+                <b>if</b> (!<a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>[<span class="r81 r">i</span>].<span class="i">Equals</span>(<span class="r79 r">other</span>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>[<span class="r81 r">i</span>]))
+                    <b>return</b> <b>false</b>;
+            }
+ 
+            <b>if</b> (<a href="#0239ea4bd6696921" class="i field">_typesDefined</a>.<span class="i">Count</span> != <span class="r79 r">other</span>.<a href="#0239ea4bd6696921" class="i field">_typesDefined</a>.<span class="i">Count</span>)
+                <b>return</b> <b>false</b>;
+ 
+            <b>return</b> <a href="#0239ea4bd6696921" class="i field">_typesDefined</a>.<span class="i">SetEquals</span>(<span class="r79 r">other</span>.<a href="#0239ea4bd6696921" class="i field">_typesDefined</a>);
+        }
+ 
+        <b>public override int</b> <a id="c973e9ccc3069d35" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetHashCode</a>()
+        {
+            <b>var</b> <span id="r82 rd" class="r82 r">stringComparer</span> = <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>;
+            <b>int</b> <span id="r83 rd" class="r83 r">result</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<span class="i">CombineHashCodes</span>(<a href="#29813e5e65039f72" class="i field">genericArgumentCount</a>.<span class="i">GetHashCode</span>(), <a href="#51bdb7d1434fc630" class="i field">attribute</a>.<span class="i">GetHashCode</span>());
+            <b>for</b> (<b>int</b> <span id="r84 rd" class="r84 r">i</span> = 0; <span class="r84 r">i</span> &lt; <a href="#f4622e1693db9cfc" class="i field">namespaces</a>.<span class="i">Length</span>; <span class="r84 r">i</span>++)
+            {
+                <span class="r83 r">result</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<span class="i">CombineHashCodes</span>(<span class="r83 r">result</span>, <span class="r82 r">stringComparer</span>.<span class="i">GetHashCode</span>(<a href="#f4622e1693db9cfc" class="i field">namespaces</a>[<span class="r84 r">i</span>]));
+            }
+ 
+            <b>for</b> (<b>int</b> <span id="r85 rd" class="r85 r">i</span> = 0; <span class="r85 r">i</span> &lt; <a href="#be33acc8ea8f48a2" class="i field">assemblies</a>.<span class="i">Length</span>; <span class="r85 r">i</span>++)
+            {
+                <span class="r83 r">result</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<span class="i">CombineHashCodes</span>(<span class="r83 r">result</span>, <a href="#55992be0fa5b3b24" class="k">this</a>.<a href="#be33acc8ea8f48a2" class="i field">assemblies</a>[<span class="r85 r">i</span>].<span class="i">GetHashCode</span>());
+            }
+ 
+            <b>foreach</b> (<b>var</b> <span id="r86 rd" class="r86 r">t</span> <b>in</b> <a href="#0239ea4bd6696921" class="i field">_typesDefined</a>)
+            {
+                <span class="r83 r">result</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<span class="i">CombineHashCodes</span>(<span class="r83 r">result</span>, <span class="r86 r">t</span>.<span class="i">GetHashCode</span>());
+            }
+ 
+            <b>return</b> <span class="r83 r">result</span>;
+        }
+    }
+ 
+    <b>internal static class</b> <a id="bfedb6d1965806c6" href="../../R/bfedb6d1965806c6.html" target="n" data-glyph="2,0" class="t t">TypeCache</a>
+    {
+        <b>private sealed class</b> <a id="d95242563233c94d" href="../../R/../../0000000000.html" target="n" data-glyph="4,1" class="t t"><span id="2db5cfd66d0d12cf">KeyComparer</span></a> : <span class="i">IEqualityComparer</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>&gt;&gt;
+        {
+            <b>public bool</b> <a id="689215b8c793b9e6" href="../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">Equals</a>(<span class="i">Tuple</span>&lt;<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>&gt; <span id="r87 rd" class="r87 r">x</span>,
+                               <span class="i">Tuple</span>&lt;<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>&gt; <span id="r88 rd" class="r88 r">y</span>)
+            {
+                <b>return</b> <span class="r87 r">x</span>.<span class="i">Item1</span>.<span class="i">Equals</span>(<span class="r88 r">y</span>.<span class="i">Item1</span>) &amp;&amp; <span class="r87 r">x</span>.<span class="i">Item2</span>.<span class="i">Equals</span>(<span class="r88 r">y</span>.<span class="i">Item2</span>);
+            }
+ 
+            <b>public int</b> <a id="528f686838f37488" href="../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">GetHashCode</a>(<span class="i">Tuple</span>&lt;<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>&gt; <span id="r89 rd" class="r89 r">obj</span>)
+            {
+                <b>return</b> <span class="r89 r">obj</span>.<span class="i">GetHashCode</span>();
+            }
+        }
+ 
+        <b>private static readonly</b> <span class="i">ConcurrentDictionary</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>&gt;, <span class="i">Type</span>&gt; <a id="726246212dc7e681" href="../../R/726246212dc7e681.html" target="n" data-glyph="46,1" class="i field">s_cache</a> = <b>new</b> <span class="i">ConcurrentDictionary</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a>&gt;, <span class="i">Type</span>&gt;(<b>new</b> <span class="t">KeyComparer</span>());
+ 
+        <b>internal static</b> <span class="i">Type</span> <a id="e38c7967b73a39e6" href="../../R/e38c7967b73a39e6.html" target="n" data-glyph="74,1" class="i method">Lookup</a>(<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a> <span id="r90 rd" class="r90 r">typeName</span>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r91 rd" class="r91 r">typeResolutionState</span>)
+        {
+            <span class="i">Type</span> <span id="r92 rd" class="r92 r">result</span>;
+            <a href="#726246212dc7e681" class="i field">s_cache</a>.<span class="i">TryGetValue</span>(<span class="i">Tuple</span>.<span class="i">Create</span>(<span class="r90 r">typeName</span>, <span class="r91 r">typeResolutionState</span>), <b>out</b> <span class="r92 r">result</span>);
+            <b>return</b> <span class="r92 r">result</span>;
+        }
+ 
+        <b>internal static void</b> <a id="6553890b1701ceca" href="../../R/6553890b1701ceca.html" target="n" data-glyph="74,1" class="i method">Add</a>(<a href="ast.cs.html#a422e1772da6dbc8" class="t t">ITypeName</a> <span id="r93 rd" class="r93 r">typeName</span>, <a href="#55992be0fa5b3b24" class="t t">TypeResolutionState</a> <span id="r94 rd" class="r94 r">typeResolutionState</span>, <span class="i">Type</span> <span id="r95 rd" class="r95 r">type</span>)
+        {
+            <a href="#726246212dc7e681" class="i field">s_cache</a>.<span class="i">GetOrAdd</span>(<span class="i">Tuple</span>.<span class="i">Create</span>(<span class="r93 r">typeName</span>, <span class="r94 r">typeResolutionState</span>), <span class="r95 r">type</span>);
+        }
+    }
+}
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A class to the core types in PowerShell.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal static class</b> <a id="5741cea1a14d9f96" href="../../R/5741cea1a14d9f96.html" target="n" data-glyph="2,0" class="t t">CoreTypes</a>
+    {
+        <span class="c">// A list of the core PowerShell types, and their accelerator.</span>
+        <span class="c">//</span>
+        <span class="c">// These types are frequently used in scripting, and for parameter validation in scripts.</span>
+        <span class="c">//</span>
+        <span class="c">// When in ConstrainedLanguage mode, all operations on these types are fully supported unlike all other</span>
+        <span class="c">// types that are assumed to have dangerous constructors or methods.</span>
+        <span class="c">//</span>
+        <span class="c">// Do not add types to this pool unless they can be safely exposed to an attacker and will not</span>
+        <span class="c">// expose the ability to corrupt or escape PowerShell&#39;s environment. The following operations must</span>
+        <span class="c">// be safe: type conversion, all constructors, all methods (instance and static), and</span>
+        <span class="c">// and properties (instance and static).</span>
+        <b>internal static readonly</b> <span class="i">Lazy</span>&lt;<span class="i">Dictionary</span>&lt;<span class="i">Type</span>, <b>string</b>[]&gt;&gt; <a id="92c29da5cf226eff" href="../../R/92c29da5cf226eff.html" target="n" data-glyph="44,1" class="i field">Items</a> = <b>new</b> <span class="i">Lazy</span>&lt;<span class="i">Dictionary</span>&lt;<span class="i">Type</span>, <b>string</b>[]&gt;&gt;(
+            () =&gt;
+                <b>new</b> <span class="i">Dictionary</span>&lt;<span class="i">Type</span>, <b>string</b>[]&gt;
+                {
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#0fd790dcae0b5382" class="t t">AliasAttribute</a>),                              <b>new</b>[] { <span class="s">&quot;Alias&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#2f3b6df5412d8c54" class="t t">AllowEmptyCollectionAttribute</a>),               <b>new</b>[] { <span class="s">&quot;AllowEmptyCollection&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#4ddba8f39c29ef4b" class="t t">AllowEmptyStringAttribute</a>),                   <b>new</b>[] { <span class="s">&quot;AllowEmptyString&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#14ce8e5cc36e9b3e" class="t t">AllowNullAttribute</a>),                          <b>new</b>[] { <span class="s">&quot;AllowNull&quot;</span> } },
+                    { <b>typeof</b>(<a href="../CommandCompletion/ExtensibleCompletion.cs.html#164bbe7828ad5f99" class="t t">ArgumentCompleterAttribute</a>),                  <b>new</b>[] { <span class="s">&quot;ArgumentCompleter&quot;</span> } },
+                    { <b>typeof</b>(<a href="../CommandCompletion/ExtensibleCompletion.cs.html#a72296adbadc7feb" class="t t">ArgumentCompletionsAttribute</a>),                <b>new</b>[] { <span class="s">&quot;ArgumentCompletions&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">Array</span>),                                       <b>new</b>[] { <span class="s">&quot;array&quot;</span> } },
+                    { <b>typeof</b>(<b>bool</b>),                                        <b>new</b>[] { <span class="s">&quot;bool&quot;</span> } },
+                    { <b>typeof</b>(<b>byte</b>),                                        <b>new</b>[] { <span class="s">&quot;byte&quot;</span> } },
+                    { <b>typeof</b>(<b>char</b>),                                        <b>new</b>[] { <span class="s">&quot;char&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#67a775c242618ea6" class="t t">CmdletBindingAttribute</a>),                      <b>new</b>[] { <span class="s">&quot;CmdletBinding&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">DateTime</span>),                                    <b>new</b>[] { <span class="s">&quot;datetime&quot;</span> } },
+                    { <b>typeof</b>(<b>decimal</b>),                                     <b>new</b>[] { <span class="s">&quot;decimal&quot;</span> } },
+                    { <b>typeof</b>(<b>double</b>),                                      <b>new</b>[] { <span class="s">&quot;double&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#07160ce4e78c3181" class="t t">DscResourceAttribute</a>),                        <b>new</b>[] { <span class="s">&quot;DscResource&quot;</span> } },
+                    { <b>typeof</b>(<a href="../ExperimentalFeature/ExperimentalFeature.cs.html#7c48b7b0fa5fcf50" class="t t">ExperimentAction</a>),                            <b>new</b>[] { <span class="s">&quot;ExperimentAction&quot;</span> } },
+                    { <b>typeof</b>(<a href="../ExperimentalFeature/ExperimentalFeature.cs.html#a9ee2c313b8e7ce8" class="t t">ExperimentalAttribute</a>),                       <b>new</b>[] { <span class="s">&quot;Experimental&quot;</span> } },
+                    { <b>typeof</b>(<a href="../ExperimentalFeature/ExperimentalFeature.cs.html#6626da1ebcb2b206" class="t t">ExperimentalFeature</a>),                         <b>new</b>[] { <span class="s">&quot;ExperimentalFeature&quot;</span> } },
+                    { <b>typeof</b>(<b>float</b>),                                       <b>new</b>[] { <span class="s">&quot;float&quot;</span>, <span class="s">&quot;single&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">Guid</span>),                                        <b>new</b>[] { <span class="s">&quot;guid&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">Hashtable</span>),                                   <b>new</b>[] { <span class="s">&quot;hashtable&quot;</span> } },
+                    { <b>typeof</b>(<b>int</b>),                                         <b>new</b>[] { <span class="s">&quot;int&quot;</span>, <span class="s">&quot;int32&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">Int16</span>),                                       <b>new</b>[] { <span class="s">&quot;short&quot;</span>, <span class="s">&quot;int16&quot;</span> } },
+                    { <b>typeof</b>(<b>long</b>),                                        <b>new</b>[] { <span class="s">&quot;long&quot;</span>, <span class="s">&quot;int64&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">CimInstance</span>),                                 <b>new</b>[] { <span class="s">&quot;ciminstance&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">CimClass</span>),                                    <b>new</b>[] { <span class="s">&quot;cimclass&quot;</span> } },
+                    { <b>typeof</b>(<span class="i n">Microsoft</span>.<span class="i">Management</span>.<span class="i">Infrastructure</span>.<span class="i">CimType</span>), <b>new</b>[] { <span class="s">&quot;cimtype&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">CimConverter</span>),                                <b>new</b>[] { <span class="s">&quot;cimconverter&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Modules/ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>),                         <b>null</b> },
+                    { <b>typeof</b>(<span class="i">IPEndPoint</span>),                                  <b>new</b>[] { <span class="s">&quot;IPEndpoint&quot;</span> } },
+                    { <b>typeof</b>(<a href="../NullString.cs.html#6505e7ba37d945c1" class="t t">NullString</a>),                                  <b>new</b>[] { <span class="s">&quot;NullString&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#c50a02cd2178a292" class="t t">OutputTypeAttribute</a>),                         <b>new</b>[] { <span class="s">&quot;OutputType&quot;</span> } },
+                    { <b>typeof</b>(<b>object</b>[]),                                    <b>null</b> },
+                    { <b>typeof</b>(<span class="i">ObjectSecurity</span>),                              <b>new</b>[] { <span class="s">&quot;ObjectSecurity&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#3d5ed915c8442ad6" class="t t">ParameterAttribute</a>),                          <b>new</b>[] { <span class="s">&quot;Parameter&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">PhysicalAddress</span>),                             <b>new</b>[] { <span class="s">&quot;PhysicalAddress&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Credential.cs.html#6245dc122e2f1916" class="t t">PSCredential</a>),                                <b>new</b>[] { <span class="s">&quot;pscredential&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#51f4199e10618d1f" class="t t">PSDefaultValueAttribute</a>),                     <b>new</b>[] { <span class="s">&quot;PSDefaultValue&quot;</span> } },
+                    { <b>typeof</b>(<a href="../hostifaces/ListModifier.cs.html#c1e57da97dcae456" class="t t">PSListModifier</a>),                              <b>new</b>[] { <span class="s">&quot;pslistmodifier&quot;</span> } },
+                    { <b>typeof</b>(<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>),                                    <b>new</b>[] { <span class="s">&quot;psobject&quot;</span>, <span class="s">&quot;pscustomobject&quot;</span> } },
+                    { <b>typeof</b>(<a href="../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a>),                       <b>new</b>[] { <span class="s">&quot;psprimitivedictionary&quot;</span> } },
+                    { <b>typeof</b>(<a href="../MshReference.cs.html#7363a2660b89f253" class="t t">PSReference</a>),                                 <b>new</b>[] { <span class="s">&quot;ref&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#bfd81d7e698be9e1" class="t t">PSTypeNameAttribute</a>),                         <b>new</b>[] { <span class="s">&quot;PSTypeNameAttribute&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">Regex</span>),                                       <b>new</b>[] { <span class="s">&quot;regex&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#4f12f4e96778ea95" class="t t">DscPropertyAttribute</a>),                        <b>new</b>[] { <span class="s">&quot;DscProperty&quot;</span> } },
+                    { <b>typeof</b>(<b>sbyte</b>),                                       <b>new</b>[] { <span class="s">&quot;sbyte&quot;</span> } },
+                    { <b>typeof</b>(<b>string</b>),                                      <b>new</b>[] { <span class="s">&quot;string&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#8f2bf5dfa8370d96" class="t t">SupportsWildcardsAttribute</a>),                  <b>new</b>[] { <span class="s">&quot;SupportsWildcards&quot;</span> } },
+                    { <b>typeof</b>(<a href="../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a>),                             <b>new</b>[] { <span class="s">&quot;switch&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">CultureInfo</span>),                                 <b>new</b>[] { <span class="s">&quot;cultureinfo&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">BigInteger</span>),                                  <b>new</b>[] { <span class="s">&quot;bigint&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">SecureString</span>),                                <b>new</b>[] { <span class="s">&quot;securestring&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">TimeSpan</span>),                                    <b>new</b>[] { <span class="s">&quot;timespan&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">UInt16</span>),                                      <b>new</b>[] { <span class="s">&quot;ushort&quot;</span>, <span class="s">&quot;uint16&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">UInt32</span>),                                      <b>new</b>[] { <span class="s">&quot;uint&quot;</span>, <span class="s">&quot;uint32&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">UInt64</span>),                                      <b>new</b>[] { <span class="s">&quot;ulong&quot;</span>, <span class="s">&quot;uint64&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">Uri</span>),                                         <b>new</b>[] { <span class="s">&quot;uri&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#69d196403a4d103c" class="t t">ValidateCountAttribute</a>),                      <b>new</b>[] { <span class="s">&quot;ValidateCount&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#1a430f978701e790" class="t t">ValidateDriveAttribute</a>),                      <b>new</b>[] { <span class="s">&quot;ValidateDrive&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#0840b3256ccc8f77" class="t t">ValidateLengthAttribute</a>),                     <b>new</b>[] { <span class="s">&quot;ValidateLength&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#30630ef4e72decfd" class="t t">ValidateNotNullAttribute</a>),                    <b>new</b>[] { <span class="s">&quot;ValidateNotNull&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#6046c0828ea7bcf9" class="t t">ValidateNotNullOrEmptyAttribute</a>),             <b>new</b>[] { <span class="s">&quot;ValidateNotNullOrEmpty&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#03062544c856ad82" class="t t">ValidatePatternAttribute</a>),                    <b>new</b>[] { <span class="s">&quot;ValidatePattern&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#6495dd85010f3443" class="t t">ValidateRangeAttribute</a>),                      <b>new</b>[] { <span class="s">&quot;ValidateRange&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#99ceaba676cd521e" class="t t">ValidateScriptAttribute</a>),                     <b>new</b>[] { <span class="s">&quot;ValidateScript&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#33a6a027748d30a4" class="t t">ValidateSetAttribute</a>),                        <b>new</b>[] { <span class="s">&quot;ValidateSet&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#88ebceceda03b4eb" class="t t">ValidateTrustedDataAttribute</a>),                <b>new</b>[] { <span class="s">&quot;ValidateTrustedData&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#edf5d09c0929bdbe" class="t t">ValidateUserDriveAttribute</a>),                  <b>new</b>[] { <span class="s">&quot;ValidateUserDrive&quot;</span>} },
+                    { <b>typeof</b>(<span class="i">Version</span>),                                     <b>new</b>[] { <span class="s">&quot;version&quot;</span> } },
+                    { <b>typeof</b>(<b>void</b>),                                        <b>new</b>[] { <span class="s">&quot;void&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">IPAddress</span>),                                   <b>new</b>[] { <span class="s">&quot;ipaddress&quot;</span> } },
+                    { <b>typeof</b>(<a href="../Attributes.cs.html#94fe11f1e2480ea1" class="t t">DscLocalConfigurationManagerAttribute</a>),       <b>new</b>[] {<span class="s">&quot;DscLocalConfigurationManager&quot;</span>}},
+                    { <b>typeof</b>(<a href="../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a>),                             <b>new</b>[] { <span class="s">&quot;WildcardPattern&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">X509Certificate</span>),                             <b>new</b>[] { <span class="s">&quot;X509Certificate&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">X500DistinguishedName</span>),                       <b>new</b>[] { <span class="s">&quot;X500DistinguishedName&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">XmlDocument</span>),                                 <b>new</b>[] { <span class="s">&quot;xml&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">CimSession</span>),                                  <b>new</b>[] { <span class="s">&quot;CimSession&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">MailAddress</span>),                                 <b>new</b>[] { <span class="s">&quot;mailaddress&quot;</span> } },
+                    { <b>typeof</b>(<a href="../PSVersionInfo.cs.html#a57a3e81874a26c3" class="t t">SemanticVersion</a>),                             <b>new</b>[] { <span class="s">&quot;semver&quot;</span> } },
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+                    { <b>typeof</b>(<span class="i">DirectoryEntry</span>),                              <b>new</b>[] { <span class="s">&quot;adsi&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">DirectorySearcher</span>),                           <b>new</b>[] { <span class="s">&quot;adsisearcher&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">ManagementClass</span>),                             <b>new</b>[] { <span class="s">&quot;wmiclass&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">ManagementObject</span>),                            <b>new</b>[] { <span class="s">&quot;wmi&quot;</span> } },
+                    { <b>typeof</b>(<span class="i">ManagementObjectSearcher</span>),                    <b>new</b>[] { <span class="s">&quot;wmisearcher&quot;</span> } }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                }
+            );
+ 
+        <b>internal static bool</b> <a id="d10504c799ad8de9" href="../../R/d10504c799ad8de9.html" target="n" data-glyph="74,1" class="i method">Contains</a>(<span class="i">Type</span> <span id="r96 rd" class="r96 r">inputType</span>)
+        {
+            <b>if</b> (<a href="#92c29da5cf226eff" class="i field">Items</a>.<span class="i">Value</span>.<span class="i">ContainsKey</span>(<span class="r96 r">inputType</span>))
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r96 r">inputType</span>.<span class="i">IsEnum</span>)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r96 r">inputType</span>.<span class="i">IsGenericType</span>)
+            {
+                <b>var</b> <span id="r97 rd" class="r97 r">genericTypeDefinition</span> = <span class="r96 r">inputType</span>.<span class="i">GetGenericTypeDefinition</span>();
+                <b>return</b> <span class="r97 r">genericTypeDefinition</span> == <b>typeof</b>(<span class="i">Nullable</span>&lt;&gt;) || <span class="r97 r">genericTypeDefinition</span> == <b>typeof</b>(<a href="../EnumExpressionEvaluator.cs.html#596ee50bb25acc45" class="t t">FlagsExpression</a>&lt;&gt;);
+            }
+ 
+            <b>return</b> (<span class="r96 r">inputType</span>.<span class="i">IsArray</span> &amp;&amp; <span class="i">Contains</span>(<span class="r96 r">inputType</span>.<span class="i">GetElementType</span>()));
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A class to view and modify the type accelerators used by the PowerShell engine.  Builtin</span>
+    <span class="c">///</span><span class="c"> type accelerators are read only, but user defined type accelerators may be added.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal static class</b> <a id="c299defb2b5f7804" href="../../R/c299defb2b5f7804.html" target="n" data-glyph="2,0" class="t t">TypeAccelerators</a>
+    {
+        <span class="c">// builtins are not exposed publicly in a direct manner so they can&#39;t be changed at all</span>
+        <b>internal static readonly</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <a id="38876ce446a25d57" href="../../R/38876ce446a25d57.html" target="n" data-glyph="44,1" class="i field">builtinTypeAccelerators</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt;(64, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+        <span class="c">// users can add to user added accelerators (but not currently remove any.)  Keeping a separate</span>
+        <span class="c">// list allows us to add removing in the future w/o worrying about breaking the builtins.</span>
+        <b>internal static readonly</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <a id="b7ec1fc0eedf1a67" href="../../R/b7ec1fc0eedf1a67.html" target="n" data-glyph="44,1" class="i field">userTypeAccelerators</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt;(64, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+        <span class="c">// We expose this one publicly for programmatic access to our type accelerator table, but it is</span>
+        <span class="c">// otherwise unused (so changes to this dictionary don&#39;t affect internals.)</span>
+        <b>private static</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <a id="dd973315e61a4905" href="../../R/dd973315e61a4905.html" target="n" data-glyph="46,1" class="i field">s_allTypeAccelerators</a>;
+ 
+        <b>static</b> <a id="9ead8bf51bd823dc" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t method">TypeAccelerators</a>()
+        {
+            <span class="c">// Add all the core types</span>
+            <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<span class="i">Type</span>, <b>string</b>[]&gt; <span id="r98 rd" class="r98 r">coreType</span> <b>in</b> <a href="#5741cea1a14d9f96" class="t t">CoreTypes</a>.<a href="#92c29da5cf226eff" class="i field">Items</a>.<span class="i">Value</span>)
+            {
+                <b>if</b> (<span class="r98 r">coreType</span>.<span class="i">Value</span> != <b>null</b>)
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r99 rd" class="r99 r">accelerator</span> <b>in</b> <span class="r98 r">coreType</span>.<span class="i">Value</span>)
+                    {
+                        <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="r99 r">accelerator</span>, <span class="r98 r">coreType</span>.<span class="i">Key</span>);
+                    }
+                }
+            }
+ 
+            <span class="c">// Add additional utility types that are useful as type accelerators, but aren&#39;t</span>
+            <span class="c">// fundamentally &quot;core language&quot;, or may be unsafe to expose to untrusted input.</span>
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;scriptblock&quot;</span>, <b>typeof</b>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;pspropertyexpression&quot;</span>, <b>typeof</b>(<a href="../../FormatAndOutput/common/Utilities/Mshexpression.cs.html#52be71f6c3a4a3d9" class="t t">PSPropertyExpression</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psvariable&quot;</span>, <b>typeof</b>(<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;type&quot;</span>, <b>typeof</b>(<span class="i">Type</span>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psmoduleinfo&quot;</span>, <b>typeof</b>(<a href="../Modules/PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;powershell&quot;</span>, <b>typeof</b>(<a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;runspacefactory&quot;</span>, <b>typeof</b>(<a href="../hostifaces/ConnectionFactory.cs.html#c5fbe142e4e21218" class="t t">RunspaceFactory</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;runspace&quot;</span>, <b>typeof</b>(<a href="../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;initialsessionstate&quot;</span>, <b>typeof</b>(<a href="../InitialSessionState.cs.html#b17f88d4755d5fd7" class="t t">InitialSessionState</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psscriptmethod&quot;</span>, <b>typeof</b>(<a href="../MshMemberInfo.cs.html#2332c149036fdcf2" class="t t">PSScriptMethod</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psscriptproperty&quot;</span>, <b>typeof</b>(<a href="../MshMemberInfo.cs.html#b68884f0eb8d8ebb" class="t t">PSScriptProperty</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psnoteproperty&quot;</span>, <b>typeof</b>(<a href="../MshMemberInfo.cs.html#964f2480da01a02c" class="t t">PSNoteProperty</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psaliasproperty&quot;</span>, <b>typeof</b>(<a href="../MshMemberInfo.cs.html#3a8a82efa05da144" class="t t">PSAliasProperty</a>));
+            <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">Add</span>(<span class="s">&quot;psvariableproperty&quot;</span>, <b>typeof</b>(<a href="../MshMemberInfo.cs.html#e8b0e82a2d777090" class="t t">PSVariableProperty</a>));
+        }
+ 
+        <b>internal static string</b> <a id="31a99ea7bcdbafd6" href="../../R/31a99ea7bcdbafd6.html" target="n" data-glyph="74,1" class="i method">FindBuiltinAccelerator</a>(<span class="i">Type</span> <span id="r100 rd" class="r100 r">type</span>, <b>string</b> <span id="r101 rd" class="r101 r">expectedKey</span> = <b>null</b>)
+        {
+            <span class="c">// Taking attributes as special case. In this case, we only want to return the</span>
+            <span class="c">// accelerator.</span>
+            <b>if</b> (<span class="r101 r">expectedKey</span> == <b>null</b> || <b>typeof</b>(<span class="i">Attribute</span>).<span class="i">IsAssignableFrom</span>(<span class="r100 r">type</span>))
+            {
+                <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <span id="r102 rd" class="r102 r">entry</span> <b>in</b> <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>)
+                {
+                    <b>if</b> (<span class="r102 r">entry</span>.<span class="i">Value</span> == <span class="r100 r">type</span>)
+                    {
+                        <b>return</b> <span class="r102 r">entry</span>.<span class="i">Key</span>;
+                    }
+                }
+            }
+            <b>else</b>
+            {
+                <span class="i">Type</span> <span id="r103 rd" class="r103 r">resultType</span> = <b>null</b>;
+                <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>.<span class="i">TryGetValue</span>(<span class="r101 r">expectedKey</span>, <b>out</b> <span class="r103 r">resultType</span>);
+                <b>if</b> (<span class="r103 r">resultType</span> != <b>null</b> &amp;&amp; <span class="r103 r">resultType</span> == <span class="r100 r">type</span>)
+                {
+                    <b>return</b> <span class="r101 r">expectedKey</span>;
+                }
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a type accelerator.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r104 r">typeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The type accelerator name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r105 r">type</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The type of the type accelerator.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="b23aa71e6e26f770" href="../../R/b23aa71e6e26f770.html" target="n" data-glyph="72,1" class="i method">Add</a>(<b>string</b> <span id="r104 rd" class="r104 r">typeName</span>, <span class="i">Type</span> <span id="r105 rd" class="r105 r">type</span>)
+        {
+            <a href="#b7ec1fc0eedf1a67" class="i field">userTypeAccelerators</a>[<span class="r104 r">typeName</span>] = <span class="r105 r">type</span>;
+            <b>if</b> (<a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a> != <b>null</b>)
+            {
+                <a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a>[<span class="r104 r">typeName</span>] = <span class="r105 r">type</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Remove a type accelerator.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if the accelerator was removed, false otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r106 r">typeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The accelerator to remove.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static bool</b> <a id="a3fbe86a60bad653" href="../../R/a3fbe86a60bad653.html" target="n" data-glyph="72,1" class="i method">Remove</a>(<b>string</b> <span id="r106 rd" class="r106 r">typeName</span>)
+        {
+            <a href="#b7ec1fc0eedf1a67" class="i field">userTypeAccelerators</a>.<span class="i">Remove</span>(<span class="r106 r">typeName</span>);
+            <b>if</b> (<a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a> != <b>null</b>)
+            {
+                <a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a>.<span class="i">Remove</span>(<span class="r106 r">typeName</span>);
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property is useful to tools that need to know what</span>
+        <span class="c">///</span><span class="c"> type accelerators are available (e.g. to allow for autocompletion.)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The returned dictionary should be treated as read only.  Changes made</span>
+        <span class="c">///</span><span class="c"> to the dictionary will not affect PowerShell scripts in any way.  Use</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#c299defb2b5f7804" class="t t">TypeAccelerators</a>.<a href="#b23aa71e6e26f770" class="i method">Add</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> and</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#c299defb2b5f7804" class="t t">TypeAccelerators</a>.<a href="#a3fbe86a60bad653" class="i method">Remove</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> to</span>
+        <span class="c">///</span><span class="c"> affect the type resolution in PowerShell scripts.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public static</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <a id="da69e644635c6f39" href="../../R/da69e644635c6f39.html" target="n" data-glyph="102,1" class="i property">Get</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a> == <b>null</b>)
+                {
+                    <a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                    <a href="#4968bffa4a60c0a5" class="i method">FillCache</a>(<a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a>);
+                }
+ 
+                <b>return</b> <a href="#dd973315e61a4905" class="i field">s_allTypeAccelerators</a>;
+            }
+        }
+ 
+        <b>internal static void</b> <a id="4968bffa4a60c0a5" href="../../R/4968bffa4a60c0a5.html" target="n" data-glyph="74,1" class="i method">FillCache</a>(<span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <span id="r107 rd" class="r107 r">cache</span>)
+        {
+            <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <span id="r108 rd" class="r108 r">val</span> <b>in</b> <a href="#38876ce446a25d57" class="i field">builtinTypeAccelerators</a>)
+            {
+                <span class="r107 r">cache</span>.<span class="i">Add</span>(<span class="r108 r">val</span>.<span class="i">Key</span>, <span class="r108 r">val</span>.<span class="i">Value</span>);
+            }
+ 
+            <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <span class="i">Type</span>&gt; <span id="r109 rd" class="r109 r">val</span> <b>in</b> <a href="#b7ec1fc0eedf1a67" class="i field">userTypeAccelerators</a>)
+            {
+                <span class="r107 r">cache</span>.<span class="i">Add</span>(<span class="r109 r">val</span>.<span class="i">Key</span>, <span class="r109 r">val</span>.<span class="i">Value</span>);
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

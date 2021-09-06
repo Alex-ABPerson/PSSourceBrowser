@@ -1,0 +1,235 @@
+﻿<!DOCTYPE html>
+<html><head><title>ConsoleHostUserInterfaceProgress.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(226);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost/host/msh/ConsoleHostUserInterfaceProgress.cs" target="_top">host\msh\ConsoleHostUserInterfaceProgress.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost" target="_top">src\Microsoft.PowerShell.ConsoleHost\Microsoft.PowerShell.ConsoleHost.csproj</a> (Microsoft.PowerShell.ConsoleHost)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i">Diagnostics</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <b>internal</b> <a href="../../P/b737197b2d219638.html" target="s" class="k">partial</a>
+    <b>class</b> <a id="b737197b2d219638" href="../../R/b737197b2d219638.html" target="n" data-glyph="2,0" class="t t">ConsoleHostUserInterface</a> : <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>.<a href="/System.Management.Automation/A.html#3fd0cd9d58631820" class="t t">PSHostUserInterface</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called at the end of a prompt loop to take down any progress display that might have appeared and purge any</span>
+        <span class="c">///</span><span class="c"> outstanding progress activity state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal
+        void</b>
+        <a id="fc935a2340899864" href="../../R/fc935a2340899864.html" target="n" data-glyph="74,1" class="i method">ResetProgress</a>()
+        {
+            <span class="c">// destroy the data structures representing outstanding progress records</span>
+            <span class="c">// take down and destroy the progress display</span>
+ 
+            <span class="c">// If we have multiple runspaces on the host then any finished pipeline in any runspace will lead to call &#39;ResetProgress&#39;</span>
+            <span class="c">// so we need the lock</span>
+            <b>lock</b> (<a href="ConsoleHostUserInterface.cs.html#dbd28972ee208717" class="i field">_instanceLock</a>)
+            {
+                <b>if</b> (<a href="#1629460c7b23efbd" class="i field">_progPaneUpdateTimer</a> != <b>null</b>)
+                {
+                    <span class="c">// Stop update a progress pane and destroy timer</span>
+                    <a href="#1629460c7b23efbd" class="i field">_progPaneUpdateTimer</a>.<span class="i">Dispose</span>();
+                    <a href="#1629460c7b23efbd" class="i field">_progPaneUpdateTimer</a> = <b>null</b>;
+                }
+                <span class="c">// We don&#39;t set &#39;progPaneUpdateFlag = 0&#39; here, because:</span>
+                <span class="c">// 1. According to MSDN, the timer callback can occur after the Dispose() method has been called.</span>
+                <span class="c">//    So we cannot guarantee the flag is truly set to 0.</span>
+                <span class="c">// 2. When creating a new timer in &#39;HandleIncomingProgressRecord&#39;, we will set the flag to 1 anyway</span>
+ 
+                <b>if</b> (<a href="#136657319be7783b" class="i field">_progPane</a> != <b>null</b>)
+                {
+                    <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#0f27d6d516f9fe53" class="i field">_pendingProgress</a> != <b>null</b>, <span class="s">&quot;How can you have a progress pane and no backing data structure?&quot;</span>);
+ 
+                    <a href="#136657319be7783b" class="i field">_progPane</a>.<a href="ProgressPane.cs.html#84f5bb5cdb2adc75" class="i method">Hide</a>();
+                    <a href="#136657319be7783b" class="i field">_progPane</a> = <b>null</b>;
+                }
+ 
+                <a href="#0f27d6d516f9fe53" class="i field">_pendingProgress</a> = <b>null</b>;
+ 
+                <b>if</b> (<a href="ConsoleHostUserInterface.cs.html#5db1812edea1b244" class="i property">SupportsVirtualTerminal</a> &amp;&amp; <a href="/System.Management.Automation/A.html#340d221c8aa09678" class="t t">PSStyle</a>.<a href="/System.Management.Automation/A.html#f7875006d0bc55f1" class="i property">Instance</a>.<a href="/System.Management.Automation/A.html#c2a3cad5bce5e8e3" class="i property">Progress</a>.<a href="/System.Management.Automation/A.html#ccec22dfbb4faca6" class="i property">UseOSCIndicator</a>)
+                {
+                    <span class="c">// OSC sequence to turn off progress indicator</span>
+                    <span class="c">// https://github.com/microsoft/terminal/issues/6700</span>
+                    <span class="i">Console</span>.<span class="i">Write</span>(<span class="s">&quot;\x1b]9;4;0\x1b\\&quot;</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Invoked by ConsoleHostUserInterface.WriteProgress to update the set of outstanding activities for which</span>
+        <span class="c">///</span><span class="c"> ProgressRecords have been received.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private
+        void</b>
+        <a id="dbd57b9daaa12369" href="../../R/dbd57b9daaa12369.html" target="n" data-glyph="76,1" class="i method">HandleIncomingProgressRecord</a>(<b>long</b> <span id="r0 rd" class="r0 r">sourceId</span>, <a href="/System.Management.Automation/A.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r1 rd" class="r1 r">record</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r1 r">record</span> != <b>null</b>, <span class="s">&quot;record should not be null&quot;</span>);
+ 
+            <b>if</b> (<a href="#0f27d6d516f9fe53" class="i field">_pendingProgress</a> == <b>null</b>)
+            {
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#136657319be7783b" class="i field">_progPane</a> == <b>null</b>, <span class="s">&quot;If there is no data struct, there shouldn&#39;t be a pane, either.&quot;</span>);
+ 
+                <a href="#0f27d6d516f9fe53" class="i field">_pendingProgress</a> = <b>new</b> <span class="t">PendingProgress</span>();
+            }
+ 
+            <a href="#0f27d6d516f9fe53" class="i field">_pendingProgress</a>.<a href="PendingProgress.cs.html#adc5d4b35308e718" class="i method">Update</a>(<span class="r0 r">sourceId</span>, <span class="r1 r">record</span>);
+ 
+            <b>if</b> (<a href="#136657319be7783b" class="i field">_progPane</a> == <b>null</b>)
+            {
+                <span class="c">// This is the first time we&#39;ve received a progress record</span>
+                <span class="c">// Create a progress pane</span>
+                <span class="c">// Set up a update flag</span>
+                <span class="c">// Create a timer for updating the flag</span>
+ 
+                <a href="#136657319be7783b" class="i field">_progPane</a> = <b>new</b> <a href="ProgressPane.cs.html#bc3bceb45d5fac0c" class="t constructor">ProgressPane</a>(<a href="../../P/b737197b2d219638.html#b737197b2d219638" class="k">this</a>);
+ 
+                <b>if</b> (<a href="#1629460c7b23efbd" class="i field">_progPaneUpdateTimer</a> == <b>null</b>)
+                {
+                    <span class="c">// Show a progress pane at the first time we&#39;ve received a progress record</span>
+                    <a href="#6a743d3cb11073b2" class="i field">progPaneUpdateFlag</a> = 1;
+ 
+                    <span class="c">// The timer will be auto restarted every &#39;UpdateTimerThreshold&#39; ms</span>
+                    <a href="#1629460c7b23efbd" class="i field">_progPaneUpdateTimer</a> = <b>new</b> <span class="i">Timer</span>(<b>new</b> <span class="i">TimerCallback</span>(<span class="i">ProgressPaneUpdateTimerElapsed</span>), <b>null</b>, <a href="#1537c3d023d8befd" class="i field">UpdateTimerThreshold</a>, <a href="#1537c3d023d8befd" class="i field">UpdateTimerThreshold</a>);
+                }
+            }
+ 
+            <b>if</b> (<span class="i">Interlocked</span>.<span class="i">CompareExchange</span>(<b>ref</b> <a href="#6a743d3cb11073b2" class="i field">progPaneUpdateFlag</a>, 0, 1) == 1 || <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#b83bd20609cddaf5" class="i property">RecordType</a> == <a href="/System.Management.Automation/A.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="/System.Management.Automation/A.html#be29e101fe03f5d0" class="i field">Completed</a>)
+            {
+                <span class="c">// Update the progress pane only when the timer set up the update flag or WriteProgress is completed.</span>
+                <span class="c">// As a result, we do not block WriteProgress and whole script and eliminate unnecessary console locks and updates.</span>
+                <b>if</b> (<a href="ConsoleHostUserInterface.cs.html#5db1812edea1b244" class="i property">SupportsVirtualTerminal</a> &amp;&amp; <a href="/System.Management.Automation/A.html#340d221c8aa09678" class="t t">PSStyle</a>.<a href="/System.Management.Automation/A.html#f7875006d0bc55f1" class="i property">Instance</a>.<a href="/System.Management.Automation/A.html#c2a3cad5bce5e8e3" class="i property">Progress</a>.<a href="/System.Management.Automation/A.html#ccec22dfbb4faca6" class="i property">UseOSCIndicator</a>)
+                {
+                    <b>int</b> <span id="r2 rd" class="r2 r">percentComplete</span> = <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#7c559492a0012510" class="i property">PercentComplete</a>;
+                    <b>if</b> (<span class="r2 r">percentComplete</span> &lt; 0)
+                    {
+                        <span class="c">// Write-Progress allows for negative percent complete, but not greater than 100</span>
+                        <span class="c">// but OSC sequence is limited from 0 to 100.</span>
+                        <span class="r2 r">percentComplete</span> = 0;
+                    }
+ 
+                    <span class="c">// OSC sequence to turn on progress indicator</span>
+                    <span class="c">// https://github.com/microsoft/terminal/issues/6700</span>
+                    <span class="i">Console</span>.<span class="i">Write</span>(<span class="s">$&quot;</span><span class="s">\x1b]9;4;1;</span>{<span class="r2 r">percentComplete</span>}<span class="s">\x1b\\</span><span class="s">&quot;</span>);
+                }
+ 
+                <span class="c">// If VT is not supported, we change ProgressView to classic</span>
+                <b>if</b> (!<a href="ConsoleHostUserInterface.cs.html#5db1812edea1b244" class="i property">SupportsVirtualTerminal</a>)
+                {
+                    <a href="/System.Management.Automation/A.html#340d221c8aa09678" class="t t">PSStyle</a>.<a href="/System.Management.Automation/A.html#f7875006d0bc55f1" class="i property">Instance</a>.<a href="/System.Management.Automation/A.html#c2a3cad5bce5e8e3" class="i property">Progress</a>.<span class="i">View</span> = <a href="/System.Management.Automation/A.html#7a61b08f2e68222d" class="t t">ProgressView</a>.<a href="/System.Management.Automation/A.html#3c0f5bb4efe62db7" class="i field">Classic</a>;
+                }
+ 
+                <a href="#136657319be7783b" class="i field">_progPane</a>.<a href="ProgressPane.cs.html#3138850a983ef8e6" class="i method">Show</a>(<a href="#0f27d6d516f9fe53" class="i field">_pendingProgress</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> TimerCallback for &#39;_progPaneUpdateTimer&#39; to update &#39;progPaneUpdateFlag&#39;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private
+        void</b>
+        <a id="282b2ff38a647970" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ProgressPaneUpdateTimerElapsed</a>(<b>object</b> <span id="r3 rd" class="r3 r">sender</span>)
+        {
+            <span class="i">Interlocked</span>.<span class="i">CompareExchange</span>(<b>ref</b> <a href="#6a743d3cb11073b2" class="i field">progPaneUpdateFlag</a>, 1, 0);
+        }
+ 
+        <b>private
+        void</b>
+        <a id="ef6e7c8608be1f7c" href="../../R/ef6e7c8608be1f7c.html" target="n" data-glyph="76,1" class="i method">PreWrite</a>()
+        {
+            <b>if</b> (<a href="#136657319be7783b" class="i field">_progPane</a> != <b>null</b>)
+            {
+                <a href="#136657319be7783b" class="i field">_progPane</a>.<a href="ProgressPane.cs.html#84f5bb5cdb2adc75" class="i method">Hide</a>();
+            }
+        }
+ 
+        <b>private
+        void</b>
+        <a id="c2d7efd21bf0d131" href="../../R/c2d7efd21bf0d131.html" target="n" data-glyph="76,1" class="i method">PostWrite</a>()
+        {
+            <b>if</b> (<a href="#136657319be7783b" class="i field">_progPane</a> != <b>null</b>)
+            {
+                <a href="#136657319be7783b" class="i field">_progPane</a>.<a href="ProgressPane.cs.html#fb2b60721bd62ccf" class="i method">Show</a>();
+            }
+        }
+ 
+        <b>private
+        void</b>
+        <a id="637e35a2519542eb" href="../../R/637e35a2519542eb.html" target="n" data-glyph="76,1" class="i method">PostWrite</a>(<span class="i">ReadOnlySpan</span>&lt;<b>char</b>&gt; <span id="r4 rd" class="r4 r">value</span>, <b>bool</b> <span id="r5 rd" class="r5 r">newLine</span>)
+        {
+            <a href="#c2d7efd21bf0d131" class="i method">PostWrite</a>();
+ 
+            <b>if</b> (<a href="ConsoleHostUserInterface.cs.html#84b0fd621e4256ef" class="i field">_parent</a>.<a href="ConsoleHostTranscript.cs.html#ec2c25c02b262216" class="i property">IsTranscribing</a>)
+            {
+                <b>try</b>
+                {
+                    <a href="ConsoleHostUserInterface.cs.html#84b0fd621e4256ef" class="i field">_parent</a>.<a href="ConsoleHostTranscript.cs.html#34ad5e4f6690b6f6" class="i method">WriteToTranscript</a>(<span class="r4 r">value</span>, <span class="r5 r">newLine</span>);
+                }
+                <b>catch</b> (<span class="i">Exception</span>)
+                {
+                    <a href="ConsoleHostUserInterface.cs.html#84b0fd621e4256ef" class="i field">_parent</a>.<a href="ConsoleHostTranscript.cs.html#ec2c25c02b262216" class="i property">IsTranscribing</a> = <b>false</b>;
+                }
+            }
+        }
+ 
+        <b>private
+        void</b>
+        <a id="adebfa50cfd2a343" href="../../R/adebfa50cfd2a343.html" target="n" data-glyph="76,1" class="i method">PreRead</a>()
+        {
+            <b>if</b> (<a href="#136657319be7783b" class="i field">_progPane</a> != <b>null</b>)
+            {
+                <a href="#136657319be7783b" class="i field">_progPane</a>.<a href="ProgressPane.cs.html#84f5bb5cdb2adc75" class="i method">Hide</a>();
+            }
+        }
+ 
+        <b>private
+        void</b>
+        <a id="8d36648d91a58297" href="../../R/8d36648d91a58297.html" target="n" data-glyph="76,1" class="i method">PostRead</a>()
+        {
+            <b>if</b> (<a href="#136657319be7783b" class="i field">_progPane</a> != <b>null</b>)
+            {
+                <a href="#136657319be7783b" class="i field">_progPane</a>.<a href="ProgressPane.cs.html#fb2b60721bd62ccf" class="i method">Show</a>();
+            }
+        }
+ 
+        <b>private
+        void</b>
+        <a id="5cd8d560e20c0a54" href="../../R/5cd8d560e20c0a54.html" target="n" data-glyph="76,1" class="i method">PostRead</a>(<b>string</b> <span id="r6 rd" class="r6 r">value</span>)
+        {
+            <a href="#8d36648d91a58297" class="i method">PostRead</a>();
+ 
+            <b>if</b> (<a href="ConsoleHostUserInterface.cs.html#84b0fd621e4256ef" class="i field">_parent</a>.<a href="ConsoleHostTranscript.cs.html#ec2c25c02b262216" class="i property">IsTranscribing</a>)
+            {
+                <b>try</b>
+                {
+                    <span class="c">// Reads always terminate with the enter key, so add that.</span>
+                    <a href="ConsoleHostUserInterface.cs.html#84b0fd621e4256ef" class="i field">_parent</a>.<span class="i">WriteLineToTranscript</span>(<span class="r6 r">value</span>);
+                }
+                <b>catch</b> (<span class="i">Exception</span>)
+                {
+                    <a href="ConsoleHostUserInterface.cs.html#84b0fd621e4256ef" class="i field">_parent</a>.<a href="ConsoleHostTranscript.cs.html#ec2c25c02b262216" class="i property">IsTranscribing</a> = <b>false</b>;
+                }
+            }
+        }
+ 
+        <b>private</b> <a href="ProgressPane.cs.html#d35bdae3323ed052" class="t t">ProgressPane</a> <a id="136657319be7783b" href="../../R/136657319be7783b.html" target="n" data-glyph="46,1" class="i field">_progPane</a> = <b>null</b>;
+        <b>private</b> <a href="PendingProgress.cs.html#2992a33bbb5effa6" class="t t">PendingProgress</a> <a id="0f27d6d516f9fe53" href="../../R/0f27d6d516f9fe53.html" target="n" data-glyph="46,1" class="i field">_pendingProgress</a> = <b>null</b>;
+        <span class="c">// The timer set up &#39;progPaneUpdateFlag&#39; every &#39;UpdateTimerThreshold&#39; milliseconds to update &#39;ProgressPane&#39;</span>
+        <b>private</b> <span class="i">Timer</span> <a id="1629460c7b23efbd" href="../../R/1629460c7b23efbd.html" target="n" data-glyph="46,1" class="i field">_progPaneUpdateTimer</a> = <b>null</b>;
+ 
+        <b>private const int</b> <a id="1537c3d023d8befd" href="../../R/1537c3d023d8befd.html" target="n" data-glyph="10,1" class="i field">UpdateTimerThreshold</a> = 200;
+ 
+        <b>private int</b> <a id="6a743d3cb11073b2" href="../../R/6a743d3cb11073b2.html" target="n" data-glyph="46,1" class="i field">progPaneUpdateFlag</a> = 0;
+    }
+}   <span class="c">// namespace</span>
+</pre></td></tr></table></div></body></html>

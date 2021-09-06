@@ -1,0 +1,931 @@
+﻿<!DOCTYPE html>
+<html><head><title>PriorityCollection.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(922);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/fanin/PriorityCollection.cs" target="_top">engine\remoting\fanin\PriorityCollection.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal enum</b> <a id="f0975201467fdc06" href="../../../R/f0975201467fdc06.html" target="n" data-glyph="20,0" class="t t"><span id="4ac29a506e5264da">DataPriorityType</span></a> : <b>int</b>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This indicate that the data will be sent without priority consideration.</span>
+        <span class="c">///</span><span class="c"> Large data objects will be fragmented so that each fragmented piece can</span>
+        <span class="c">///</span><span class="c"> fit into one message.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="e5092d1f4fa1babe" href="../../../R/e5092d1f4fa1babe.html" target="n" data-glyph="24,1" class="i field">Default</a> = 0,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PromptResponse may be sent with or without priority considerations.</span>
+        <span class="c">///</span><span class="c"> Large data objects will be fragmented so that each fragmented piece can</span>
+        <span class="c">///</span><span class="c"> fit into one message.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="ef28607d20d8e243" href="../../../R/ef28607d20d8e243.html" target="n" data-glyph="24,1" class="i field">PromptResponse</a> = 1,
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> Sending Data
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> DataStructure used by different remoting protocol /</span>
+    <span class="c">///</span><span class="c"> DataStructures to pass data to transport manager.</span>
+    <span class="c">///</span><span class="c"> This class holds the responsibility of fragmenting.</span>
+    <span class="c">///</span><span class="c"> This allows to fragment an object only once and</span>
+    <span class="c">///</span><span class="c"> send the fragments to various machines thus saving</span>
+    <span class="c">///</span><span class="c"> fragmentation time.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="0fa204cb5092e738" href="../../../R/0fa204cb5092e738.html" target="n" data-glyph="2,0" class="t t">PrioritySendDataCollection</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <span class="c">// actual data store(s) to store priority based data and its</span>
+        <span class="c">// corresponding sync objects to provide thread safety.</span>
+        <b>private</b> <a href="../common/fragmentor.cs.html#d3a26c96b56add5c" class="t t">SerializedDataStream</a>[] <a id="5109b294891dd4c4" href="../../../R/5109b294891dd4c4.html" target="n" data-glyph="46,1" class="i field">_dataToBeSent</a>;
+        <span class="c">// array of sync objects, one for each element in _dataToBeSent</span>
+        <b>private object</b>[] <a id="ccae1264c6e0f5b5" href="../../../R/ccae1264c6e0f5b5.html" target="n" data-glyph="46,1" class="i field">_dataSyncObjects</a>;
+ 
+        <span class="c">// fragmentor used to serialize &amp; fragment objects added to this collection.</span>
+        <b>private</b> <a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <a id="ccc43e47f51b5972" href="../../../R/ccc43e47f51b5972.html" target="n" data-glyph="46,1" class="i field">_fragmentor</a>;
+ 
+        <span class="c">// callbacks used if no data is available at any time.</span>
+        <span class="c">// these callbacks are used to notify when data becomes available under</span>
+        <span class="c">// suc circumstances.</span>
+        <b>private</b> <a href="#81c7391587f527f6" class="t t">OnDataAvailableCallback</a> <a id="ca31693c82eacdf4" href="../../../R/ca31693c82eacdf4.html" target="n" data-glyph="46,1" class="i field">_onDataAvailableCallback</a>;
+        <b>private readonly</b> <a href="../common/fragmentor.cs.html#d3a26c96b56add5c" class="t t">SerializedDataStream</a>.<a href="../common/fragmentor.cs.html#6931116887ce476a" class="t t">OnDataAvailableCallback</a> <a id="c60f1c64e9d6abb8" href="../../../R/c60f1c64e9d6abb8.html" target="n" data-glyph="46,1" class="i field">_onSendCollectionDataAvailable</a>;
+        <b>private bool</b> <a id="a46ddff461a4ece0" href="../../../R/a46ddff461a4ece0.html" target="n" data-glyph="46,1" class="i field">_isHandlingCallback</a>;
+        <b>private readonly object</b> <a id="436cc6cb990627a1" href="../../../R/436cc6cb990627a1.html" target="n" data-glyph="46,1" class="i field">_readSyncObject</a> = <b>new</b> <b>object</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback that is called once a fragmented data is available to send.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Fragmented object that can be sent to the remote end.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">priorityType</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Priority stream to which </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">data</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> belongs to.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal delegate void</b> <a id="81c7391587f527f6" href="../../../R/81c7391587f527f6.html" target="n" data-glyph="14,1" class="t t"><span id="ec04ad256637913d">OnDataAvailableCallback</span></a>(<b>byte</b>[] <span id="r0 rd" class="r0 r">data</span>, <a href="#f0975201467fdc06" class="t t">DataPriorityType</a> <span id="r1 rd" class="r1 r">priorityType</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructs a PrioritySendDataCollection object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="4ed2b1f3350fac04" href="../../../R/4ed2b1f3350fac04.html" target="n" data-glyph="74,1" class="t constructor">PrioritySendDataCollection</a>()
+        {
+            <a href="#c60f1c64e9d6abb8" class="i field">_onSendCollectionDataAvailable</a> = <b>new</b> <a href="../common/fragmentor.cs.html#d3a26c96b56add5c" class="t t">SerializedDataStream</a>.<span class="t">OnDataAvailableCallback</span>(<a href="#3f6d4cde4f771013" class="i method">OnDataAvailable</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal Methods / Properties
+ 
+        <b>internal</b> <a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <a id="84bdedfd536de402" href="../../../R/84bdedfd536de402.html" target="n" data-glyph="104,1" class="i property">Fragmentor</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#ccc43e47f51b5972" class="i field">_fragmentor</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>value</b> != <b>null</b>, <span class="s">&quot;Fragmentor cannot be null.&quot;</span>);
+                <a href="#ccc43e47f51b5972" class="i field">_fragmentor</a> = <b>value</b>;
+                <span class="c">// create serialized streams using fragment size.</span>
+                <b>string</b>[] <span id="r2 rd" class="r2 r">names</span> = <span class="i">Enum</span>.<span class="i">GetNames</span>(<b>typeof</b>(<a href="#f0975201467fdc06" class="t t">DataPriorityType</a>));
+                <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a> = <b>new</b> <a href="../common/fragmentor.cs.html#d3a26c96b56add5c" class="t t">SerializedDataStream</a>[<span class="r2 r">names</span>.<span class="i">Length</span>];
+                <a href="#ccae1264c6e0f5b5" class="i field">_dataSyncObjects</a> = <b>new</b> <b>object</b>[<span class="r2 r">names</span>.<span class="i">Length</span>];
+                <b>for</b> (<b>int</b> <span id="r3 rd" class="r3 r">i</span> = 0; <span class="r3 r">i</span> &lt; <span class="r2 r">names</span>.<span class="i">Length</span>; <span class="r3 r">i</span>++)
+                {
+                    <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r3 r">i</span>] = <b>new</b> <a href="../common/fragmentor.cs.html#b2d30b3f6669ee79" class="t constructor">SerializedDataStream</a>(<a href="#ccc43e47f51b5972" class="i field">_fragmentor</a>.<a href="../common/fragmentor.cs.html#a4fa6a799e0782de" class="i property">FragmentSize</a>);
+                    <a href="#ccae1264c6e0f5b5" class="i field">_dataSyncObjects</a>[<span class="r3 r">i</span>] = <b>new</b> <b>object</b>();
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Adds data to this collection. The data is fragmented in this method</span>
+        <span class="c">///</span><span class="c"> before being stored into the collection. So the calling thread</span>
+        <span class="c">///</span><span class="c"> will get affected, if it tries to add a huge object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> data to be added to the collection. Caller should make sure this is not</span>
+        <span class="c">///</span><span class="c"> null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">priority</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Priority of the data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="442d0537a5958ee8" href="../../../R/442d0537a5958ee8.html" target="n" data-glyph="74,1" class="i method">Add</a>&lt;<span id="r4 rd t" class="r4 r t">T</span>&gt;(<a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<span class="r4 r t">T</span>&gt; <span id="r5 rd" class="r5 r">data</span>, <a href="#f0975201467fdc06" class="t t">DataPriorityType</a> <span id="r6 rd" class="r6 r">priority</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r5 r">data</span> != <b>null</b>, <span class="s">&quot;Cannot send null data object&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#ccc43e47f51b5972" class="i field">_fragmentor</a> != <b>null</b>, <span class="s">&quot;Fragmentor cannot be null while adding objects&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a> != <b>null</b>, <span class="s">&quot;Serialized streams are not initialized&quot;</span>);
+ 
+            <span class="c">// make sure the only one object is fragmented and added to the collection</span>
+            <span class="c">// at any give time. This way the order of fragment is maintained</span>
+            <span class="c">// in the SendDataCollection(s).</span>
+            <b>lock</b> (<a href="#ccae1264c6e0f5b5" class="i field">_dataSyncObjects</a>[(<b>int</b>)<span class="r6 r">priority</span>])
+            {
+                <a href="#ccc43e47f51b5972" class="i field">_fragmentor</a>.<a href="../common/fragmentor.cs.html#a97b5918de0a99cf" class="i method">Fragment</a>&lt;<span class="r4 r t">T</span>&gt;(<span class="r5 r">data</span>, <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[(<b>int</b>)<span class="r6 r">priority</span>]);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Adds data to this collection. The data is fragmented in this method</span>
+        <span class="c">///</span><span class="c"> before being stored into the collection. So the calling thread</span>
+        <span class="c">///</span><span class="c"> will get affected, if it tries to add a huge object.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> The data is added with Default priority.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> data to be added to the collection. Caller should make sure this is not</span>
+        <span class="c">///</span><span class="c"> null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="82212f989f1c53a3" href="../../../R/82212f989f1c53a3.html" target="n" data-glyph="74,1" class="i method">Add</a>&lt;<span id="r7 rd t" class="r7 r t">T</span>&gt;(<a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<span class="r7 r t">T</span>&gt; <span id="r8 rd" class="r8 r">data</span>)
+        {
+            <a href="#442d0537a5958ee8" class="i method">Add</a>&lt;<span class="r7 r t">T</span>&gt;(<span class="r8 r">data</span>, <a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#e5092d1f4fa1babe" class="i field">Default</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clears fragmented objects stored so far in this collection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="112a4d4532ecf193" href="../../../R/112a4d4532ecf193.html" target="n" data-glyph="74,1" class="i method">Clear</a>()
+        {
+            <span class="c">/*
+                NOTE: Error paths during initialization can cause _dataSyncObjects to be null
+                causing an unhandled exception in finalize and a process crash.
+                Verify arrays and dataToBeSent objects before referencing.
+            */</span>
+            <b>if</b> (<a href="#ccae1264c6e0f5b5" class="i field">_dataSyncObjects</a> != <b>null</b> &amp;&amp; <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a> != <b>null</b>)
+            {
+                <b>const int</b> <span id="r9 rd" class="r9 r">promptResponseIndex</span> = (<b>int</b>)<a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#ef28607d20d8e243" class="i field">PromptResponse</a>;
+                <b>const int</b> <span id="r10 rd" class="r10 r">defaultIndex</span> = (<b>int</b>)<a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#e5092d1f4fa1babe" class="i field">Default</a>;
+ 
+                <b>lock</b> (<a href="#ccae1264c6e0f5b5" class="i field">_dataSyncObjects</a>[<span class="r9 r">promptResponseIndex</span>])
+                {
+                    <b>if</b> (<a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r9 r">promptResponseIndex</span>] != <b>null</b>)
+                    {
+                        <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r9 r">promptResponseIndex</span>].<a href="../common/fragmentor.cs.html#a30a841d301fa560" class="i method">Dispose</a>();
+                        <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r9 r">promptResponseIndex</span>] = <b>null</b>;
+                    }
+                }
+ 
+                <b>lock</b> (<a href="#ccae1264c6e0f5b5" class="i field">_dataSyncObjects</a>[<span class="r10 r">defaultIndex</span>])
+                {
+                    <b>if</b> (<a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r10 r">defaultIndex</span>] != <b>null</b>)
+                    {
+                        <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r10 r">defaultIndex</span>].<a href="../common/fragmentor.cs.html#a30a841d301fa560" class="i method">Dispose</a>();
+                        <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[<span class="r10 r">defaultIndex</span>] = <b>null</b>;
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the fragment or if no fragment is available registers the callback which</span>
+        <span class="c">///</span><span class="c"> gets called once a fragment is available. These 2 steps are performed in a</span>
+        <span class="c">///</span><span class="c"> synchronized way.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> While getting a fragment the following algorithm is used:</span>
+        <span class="c">///</span><span class="c"> 1. If this is the first time or if the last fragment read is an EndFragment,</span>
+        <span class="c">///</span><span class="c">    then a new set of fragments is chosen based on the implicit priority.</span>
+        <span class="c">///</span><span class="c">    PromptResponse is higher in priority order than default.</span>
+        <span class="c">///</span><span class="c"> 2. If last fragment read is not an EndFragment, then next fragment is chosen from</span>
+        <span class="c">///</span><span class="c">    the priority collection as the last fragment. This will ensure fragments</span>
+        <span class="c">///</span><span class="c">    are sent in order.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">callback</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback to call once data is available. (This will be used if no data is currently</span>
+        <span class="c">///</span><span class="c"> available).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">priorityType</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Priority stream to which the returned object belongs to, if any.</span>
+        <span class="c">///</span><span class="c"> If the call does not return any data, the value of this &quot;out&quot; parameter</span>
+        <span class="c">///</span><span class="c"> is undefined.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A FragmentRemoteObject if available, otherwise null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal byte</b>[] <a id="56fbcab0ffda9766" href="../../../R/56fbcab0ffda9766.html" target="n" data-glyph="74,1" class="i method">ReadOrRegisterCallback</a>(<a href="#81c7391587f527f6" class="t t">OnDataAvailableCallback</a> <span id="r11 rd" class="r11 r">callback</span>,
+            <b>out</b> <a href="#f0975201467fdc06" class="t t">DataPriorityType</a> <span id="r12 rd" class="r12 r">priorityType</span>)
+        {
+            <b>lock</b> (<a href="#436cc6cb990627a1" class="i field">_readSyncObject</a>)
+            {
+                <span class="r12 r">priorityType</span> = <a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#e5092d1f4fa1babe" class="i field">Default</a>;
+ 
+                <span class="c">// send data from which ever stream that has data directly.</span>
+                <b>byte</b>[] <span id="r13 rd" class="r13 r">result</span> = <b>null</b>;
+                <span class="r13 r">result</span> = <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[(<b>int</b>)<a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#ef28607d20d8e243" class="i field">PromptResponse</a>].<a href="../common/fragmentor.cs.html#0020501682242305" class="i method">ReadOrRegisterCallback</a>(<a href="#c60f1c64e9d6abb8" class="i field">_onSendCollectionDataAvailable</a>);
+                <span class="r12 r">priorityType</span> = <a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#ef28607d20d8e243" class="i field">PromptResponse</a>;
+ 
+                <b>if</b> (<span class="r13 r">result</span> == <b>null</b>)
+                {
+                    <span class="r13 r">result</span> = <a href="#5109b294891dd4c4" class="i field">_dataToBeSent</a>[(<b>int</b>)<a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#e5092d1f4fa1babe" class="i field">Default</a>].<a href="../common/fragmentor.cs.html#0020501682242305" class="i method">ReadOrRegisterCallback</a>(<a href="#c60f1c64e9d6abb8" class="i field">_onSendCollectionDataAvailable</a>);
+                    <span class="r12 r">priorityType</span> = <a href="#f0975201467fdc06" class="t t">DataPriorityType</a>.<a href="#e5092d1f4fa1babe" class="i field">Default</a>;
+                }
+                <span class="c">// no data to return..so register the callback.</span>
+                <b>if</b> (<span class="r13 r">result</span> == <b>null</b>)
+                {
+                    <span class="c">// register callback.</span>
+                    <a href="#ca31693c82eacdf4" class="i field">_onDataAvailableCallback</a> = <span class="r11 r">callback</span>;
+                }
+ 
+                <b>return</b> <span class="r13 r">result</span>;
+            }
+        }
+ 
+        <b>private void</b> <a id="3f6d4cde4f771013" href="../../../R/3f6d4cde4f771013.html" target="n" data-glyph="76,1" class="i method">OnDataAvailable</a>(<b>byte</b>[] <span id="r14 rd" class="r14 r">data</span>, <b>bool</b> <span id="r15 rd" class="r15 r">isEndFragment</span>)
+        {
+            <b>lock</b> (<a href="#436cc6cb990627a1" class="i field">_readSyncObject</a>)
+            {
+                <span class="c">// PromptResponse and Default priority collection can both raise at the</span>
+                <span class="c">// same time. This will take care of the situation.</span>
+                <b>if</b> (<a href="#a46ddff461a4ece0" class="i field">_isHandlingCallback</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <a href="#a46ddff461a4ece0" class="i field">_isHandlingCallback</a> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<a href="#ca31693c82eacdf4" class="i field">_onDataAvailableCallback</a> != <b>null</b>)
+            {
+                <a href="#f0975201467fdc06" class="t t">DataPriorityType</a> <span id="r16 rd" class="r16 r">prType</span>;
+                <span class="c">// now get the fragment and call the callback..</span>
+                <b>byte</b>[] <span id="r17 rd" class="r17 r">result</span> = <a href="#56fbcab0ffda9766" class="i method">ReadOrRegisterCallback</a>(<a href="#ca31693c82eacdf4" class="i field">_onDataAvailableCallback</a>, <b>out</b> <span class="r16 r">prType</span>);
+ 
+                <b>if</b> (<span class="r17 r">result</span> != <b>null</b>)
+                {
+                    <span class="c">// reset the onDataAvailableCallback so that we dont notify</span>
+                    <span class="c">// multiple times. we are resetting before actually calling</span>
+                    <span class="c">// the callback to make sure the caller calls ReadOrRegisterCallback</span>
+                    <span class="c">// at a later point and we dont loose the callback handle.</span>
+                    <a href="#81c7391587f527f6" class="t t">OnDataAvailableCallback</a> <span id="r18 rd" class="r18 r">realCallback</span> = <a href="#ca31693c82eacdf4" class="i field">_onDataAvailableCallback</a>;
+                    <a href="#ca31693c82eacdf4" class="i field">_onDataAvailableCallback</a> = <b>null</b>;
+                    <span class="r18 r">realCallback</span>(<span class="r17 r">result</span>, <span class="r16 r">prType</span>);
+                }
+            }
+ 
+            <a href="#a46ddff461a4ece0" class="i field">_isHandlingCallback</a> = <b>false</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> Receiving Data
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> DataStructure used by remoting transport layer to store</span>
+    <span class="c">///</span><span class="c"> data being received from the wire for a particular priority</span>
+    <span class="c">///</span><span class="c"> stream.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="b0dbabe933b81a2b" href="../../../R/b0dbabe933b81a2b.html" target="n" data-glyph="2,0" class="t t">ReceiveDataCollection</a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> tracer
+ 
+        [<span class="i">TraceSourceAttribute</span>(<span class="s">&quot;Transport&quot;</span>, <span class="s">&quot;Traces BaseWSManTransportManager&quot;</span>)]
+        <b>private static readonly</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="d412e09e44908606" href="../../../R/d412e09e44908606.html" target="n" data-glyph="46,1" class="i field">s_baseTracer</a> = <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#697b06ec70e3c537" class="i method">GetTracer</a>(<span class="s">&quot;Transport&quot;</span>, <span class="s">&quot;Traces BaseWSManTransportManager&quot;</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+        <span class="c">// fragmentor used to defragment objects added to this collection.</span>
+        <b>private readonly</b> <a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <a id="92b85bb35e109a2c" href="../../../R/92b85bb35e109a2c.html" target="n" data-glyph="46,1" class="i field">_defragmentor</a>;
+ 
+        <span class="c">// this stream holds incoming data..this stream doesn&#39;t know anything</span>
+        <span class="c">// about fragment boundaries.</span>
+        <b>private</b> <span class="i">MemoryStream</span> <a id="45c2726554e24dae" href="../../../R/45c2726554e24dae.html" target="n" data-glyph="46,1" class="i field">_pendingDataStream</a>;
+        <span class="c">// the idea is to maintain 1 whole object.</span>
+        <span class="c">// 1 whole object may contain any number of fragments. blob from</span>
+        <span class="c">// each fragment is written to this stream.</span>
+        <b>private</b> <span class="i">MemoryStream</span> <a id="e33a5dd6037e5851" href="../../../R/e33a5dd6037e5851.html" target="n" data-glyph="46,1" class="i field">_dataToProcessStream</a>;
+        <b>private long</b> <a id="a8f4d6097a584568" href="../../../R/a8f4d6097a584568.html" target="n" data-glyph="46,1" class="i field">_currentObjectId</a>;
+        <b>private long</b> <a id="b5d2e2eec3e31963" href="../../../R/b5d2e2eec3e31963.html" target="n" data-glyph="46,1" class="i field">_currentFrgId</a>;
+        <span class="c">// max deserialized object size in bytes</span>
+        <b>private int</b>? <a id="773c18abf90b488d" href="../../../R/773c18abf90b488d.html" target="n" data-glyph="46,1" class="i field">_maxReceivedObjectSize</a>;
+        <b>private int</b> <a id="81f00860fa7484a1" href="../../../R/81f00860fa7484a1.html" target="n" data-glyph="46,1" class="i field">_totalReceivedObjectSizeSoFar</a>;
+        <b>private readonly bool</b> <a id="219d6a6903c53e48" href="../../../R/219d6a6903c53e48.html" target="n" data-glyph="46,1" class="i field">_isCreateByClientTM</a>;
+ 
+        <span class="c">// this indicates if any off sync fragments can be ignored</span>
+        <span class="c">// this gets reset (to false) upon receiving the next &quot;start&quot; fragment along the stream</span>
+        <b>private bool</b> <a id="a368dfdd923066c0" href="../../../R/a368dfdd923066c0.html" target="n" data-glyph="46,1" class="i field">_canIgnoreOffSyncFragments</a> = <b>false</b>;
+ 
+        <span class="c">// objects need to cleanly release resources without</span>
+        <span class="c">// locking entire processing logic.</span>
+        <b>private readonly object</b> <a id="f55bb02fd4354cb9" href="../../../R/f55bb02fd4354cb9.html" target="n" data-glyph="46,1" class="i field">_syncObject</a>;
+        <b>private bool</b> <a id="10523a7efd8b0a76" href="../../../R/10523a7efd8b0a76.html" target="n" data-glyph="46,1" class="i field">_isDisposed</a>;
+        <span class="c">// holds the number of threads that are currently in</span>
+        <span class="c">// ProcessRawData method. This might happen only for</span>
+        <span class="c">// ServerCommandTransportManager case where the command</span>
+        <span class="c">// is run in the same thread that runs ProcessRawData (to avoid</span>
+        <span class="c">// thread context switch).</span>
+        <b>private int</b> <a id="a73b4cac85e9e5d1" href="../../../R/a73b4cac85e9e5d1.html" target="n" data-glyph="46,1" class="i field">_numberOfThreadsProcessing</a>;
+        <span class="c">// limits the numberOfThreadsProcessing variable.</span>
+        <b>private int</b> <a id="db13a68a40718326" href="../../../R/db13a68a40718326.html" target="n" data-glyph="46,1" class="i field">_maxNumberOfThreadsToAllowForProcessing</a> = 1;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Delegates
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback that is called once a deserialized object is available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Deserialized object that can be processed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal delegate void</b> <a id="f79a7d2e805594f6" href="../../../R/f79a7d2e805594f6.html" target="n" data-glyph="14,1" class="t t"><span id="afb32ca95c325435">OnDataAvailableCallback</span></a>(<a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r19 rd" class="r19 r">data</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">defragmentor</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Defragmentor used to deserialize an object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">createdByClientTM</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if a client transport manager created this collection.</span>
+        <span class="c">///</span><span class="c"> This is used to generate custom messages for server and client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="f0bdcaabd3e16696" href="../../../R/f0bdcaabd3e16696.html" target="n" data-glyph="74,1" class="t constructor">ReceiveDataCollection</a>(<a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <span id="r20 rd" class="r20 r">defragmentor</span>, <b>bool</b> <span id="r21 rd" class="r21 r">createdByClientTM</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r20 r">defragmentor</span> != <b>null</b>, <span class="s">&quot;ReceiveDataCollection needs a defragmentor to work with&quot;</span>);
+ 
+            <span class="c">// Memory streams created with an unsigned byte array provide a non-resizable stream view</span>
+            <span class="c">// of the data, and can only be written to. When using a byte array, you can neither append</span>
+            <span class="c">// to nor shrink the stream, although you might be able to modify the existing contents</span>
+            <span class="c">// depending on the parameters passed into the constructor. Empty memory streams are</span>
+            <span class="c">// resizable, and can be written to and read from.</span>
+            <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a> = <b>new</b> <span class="i">MemoryStream</span>();
+            <a href="#f55bb02fd4354cb9" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+            <a href="#92b85bb35e109a2c" class="i field">_defragmentor</a> = <span class="r20 r">defragmentor</span>;
+            <a href="#219d6a6903c53e48" class="i field">_isCreateByClientTM</a> = <span class="r21 r">createdByClientTM</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal Methods / Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Limits the deserialized object size received from a remote machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal int</b>? <a id="3cc14472443b7323" href="../../../R/3cc14472443b7323.html" target="n" data-glyph="104,1" class="i property">MaximumReceivedObjectSize</a>
+        {
+            <b>set</b> { <a href="#773c18abf90b488d" class="i field">_maxReceivedObjectSize</a> = <b>value</b>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This might be needed only for ServerCommandTransportManager case</span>
+        <span class="c">///</span><span class="c"> where the command is run in the same thread that runs ProcessRawData</span>
+        <span class="c">///</span><span class="c"> (to avoid thread context switch). By default this class supports</span>
+        <span class="c">///</span><span class="c"> only one thread in ProcessRawData.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="55d3cec122d0c302" href="../../../R/55d3cec122d0c302.html" target="n" data-glyph="74,1" class="i method">AllowTwoThreadsToProcessRawData</a>()
+        {
+            <a href="#db13a68a40718326" class="i field">_maxNumberOfThreadsToAllowForProcessing</a> = 2;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Prepares the collection for a stream connect</span>
+        <span class="c">///</span><span class="c">     When reconnecting from same client, its possible that fragment stream get interrupted if server is dropping data</span>
+        <span class="c">///</span><span class="c">     When connecting from a new client, its possible to get trailing fragments of a previously partially transmitted object</span>
+        <span class="c">///</span><span class="c">     Logic based on this flag, ensures such offsync/trailing fragments get ignored until the next full object starts flowing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="f313b6ecbe31e712" href="../../../R/f313b6ecbe31e712.html" target="n" data-glyph="74,1" class="i method">PrepareForStreamConnect</a>()
+        {
+            <a href="#a368dfdd923066c0" class="i field">_canIgnoreOffSyncFragments</a> = <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process data coming from the transport. This method analyses the data</span>
+        <span class="c">///</span><span class="c"> and if an object can be created, it creates one and calls the</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">callback</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> with the deserialized object. This method</span>
+        <span class="c">///</span><span class="c"> does not assume all fragments to be available. So if not enough fragments are</span>
+        <span class="c">///</span><span class="c"> available it will simply return..</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Data to process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">callback</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback to call once a complete deserialized object is available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Defragmented Object if any, otherwise null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> 1. Fragment Ids not in sequence</span>
+        <span class="c">///</span><span class="c"> 2. Object Ids does not match</span>
+        <span class="c">///</span><span class="c"> 3. The current deserialized object size of the received data exceeded</span>
+        <span class="c">///</span><span class="c"> allowed maximum object size. The current deserialized object size is {0}.</span>
+        <span class="c">///</span><span class="c"> Allowed maximum object size is {1}.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Might throw other exceptions as the deserialized object is handled here.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="b0c81957da7f1e5e" href="../../../R/b0c81957da7f1e5e.html" target="n" data-glyph="74,1" class="i method">ProcessRawData</a>(<b>byte</b>[] <span id="r23 rd" class="r23 r">data</span>, <a href="#f79a7d2e805594f6" class="t t">OnDataAvailableCallback</a> <span id="r22 rd" class="r22 r">callback</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r23 r">data</span> != <b>null</b>, <span class="s">&quot;Cannot process null data&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r22 r">callback</span> != <b>null</b>, <span class="s">&quot;Callback cannot be null&quot;</span>);
+ 
+            <b>lock</b> (<a href="#f55bb02fd4354cb9" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#10523a7efd8b0a76" class="i field">_isDisposed</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <a href="#a73b4cac85e9e5d1" class="i field">_numberOfThreadsProcessing</a>++;
+                <b>if</b> (<a href="#a73b4cac85e9e5d1" class="i field">_numberOfThreadsProcessing</a> &gt; <a href="#db13a68a40718326" class="i field">_maxNumberOfThreadsToAllowForProcessing</a>)
+                {
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;Multiple threads are not allowed in ProcessRawData.&quot;</span>);
+                }
+            }
+ 
+            <b>try</b>
+            {
+                <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Write</span>(<span class="r23 r">data</span>, 0, <span class="r23 r">data</span>.<span class="i">Length</span>);
+ 
+                <span class="c">// this do loop will process one deserialized object.</span>
+                <span class="c">// using a loop allows to process multiple objects within</span>
+                <span class="c">// the same packet</span>
+                <b>while</b> (<b>true</b>)
+                {
+                    <b>if</b> (<a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span> &lt;= <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>)
+                    {
+                        <span class="c">// there is not enough data to be processed.</span>
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Not enough data to process. Data is less than header length. Data length is {0}. Header Length {1}.&quot;</span>,
+                            <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span>, <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>);
+                        <b>return</b>;
+                    }
+ 
+                    <b>byte</b>[] <span id="r24 rd" class="r24 r">dataRead</span> = <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">ToArray</span>();
+ 
+                    <span class="c">// there is enough data to process here. get the fragment header</span>
+                    <b>long</b> <span id="r25 rd" class="r25 r">objectId</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#1c1b0abb4e58bbed" class="i method">GetObjectId</a>(<span class="r24 r">dataRead</span>, 0);
+                    <b>if</b> (<span class="r25 r">objectId</span> &lt;= 0)
+                    {
+                        <b>throw</b> <b>new</b> <span class="t">PSRemotingTransportException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ObjectIdCannotBeLessThanZero</span>);
+                    }
+ 
+                    <b>long</b> <span id="r26 rd" class="r26 r">fragmentId</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#5a6823c78b4710c8" class="i method">GetFragmentId</a>(<span class="r24 r">dataRead</span>, 0);
+                    <b>bool</b> <span id="r27 rd" class="r27 r">sFlag</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#7aac51626c016b38" class="i method">GetIsStartFragment</a>(<span class="r24 r">dataRead</span>, 0);
+                    <b>bool</b> <span id="r28 rd" class="r28 r">eFlag</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#068641096a25e033" class="i method">GetIsEndFragment</a>(<span class="r24 r">dataRead</span>, 0);
+                    <b>int</b> <span id="r29 rd" class="r29 r">blobLength</span> = <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#c7ce00586675b83e" class="i method">GetBlobLength</a>(<span class="r24 r">dataRead</span>, 0);
+ 
+                    <b>if</b> ((<a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#39a46fbab64bf75b" class="i property">Options</a> &amp; <a href="../../../utils/StructuredTraceSource.cs.html#8dccd9e1e9512b25" class="t t">PSTraceSourceOptions</a>.<a href="../../../utils/StructuredTraceSource.cs.html#d9418c516f830881" class="i field">WriteLine</a>) != <a href="../../../utils/StructuredTraceSource.cs.html#8dccd9e1e9512b25" class="t t">PSTraceSourceOptions</a>.<a href="../../../utils/StructuredTraceSource.cs.html#a1342943109aa29f" class="i field">None</a>)
+                    {
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#25fe29b46cfb1e10" class="i method">WriteLine</a>(<span class="s">&quot;Object Id: {0}&quot;</span>, <span class="r25 r">objectId</span>);
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#25fe29b46cfb1e10" class="i method">WriteLine</a>(<span class="s">&quot;Fragment Id: {0}&quot;</span>, <span class="r26 r">fragmentId</span>);
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#451d38bf8c2b6b94" class="i method">WriteLine</a>(<span class="s">&quot;Start Flag: {0}&quot;</span>, <span class="r27 r">sFlag</span>);
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#451d38bf8c2b6b94" class="i method">WriteLine</a>(<span class="s">&quot;End Flag: {0}&quot;</span>, <span class="r28 r">eFlag</span>);
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#70ee671c8687bfbd" class="i method">WriteLine</a>(<span class="s">&quot;Blob Length: {0}&quot;</span>, <span class="r29 r">blobLength</span>);
+                    }
+ 
+                    <b>int</b> <span id="r30 rd" class="r30 r">totalLengthOfFragment</span> = 0;
+ 
+                    <b>try</b>
+                    {
+                        <span class="r30 r">totalLengthOfFragment</span> = <b>checked</b>(<a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a> + <span class="r29 r">blobLength</span>);
+                    }
+                    <b>catch</b> (<span class="i n">System</span>.<span class="i">OverflowException</span>)
+                    {
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;Fragment too big.&quot;</span>);
+                        <a href="#828670a7d1494209" class="i method">ResetReceiveData</a>();
+                        <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r31 rd" class="r31 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ObjectIsTooBig</span>);
+                        <b>throw</b> <span class="r31 r">e</span>;
+                    }
+ 
+                    <b>if</b> (<a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span> &lt; <span class="r30 r">totalLengthOfFragment</span>)
+                    {
+                        <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Not enough data to process packet. Data is less than expected blob length. Data length {0}. Expected Length {1}.&quot;</span>,
+                            <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span>, <span class="r30 r">totalLengthOfFragment</span>);
+                        <b>return</b>;
+                    }
+ 
+                    <span class="c">// ensure object size limit is not reached</span>
+                    <b>if</b> (<a href="#773c18abf90b488d" class="i field">_maxReceivedObjectSize</a>.<span class="i">HasValue</span>)
+                    {
+                        <a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a> = <b>unchecked</b>(<a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a> + <span class="r30 r">totalLengthOfFragment</span>);
+                        <b>if</b> ((<a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a> &lt; 0) || (<a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a> &gt; <a href="#773c18abf90b488d" class="i field">_maxReceivedObjectSize</a>.<span class="i">Value</span>))
+                        {
+                            <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#49bf988885074437" class="i method">WriteLine</a>(<span class="s">&quot;ObjectSize &gt; MaxReceivedObjectSize. ObjectSize is {0}. MaxReceivedObjectSize is {1}&quot;</span>,
+                                <a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a>, <a href="#773c18abf90b488d" class="i field">_maxReceivedObjectSize</a>);
+                            <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r32 rd" class="r32 r">e</span> = <b>null</b>;
+ 
+                            <b>if</b> (<a href="#219d6a6903c53e48" class="i field">_isCreateByClientTM</a>)
+                            {
+                                <span class="r32 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#65cf562a5e012f82" class="i field">ReceivedObjectSizeExceededMaximumClient</a>,
+                                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">ReceivedObjectSizeExceededMaximumClient</span>,
+                                      <a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a>, <a href="#773c18abf90b488d" class="i field">_maxReceivedObjectSize</a>);
+                            }
+                            <b>else</b>
+                            {
+                                <span class="r32 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#e300efc91bd8db52" class="i field">ReceivedObjectSizeExceededMaximumServer</a>,
+                                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">ReceivedObjectSizeExceededMaximumServer</span>,
+                                      <a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a>, <a href="#773c18abf90b488d" class="i field">_maxReceivedObjectSize</a>);
+                            }
+ 
+                            <a href="#828670a7d1494209" class="i method">ResetReceiveData</a>();
+                            <b>throw</b> <span class="r32 r">e</span>;
+                        }
+                    }
+ 
+                    <span class="c">// appears like stream doesn&#39;t have individual position marker for read and write</span>
+                    <span class="c">// since we are going to read from now...</span>
+                    <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+ 
+                    <span class="c">// we have enough data to process..so read the data from the stream and process.</span>
+                    <b>byte</b>[] <span id="r33 rd" class="r33 r">oneFragment</span> = <b>new</b> <b>byte</b>[<span class="r30 r">totalLengthOfFragment</span>];
+                    <span class="c">// this will change position back to totalLengthOfFragment</span>
+                    <b>int</b> <span id="r34 rd" class="r34 r">dataCount</span> = <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Read</span>(<span class="r33 r">oneFragment</span>, 0, <span class="r30 r">totalLengthOfFragment</span>);
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r34 r">dataCount</span> == <span class="r30 r">totalLengthOfFragment</span>, <span class="s">&quot;Unable to read enough data from the stream. Read failed&quot;</span>);
+ 
+                    <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#a0ee30cd6d9e6a9c" class="i method">LogAnalyticVerbose</a>(
+                        <a href="../common/PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="../common/PSETWTracer.cs.html#991439afebcb55e6" class="i field">ReceivedRemotingFragment</a>, <a href="../common/PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="../common/PSETWTracer.cs.html#75e7cd53604b1352" class="i field">Receive</a>, <a href="../common/PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="../common/PSETWTracer.cs.html#c682d415f6327c59" class="i field">None</a>,
+                        <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#c5d4a73b62c859ab" class="i field">Transport</a> | <a href="../common/PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="../common/PSETWTracer.cs.html#a3de02676385c3a4" class="i field">UseAlwaysAnalytic</a>,
+                        (<span class="i">Int64</span>)<span class="r25 r">objectId</span>,
+                        (<span class="i">Int64</span>)<span class="r26 r">fragmentId</span>,
+                        <span class="r27 r">sFlag</span> ? 1 : 0,
+                        <span class="r28 r">eFlag</span> ? 1 : 0,
+                        (<span class="i">UInt32</span>)<span class="r29 r">blobLength</span>,
+                        <b>new</b> <a href="../common/PSETWTracer.cs.html#725e56f85a320fea" class="t constructor">PSETWBinaryBlob</a>(<span class="r33 r">oneFragment</span>, <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="r29 r">blobLength</span>));
+ 
+                    <b>byte</b>[] <span id="r35 rd" class="r35 r">extraData</span> = <b>null</b>;
+                    <b>if</b> (<span class="r30 r">totalLengthOfFragment</span> &lt; <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span>)
+                    {
+                        <span class="c">// there is more data in the stream than fragment size..so save that data</span>
+                        <span class="r35 r">extraData</span> = <b>new</b> <b>byte</b>[<a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span> - <span class="r30 r">totalLengthOfFragment</span>];
+                        <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Read</span>(<span class="r35 r">extraData</span>, 0, (<b>int</b>)(<a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Length</span> - <span class="r30 r">totalLengthOfFragment</span>));
+                    }
+ 
+                    <span class="c">// reset incoming stream.</span>
+                    <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Dispose</span>();
+                    <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a> = <b>new</b> <span class="i">MemoryStream</span>();
+                    <b>if</b> (<span class="r35 r">extraData</span> != <b>null</b>)
+                    {
+                        <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Write</span>(<span class="r35 r">extraData</span>, 0, <span class="r35 r">extraData</span>.<span class="i">Length</span>);
+                    }
+ 
+                    <b>if</b> (<span class="r27 r">sFlag</span>)
+                    {
+                        <a href="#a368dfdd923066c0" class="i field">_canIgnoreOffSyncFragments</a> = <b>false</b>; <span class="c">// reset this upon receiving a start fragment of a fresh object</span>
+                        <a href="#a8f4d6097a584568" class="i field">_currentObjectId</a> = <span class="r25 r">objectId</span>;
+                        <span class="c">// Memory streams created with an unsigned byte array provide a non-resizable stream view</span>
+                        <span class="c">// of the data, and can only be written to. When using a byte array, you can neither append</span>
+                        <span class="c">// to nor shrink the stream, although you might be able to modify the existing contents</span>
+                        <span class="c">// depending on the parameters passed into the constructor. Empty memory streams are</span>
+                        <span class="c">// resizable, and can be written to and read from.</span>
+                        <a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a> = <b>new</b> <span class="i">MemoryStream</span>();
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// check if the data belongs to the same object as the start fragment</span>
+                        <b>if</b> (<span class="r25 r">objectId</span> != <a href="#a8f4d6097a584568" class="i field">_currentObjectId</a>)
+                        {
+                            <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;ObjectId != CurrentObjectId&quot;</span>);
+                            <span class="c">// TODO - drop an ETW event</span>
+                            <a href="#828670a7d1494209" class="i method">ResetReceiveData</a>();
+                            <b>if</b> (!<a href="#a368dfdd923066c0" class="i field">_canIgnoreOffSyncFragments</a>)
+                            {
+                                <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r36 rd" class="r36 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ObjectIdsNotMatching</span>);
+                                <b>throw</b> <span class="r36 r">e</span>;
+                            }
+                            <b>else</b>
+                            {
+                                <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;Ignoring ObjectId != CurrentObjectId&quot;</span>);
+                                <b>continue</b>;
+                            }
+                        }
+ 
+                        <b>if</b> (<span class="r26 r">fragmentId</span> != (<a href="#b5d2e2eec3e31963" class="i field">_currentFrgId</a> + 1))
+                        {
+                            <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;Fragment Id is not in sequence.&quot;</span>);
+                            <span class="c">// TODO - drop an ETW event</span>
+                            <a href="#828670a7d1494209" class="i method">ResetReceiveData</a>();
+                            <b>if</b> (!<a href="#a368dfdd923066c0" class="i field">_canIgnoreOffSyncFragments</a>)
+                            {
+                                <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r37 rd" class="r37 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">FragmentIdsNotInSequence</span>);
+                                <b>throw</b> <span class="r37 r">e</span>;
+                            }
+                            <b>else</b>
+                            {
+                                <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;Ignoring Fragment Id is not in sequence.&quot;</span>);
+                                <b>continue</b>;
+                            }
+                        }
+                    }
+ 
+                    <span class="c">// make fragment id from this packet as the current fragment id</span>
+                    <a href="#b5d2e2eec3e31963" class="i field">_currentFrgId</a> = <span class="r26 r">fragmentId</span>;
+                    <span class="c">// store the blob in a separate stream</span>
+                    <a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a>.<span class="i">Write</span>(<span class="r33 r">oneFragment</span>, <a href="../common/fragmentor.cs.html#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="../common/fragmentor.cs.html#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="r29 r">blobLength</span>);
+ 
+                    <b>if</b> (<span class="r28 r">eFlag</span>)
+                    {
+                        <b>try</b>
+                        {
+                            <span class="c">// appears like stream doesn&#39;t individual position marker for read and write</span>
+                            <span class="c">// since we are going to read from now..i am resetting position to 0.</span>
+                            <a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+                            <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r38 rd" class="r38 r">remoteObject</span> = <a href="../common/WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;.<span class="i">CreateFrom</span>(<a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a>, <a href="#92b85bb35e109a2c" class="i field">_defragmentor</a>);
+                            <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Runspace Id: {0}&quot;</span>, <span class="r38 r">remoteObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#df5fe91d15e5ba71" class="i property">RunspacePoolId</a>);
+                            <a href="#d412e09e44908606" class="i field">s_baseTracer</a>.<span class="i">WriteLine</span>(<span class="s">&quot;PowerShell Id: {0}&quot;</span>, <span class="r38 r">remoteObject</span>.<a href="../common/WireDataFormat/RemotingDataObject.cs.html#767aea3474afdc8e" class="i property">PowerShellId</a>);
+                            <span class="c">// notify the caller that a deserialized object is available.</span>
+                            <span class="r22 r">callback</span>(<span class="r38 r">remoteObject</span>);
+                        }
+                        <b>finally</b>
+                        {
+                            <span class="c">// Reset the receive data buffers and start the process again.</span>
+                            <a href="#828670a7d1494209" class="i method">ResetReceiveData</a>();
+                        }
+ 
+                        <b>if</b> (<a href="#10523a7efd8b0a76" class="i field">_isDisposed</a>)
+                        {
+                            <b>break</b>;
+                        }
+                    }
+                }
+            }
+            <b>finally</b>
+            {
+                <b>lock</b> (<a href="#f55bb02fd4354cb9" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (<a href="#10523a7efd8b0a76" class="i field">_isDisposed</a> &amp;&amp; (<a href="#a73b4cac85e9e5d1" class="i field">_numberOfThreadsProcessing</a> == 1))
+                    {
+                        <a href="#94d77f5f1a4449ec" class="i method">ReleaseResources</a>();
+                    }
+ 
+                    <a href="#a73b4cac85e9e5d1" class="i field">_numberOfThreadsProcessing</a>--;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Resets the store(s) holding received data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="828670a7d1494209" href="../../../R/828670a7d1494209.html" target="n" data-glyph="76,1" class="i method">ResetReceiveData</a>()
+        {
+            <span class="c">// reset resources used to store incoming data (for a single object)</span>
+            <b>if</b> (<a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a> != <b>null</b>)
+            {
+                <a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a>.<span class="i">Dispose</span>();
+            }
+ 
+            <a href="#a8f4d6097a584568" class="i field">_currentObjectId</a> = 0;
+            <a href="#b5d2e2eec3e31963" class="i field">_currentFrgId</a> = 0;
+            <a href="#81f00860fa7484a1" class="i field">_totalReceivedObjectSizeSoFar</a> = 0;
+        }
+ 
+        <b>private void</b> <a id="94d77f5f1a4449ec" href="../../../R/94d77f5f1a4449ec.html" target="n" data-glyph="76,1" class="i method">ReleaseResources</a>()
+        {
+            <b>if</b> (<a href="#45c2726554e24dae" class="i field">_pendingDataStream</a> != <b>null</b>)
+            {
+                <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a>.<span class="i">Dispose</span>();
+                <a href="#45c2726554e24dae" class="i field">_pendingDataStream</a> = <b>null</b>;
+            }
+ 
+            <b>if</b> (<a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a> != <b>null</b>)
+            {
+                <a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a>.<span class="i">Dispose</span>();
+                <a href="#e33a5dd6037e5851" class="i field">_dataToProcessStream</a> = <b>null</b>;
+            }
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable implementation
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose and release resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="ec59889ae9b2604b" href="../../../R/ec59889ae9b2604b.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#607b23ba8e5d0b8b" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="c">// if already disposing..no need to let finalizer thread</span>
+            <span class="c">// put resources to clean this object.</span>
+            <span class="i n">System</span>.<span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#b0dbabe933b81a2b" class="k">this</a>);
+        }
+ 
+        <b>internal virtual void</b> <a id="607b23ba8e5d0b8b" href="../../../R/607b23ba8e5d0b8b.html" target="n" data-glyph="74,1" class="i method">Dispose</a>(<b>bool</b> <span id="r39 rd" class="r39 r">isDisposing</span>)
+        {
+            <b>lock</b> (<a href="#f55bb02fd4354cb9" class="i field">_syncObject</a>)
+            {
+                <a href="#10523a7efd8b0a76" class="i field">_isDisposed</a> = <b>true</b>;
+                <b>if</b> (<a href="#a73b4cac85e9e5d1" class="i field">_numberOfThreadsProcessing</a> == 0)
+                {
+                    <a href="#94d77f5f1a4449ec" class="i method">ReleaseResources</a>();
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> DataStructure used by different remoting protocol /</span>
+    <span class="c">///</span><span class="c"> DataStructures to receive data from transport manager.</span>
+    <span class="c">///</span><span class="c"> This class holds the responsibility of defragmenting and</span>
+    <span class="c">///</span><span class="c"> deserializing.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="7f75e2bc64d1da2e" href="../../../R/7f75e2bc64d1da2e.html" target="n" data-glyph="2,0" class="t t">PriorityReceiveDataCollection</a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private readonly</b> <a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <a id="e77a4e0ebf1c1e12" href="../../../R/e77a4e0ebf1c1e12.html" target="n" data-glyph="46,1" class="i field">_defragmentor</a>;
+        <b>private readonly</b> <a href="#b0dbabe933b81a2b" class="t t">ReceiveDataCollection</a>[] <a id="41a2fbf78fbd7e6c" href="../../../R/41a2fbf78fbd7e6c.html" target="n" data-glyph="46,1" class="i field">_recvdData</a>;
+        <b>private readonly bool</b> <a id="8088e55fcd03c8f0" href="../../../R/8088e55fcd03c8f0.html" target="n" data-glyph="46,1" class="i field">_isCreateByClientTM</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct a priority receive data collection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">defragmentor</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Defragmentor used to deserialize an object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">createdByClientTM</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if a client transport manager created this collection.</span>
+        <span class="c">///</span><span class="c"> This is used to generate custom messages for server and client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="f294666cc37366a7" href="../../../R/f294666cc37366a7.html" target="n" data-glyph="74,1" class="t constructor">PriorityReceiveDataCollection</a>(<a href="../common/fragmentor.cs.html#a24f4ee2533d5c38" class="t t">Fragmentor</a> <span id="r40 rd" class="r40 r">defragmentor</span>, <b>bool</b> <span id="r41 rd" class="r41 r">createdByClientTM</span>)
+        {
+            <a href="#e77a4e0ebf1c1e12" class="i field">_defragmentor</a> = <span class="r40 r">defragmentor</span>;
+            <b>string</b>[] <span id="r42 rd" class="r42 r">names</span> = <span class="i">Enum</span>.<span class="i">GetNames</span>(<b>typeof</b>(<a href="#f0975201467fdc06" class="t t">DataPriorityType</a>));
+            <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a> = <b>new</b> <a href="#b0dbabe933b81a2b" class="t t">ReceiveDataCollection</a>[<span class="r42 r">names</span>.<span class="i">Length</span>];
+            <b>for</b> (<b>int</b> <span id="r43 rd" class="r43 r">index</span> = 0; <span class="r43 r">index</span> &lt; <span class="r42 r">names</span>.<span class="i">Length</span>; <span class="r43 r">index</span>++)
+            {
+                <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>[<span class="r43 r">index</span>] = <b>new</b> <a href="#f0bdcaabd3e16696" class="t constructor">ReceiveDataCollection</a>(<span class="r40 r">defragmentor</span>, <span class="r41 r">createdByClientTM</span>);
+            }
+ 
+            <a href="#8088e55fcd03c8f0" class="i field">_isCreateByClientTM</a> = <span class="r41 r">createdByClientTM</span>;
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal Methods / Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Limits the total data received from a remote machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal int</b>? <a id="7a540327df6a2e2d" href="../../../R/7a540327df6a2e2d.html" target="n" data-glyph="104,1" class="i property">MaximumReceivedDataSize</a>
+        {
+            <b>set</b>
+            {
+                <a href="#e77a4e0ebf1c1e12" class="i field">_defragmentor</a>.<a href="../common/fragmentor.cs.html#713480b4ba325c66" class="i property">DeserializationContext</a>.<a href="../../serialization.cs.html#7f867777951adff9" class="i property">MaximumAllowedMemory</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Limits the deserialized object size received from a remote machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal int</b>? <a id="24de42a1b1c1d4b9" href="../../../R/24de42a1b1c1d4b9.html" target="n" data-glyph="104,1" class="i property">MaximumReceivedObjectSize</a>
+        {
+            <b>set</b>
+            {
+                <b>foreach</b> (<a href="#b0dbabe933b81a2b" class="t t">ReceiveDataCollection</a> <span id="r44 rd" class="r44 r">recvdDataBuffer</span> <b>in</b> <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>)
+                {
+                    <span class="r44 r">recvdDataBuffer</span>.<a href="#3cc14472443b7323" class="i property">MaximumReceivedObjectSize</a> = <b>value</b>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Prepares receive data streams for a reconnection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="a8845745894768de" href="../../../R/a8845745894768de.html" target="n" data-glyph="74,1" class="i method">PrepareForStreamConnect</a>()
+        {
+            <b>for</b> (<b>int</b> <span id="r45 rd" class="r45 r">index</span> = 0; <span class="r45 r">index</span> &lt; <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>.<span class="i">Length</span>; <span class="r45 r">index</span>++)
+            {
+                <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>[<span class="r45 r">index</span>].<a href="#f313b6ecbe31e712" class="i method">PrepareForStreamConnect</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This might be needed only for ServerCommandTransportManager case</span>
+        <span class="c">///</span><span class="c"> where the command is run in the same thread that runs ProcessRawData</span>
+        <span class="c">///</span><span class="c"> (to avoid thread context switch). By default this class supports</span>
+        <span class="c">///</span><span class="c"> only one thread in ProcessRawData.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="b8482b44fc8fc3a2" href="../../../R/b8482b44fc8fc3a2.html" target="n" data-glyph="74,1" class="i method">AllowTwoThreadsToProcessRawData</a>()
+        {
+            <b>for</b> (<b>int</b> <span id="r46 rd" class="r46 r">index</span> = 0; <span class="r46 r">index</span> &lt; <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>.<span class="i">Length</span>; <span class="r46 r">index</span>++)
+            {
+                <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>[<span class="r46 r">index</span>].<a href="#55d3cec122d0c302" class="i method">AllowTwoThreadsToProcessRawData</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process data coming from the transport. This method analyses the data</span>
+        <span class="c">///</span><span class="c"> and if an object can be created, it creates one and calls the</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">callback</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> with the deserialized object. This method</span>
+        <span class="c">///</span><span class="c"> does not assume all fragments to be available. So if not enough fragments are</span>
+        <span class="c">///</span><span class="c"> available it will simply return..</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Data to process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">priorityType</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Priority stream this data belongs to.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">callback</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback to call once a complete deserialized object is available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Defragmented Object if any, otherwise null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> 1. Fragment Ids not in sequence</span>
+        <span class="c">///</span><span class="c"> 2. Object Ids does not match</span>
+        <span class="c">///</span><span class="c"> 3. The current deserialized object size of the received data exceeded</span>
+        <span class="c">///</span><span class="c"> allowed maximum object size. The current deserialized object size is {0}.</span>
+        <span class="c">///</span><span class="c"> Allowed maximum object size is {1}.</span>
+        <span class="c">///</span><span class="c"> 4.The total data received from the remote machine exceeded allowed maximum.</span>
+        <span class="c">///</span><span class="c"> The total data received from remote machine is {0}. Allowed maximum is {1}.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Might throw other exceptions as the deserialized object is handled here.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="98e30f2c73691b8f" href="../../../R/98e30f2c73691b8f.html" target="n" data-glyph="74,1" class="i method">ProcessRawData</a>(<b>byte</b>[] <span id="r48 rd" class="r48 r">data</span>,
+            <a href="#f0975201467fdc06" class="t t">DataPriorityType</a> <span id="r49 rd" class="r49 r">priorityType</span>,
+            <a href="#b0dbabe933b81a2b" class="t t">ReceiveDataCollection</a>.<a href="#f79a7d2e805594f6" class="t t">OnDataAvailableCallback</a> <span id="r47 rd" class="r47 r">callback</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r48 r">data</span> != <b>null</b>, <span class="s">&quot;Cannot process null data&quot;</span>);
+ 
+            <b>try</b>
+            {
+                <a href="#e77a4e0ebf1c1e12" class="i field">_defragmentor</a>.<a href="../common/fragmentor.cs.html#713480b4ba325c66" class="i property">DeserializationContext</a>.<span class="i">LogExtraMemoryUsage</span>(<span class="r48 r">data</span>.<span class="i">Length</span>);
+            }
+            <b>catch</b> (<span class="i n">System</span>.<span class="i">Xml</span>.<span class="i">XmlException</span>)
+            {
+                <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r50 rd" class="r50 r">e</span> = <b>null</b>;
+ 
+                <b>if</b> (<a href="#8088e55fcd03c8f0" class="i field">_isCreateByClientTM</a>)
+                {
+                    <span class="r50 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#28b074029300cd88" class="i field">ReceivedDataSizeExceededMaximumClient</a>,
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">ReceivedDataSizeExceededMaximumClient</span>,
+                            <a href="#e77a4e0ebf1c1e12" class="i field">_defragmentor</a>.<a href="../common/fragmentor.cs.html#713480b4ba325c66" class="i property">DeserializationContext</a>.<a href="../../serialization.cs.html#7f867777951adff9" class="i property">MaximumAllowedMemory</a>.<span class="i">Value</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r50 r">e</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<a href="../common/remotingexceptions.cs.html#a969589d7508bf05" class="t t">PSRemotingErrorId</a>.<a href="../common/remotingexceptions.cs.html#4f79145f9df9a590" class="i field">ReceivedDataSizeExceededMaximumServer</a>,
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">ReceivedDataSizeExceededMaximumServer</span>,
+                            <a href="#e77a4e0ebf1c1e12" class="i field">_defragmentor</a>.<a href="../common/fragmentor.cs.html#713480b4ba325c66" class="i property">DeserializationContext</a>.<a href="../../serialization.cs.html#7f867777951adff9" class="i property">MaximumAllowedMemory</a>.<span class="i">Value</span>);
+                }
+ 
+                <b>throw</b> <span class="r50 r">e</span>;
+            }
+ 
+            <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>[(<b>int</b>)<span class="r49 r">priorityType</span>].<a href="#b0c81957da7f1e5e" class="i method">ProcessRawData</a>(<span class="r48 r">data</span>, <span class="r47 r">callback</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable implementation
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose and release resources.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="887798f1f0f897b5" href="../../../R/887798f1f0f897b5.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#5556aba2f5334851" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="c">// if already disposing..no need to let finalizer thread</span>
+            <span class="c">// put resources to clean this object.</span>
+            <span class="i n">System</span>.<span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#7f75e2bc64d1da2e" class="k">this</a>);
+        }
+ 
+        <b>internal virtual void</b> <a id="5556aba2f5334851" href="../../../R/5556aba2f5334851.html" target="n" data-glyph="74,1" class="i method">Dispose</a>(<b>bool</b> <span id="r51 rd" class="r51 r">isDisposing</span>)
+        {
+            <b>if</b> (<a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a> != <b>null</b>)
+            {
+                <b>for</b> (<b>int</b> <span id="r52 rd" class="r52 r">index</span> = 0; <span class="r52 r">index</span> &lt; <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>.<span class="i">Length</span>; <span class="r52 r">index</span>++)
+                {
+                    <a href="#41a2fbf78fbd7e6c" class="i field">_recvdData</a>[<span class="r52 r">index</span>].<a href="#ec59889ae9b2604b" class="i method">Dispose</a>();
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+}
+</pre></td></tr></table></div></body></html>

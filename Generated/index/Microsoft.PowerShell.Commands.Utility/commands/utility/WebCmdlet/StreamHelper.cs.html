@@ -1,0 +1,505 @@
+﻿<!DOCTYPE html>
+<html><head><title>StreamHelper.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(496);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Utility/commands/utility/WebCmdlet/StreamHelper.cs" target="_top">commands\utility\WebCmdlet\StreamHelper.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Utility" target="_top">src\Microsoft.PowerShell.Commands.Utility\Microsoft.PowerShell.Commands.Utility.csproj</a> (Microsoft.PowerShell.Commands.Utility)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">Compression</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>.<span class="i">Http</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">RegularExpressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Tasks</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Microsoft.PowerShell.Commands.WebResponse has a public property RawContentStream</span>
+    <span class="c">///</span><span class="c"> which is of type MemoryStream. We shipped like that in PowerShell 3. Creating</span>
+    <span class="c">///</span><span class="c"> this class as a wrapper to MemoryStream to lazily initialize. Otherwise, the</span>
+    <span class="c">///</span><span class="c"> content will unnecessarily be read even if there are no consumers for it.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="040e1ccd840476c3" href="../../../R/040e1ccd840476c3.html" target="n" data-glyph="2,0" class="t t">WebResponseContentMemoryStream</a> : <span class="i">MemoryStream</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Data
+ 
+        <b>private readonly</b> <span class="i">Stream</span> <a id="5e2aeb66a36f7744" href="../../../R/5e2aeb66a36f7744.html" target="n" data-glyph="46,1" class="i field">_originalStreamToProxy</a>;
+        <b>private bool</b> <a id="48e376ac4694c910" href="../../../R/48e376ac4694c910.html" target="n" data-glyph="46,1" class="i field">_isInitialized</a> = <b>false</b>;
+        <b>private readonly</b> <a href="/System.Management.Automation/A.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <a id="802d7c256ace231c" href="../../../R/802d7c256ace231c.html" target="n" data-glyph="46,1" class="i field">_ownerCmdlet</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#040e1ccd840476c3" class="t t">WebResponseContentMemoryStream</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">initialCapacity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">cmdlet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Owner cmdlet if any.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="de28b6485de3c8b0" href="../../../R/de28b6485de3c8b0.html" target="n" data-glyph="74,1" class="t constructor">WebResponseContentMemoryStream</a>(<span class="i">Stream</span> <span id="r0 rd" class="r0 r">stream</span>, <b>int</b> <span id="r1 rd" class="r1 r">initialCapacity</span>, <a href="/System.Management.Automation/A.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r2 rd" class="r2 r">cmdlet</span>)
+            : <b>base</b>(<span class="r1 r">initialCapacity</span>)
+        {
+            <a href="#5e2aeb66a36f7744" class="i field">_originalStreamToProxy</a> = <span class="r0 r">stream</span>;
+            <a href="#802d7c256ace231c" class="i field">_ownerCmdlet</a> = <span class="r2 r">cmdlet</span>;
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="38853eecbf732240" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanRead</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>true</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="51dc64fb8c039428" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanSeek</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>true</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="a98c95228ce63b3e" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanTimeout</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>base</b>.<span class="i">CanTimeout</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="6a19786c0290f1d6" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanWrite</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>true</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override long</b> <a id="b219bd744edbbe36" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Length</a>
+        {
+            <b>get</b>
+            {
+                <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+                <b>return</b> <b>base</b>.<span class="i">Length</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">destination</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">bufferSize</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">cancellationToken</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Task</span> <a id="c922eee8831b2e78" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">CopyToAsync</a>(<span class="i">Stream</span> <span id="r3 rd" class="r3 r">destination</span>, <b>int</b> <span id="r4 rd" class="r4 r">bufferSize</span>, <span class="i">CancellationToken</span> <span id="r5 rd" class="r5 r">cancellationToken</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>return</b> <b>base</b>.<span class="i">CopyToAsync</span>(<span class="r3 r">destination</span>, <span class="r4 r">bufferSize</span>, <span class="r5 r">cancellationToken</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="0abcc828028769fd" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>byte</b>[] <span id="r6 rd" class="r6 r">buffer</span>, <b>int</b> <span id="r7 rd" class="r7 r">offset</span>, <b>int</b> <span id="r8 rd" class="r8 r">count</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>return</b> <b>base</b>.<span class="i">Read</span>(<span class="r6 r">buffer</span>, <span class="r7 r">offset</span>, <span class="r8 r">count</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">cancellationToken</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Task</span>&lt;<b>int</b>&gt; <a id="63eaf56a0f4583ae" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ReadAsync</a>(<b>byte</b>[] <span id="r9 rd" class="r9 r">buffer</span>, <b>int</b> <span id="r10 rd" class="r10 r">offset</span>, <b>int</b> <span id="r11 rd" class="r11 r">count</span>, <span class="i">CancellationToken</span> <span id="r12 rd" class="r12 r">cancellationToken</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>return</b> <b>base</b>.<span class="i">ReadAsync</span>(<span class="r9 r">buffer</span>, <span class="r10 r">offset</span>, <span class="r11 r">count</span>, <span class="r12 r">cancellationToken</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="11f3b28815fa24ed" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ReadByte</a>()
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>return</b> <b>base</b>.<span class="i">ReadByte</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="63e48dbec5913a58" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">SetLength</a>(<b>long</b> <span id="r13 rd" class="r13 r">value</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>base</b>.<span class="i">SetLength</span>(<span class="r13 r">value</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override byte</b>[] <a id="769d2f90f56001b1" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ToArray</a>()
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>return</b> <b>base</b>.<span class="i">ToArray</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="05b79d9d06936656" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Write</a>(<b>byte</b>[] <span id="r14 rd" class="r14 r">buffer</span>, <b>int</b> <span id="r15 rd" class="r15 r">offset</span>, <b>int</b> <span id="r16 rd" class="r16 r">count</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>base</b>.<span class="i">Write</span>(<span class="r14 r">buffer</span>, <span class="r15 r">offset</span>, <span class="r16 r">count</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">cancellationToken</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Task</span> <a id="bd9542a448d8545f" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteAsync</a>(<b>byte</b>[] <span id="r17 rd" class="r17 r">buffer</span>, <b>int</b> <span id="r18 rd" class="r18 r">offset</span>, <b>int</b> <span id="r19 rd" class="r19 r">count</span>, <span class="i">CancellationToken</span> <span id="r20 rd" class="r20 r">cancellationToken</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>return</b> <b>base</b>.<span class="i">WriteAsync</span>(<span class="r17 r">buffer</span>, <span class="r18 r">offset</span>, <span class="r19 r">count</span>, <span class="r20 r">cancellationToken</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="a6c2c6ac8efdae44" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteByte</a>(<b>byte</b> <span id="r21 rd" class="r21 r">value</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>base</b>.<span class="i">WriteByte</span>(<span class="r21 r">value</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="af981daf3fd95146" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteTo</a>(<span class="i">Stream</span> <span id="r22 rd" class="r22 r">stream</span>)
+        {
+            <a href="#72261b1bed8d59e7" class="i method">Initialize</a>();
+            <b>base</b>.<span class="i">WriteTo</span>(<span class="r22 r">stream</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="0de63f72228220f0" href="../../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r23 rd" class="r23 r">disposing</span>)
+        {
+            <b>base</b>.<span class="i">Dispose</span>(<span class="r23 r">disposing</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="72261b1bed8d59e7" href="../../../R/72261b1bed8d59e7.html" target="n" data-glyph="76,1" class="i method">Initialize</a>()
+        {
+            <b>if</b> (<a href="#48e376ac4694c910" class="i field">_isInitialized</a>) { <b>return</b>; }
+ 
+            <a href="#48e376ac4694c910" class="i field">_isInitialized</a> = <b>true</b>;
+            <b>try</b>
+            {
+                <b>long</b> <span id="r24 rd" class="r24 r">totalLength</span> = 0;
+                <b>byte</b>[] <span id="r25 rd" class="r25 r">buffer</span> = <b>new</b> <b>byte</b>[<a href="#feacf5faafa43405" class="t t">StreamHelper</a>.<a href="#143cb2eb9a4d59fa" class="i field">ChunkSize</a>];
+                <a href="/System.Management.Automation/A.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r26 rd" class="r26 r">record</span> = <b>new</b>(<a href="#feacf5faafa43405" class="t t">StreamHelper</a>.<a href="#ffda7b24bef76518" class="i field">ActivityId</a>, <span class="i">WebCmdletStrings</span>.<span class="i">ReadResponseProgressActivity</span>, <span class="s">&quot;statusDescriptionPlaceholder&quot;</span>);
+                <b>for</b> (<b>int</b> <span id="r27 rd" class="r27 r">read</span> = 1; <span class="r27 r">read</span> &gt; 0; <span class="r24 r">totalLength</span> += <span class="r27 r">read</span>)
+                {
+                    <b>if</b> (<a href="#802d7c256ace231c" class="i field">_ownerCmdlet</a> != <b>null</b>)
+                    {
+                        <span class="r26 r">record</span>.<a href="/System.Management.Automation/A.html#7b8dea277788f5cd" class="i property">StatusDescription</a> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">WebCmdletStrings</span>.<span class="i">ReadResponseProgressStatus</span>, <span class="r24 r">totalLength</span>);
+                        <a href="#802d7c256ace231c" class="i field">_ownerCmdlet</a>.<span class="i">WriteProgress</span>(<span class="r26 r">record</span>);
+ 
+                        <b>if</b> (<a href="#802d7c256ace231c" class="i field">_ownerCmdlet</a>.<span class="i">IsStopping</span>)
+                        {
+                            <b>break</b>;
+                        }
+                    }
+ 
+                    <span class="r27 r">read</span> = <a href="#5e2aeb66a36f7744" class="i field">_originalStreamToProxy</a>.<span class="i">Read</span>(<span class="r25 r">buffer</span>, 0, <span class="r25 r">buffer</span>.<span class="i">Length</span>);
+ 
+                    <b>if</b> (<span class="r27 r">read</span> &gt; 0)
+                    {
+                        <b>base</b>.<span class="i">Write</span>(<span class="r25 r">buffer</span>, 0, <span class="r27 r">read</span>);
+                    }
+                }
+ 
+                <b>if</b> (<a href="#802d7c256ace231c" class="i field">_ownerCmdlet</a> != <b>null</b>)
+                {
+                    <span class="r26 r">record</span>.<a href="/System.Management.Automation/A.html#7b8dea277788f5cd" class="i property">StatusDescription</a> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">WebCmdletStrings</span>.<span class="i">ReadResponseComplete</span>, <span class="r24 r">totalLength</span>);
+                    <span class="r26 r">record</span>.<span class="i">RecordType</span> = <a href="/System.Management.Automation/A.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="/System.Management.Automation/A.html#be29e101fe03f5d0" class="i field">Completed</a>;
+                    <a href="#802d7c256ace231c" class="i field">_ownerCmdlet</a>.<span class="i">WriteProgress</span>(<span class="r26 r">record</span>);
+                }
+ 
+                <span class="c">// make sure the length is set appropriately</span>
+                <b>base</b>.<span class="i">SetLength</span>(<span class="r24 r">totalLength</span>);
+                <b>base</b>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <b>base</b>.<span class="i">Dispose</span>();
+                <b>throw</b>;
+            }
+        }
+    }
+ 
+    <b>internal static class</b> <a id="feacf5faafa43405" href="../../../R/feacf5faafa43405.html" target="n" data-glyph="2,0" class="t t">StreamHelper</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constants
+ 
+        <b>internal const int</b> <a id="bbe4c247dad4953f" href="../../../R/bbe4c247dad4953f.html" target="n" data-glyph="8,1" class="i field">DefaultReadBuffer</a> = 100000;
+ 
+        <b>internal const int</b> <a id="143cb2eb9a4d59fa" href="../../../R/143cb2eb9a4d59fa.html" target="n" data-glyph="8,1" class="i field">ChunkSize</a> = 10000;
+ 
+        <span class="c">// just picked a random number</span>
+        <b>internal const int</b> <a id="ffda7b24bef76518" href="../../../R/ffda7b24bef76518.html" target="n" data-glyph="8,1" class="i field">ActivityId</a> = 174593042;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Constants
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Static Methods
+ 
+        <b>internal static void</b> <a id="eb46016fa1c4d883" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">WriteToStream</a>(<span class="i">Stream</span> <span id="r28 rd" class="r28 r">input</span>, <span class="i">Stream</span> <span id="r29 rd" class="r29 r">output</span>, <a href="/System.Management.Automation/A.html#30543a6971fed1fc" class="t t">PSCmdlet</a> <span id="r30 rd" class="r30 r">cmdlet</span>, <span class="i">CancellationToken</span> <span id="r31 rd" class="r31 r">cancellationToken</span>)
+        {
+            <b>if</b> (<span class="r30 r">cmdlet</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r30 r">cmdlet</span>));
+            }
+ 
+            <span class="i">Task</span> <span id="r32 rd" class="r32 r">copyTask</span> = <span class="r28 r">input</span>.<span class="i">CopyToAsync</span>(<span class="r29 r">output</span>, <span class="r31 r">cancellationToken</span>);
+ 
+            <a href="/System.Management.Automation/A.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r33 rd" class="r33 r">record</span> = <b>new</b>(
+                <a href="#ffda7b24bef76518" class="i field">ActivityId</a>,
+                <span class="i">WebCmdletStrings</span>.<span class="i">WriteRequestProgressActivity</span>,
+                <span class="i">WebCmdletStrings</span>.<span class="i">WriteRequestProgressStatus</span>);
+            <b>try</b>
+            {
+                <b>do</b>
+                {
+                    <span class="r33 r">record</span>.<a href="/System.Management.Automation/A.html#7b8dea277788f5cd" class="i property">StatusDescription</a> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">WebCmdletStrings</span>.<span class="i">WriteRequestProgressStatus</span>, <span class="r29 r">output</span>.<span class="i">Position</span>);
+                    <span class="r30 r">cmdlet</span>.<span class="i">WriteProgress</span>(<span class="r33 r">record</span>);
+ 
+                    <span class="i">Task</span>.<span class="i">Delay</span>(1000).<span class="i">Wait</span>(<span class="r31 r">cancellationToken</span>);
+                }
+                <b>while</b> (!<span class="r32 r">copyTask</span>.<span class="i">IsCompleted</span> &amp;&amp; !<span class="r31 r">cancellationToken</span>.<span class="i">IsCancellationRequested</span>);
+ 
+                <b>if</b> (<span class="r32 r">copyTask</span>.<span class="i">IsCompleted</span>)
+                {
+                    <span class="r33 r">record</span>.<a href="/System.Management.Automation/A.html#7b8dea277788f5cd" class="i property">StatusDescription</a> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">WebCmdletStrings</span>.<span class="i">WriteRequestComplete</span>, <span class="r29 r">output</span>.<span class="i">Position</span>);
+                    <span class="r30 r">cmdlet</span>.<span class="i">WriteProgress</span>(<span class="r33 r">record</span>);
+                }
+            }
+            <b>catch</b> (<span class="i">OperationCanceledException</span>)
+            {
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Saves content from stream into filePath.</span>
+        <span class="c">///</span><span class="c"> Caller need to ensure </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">stream</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> position is properly set.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Input stream.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">filePath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Output file name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">cmdlet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Current cmdlet (Invoke-WebRequest or Invoke-RestMethod).</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">cancellationToken</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">CancellationToken to track the cmdlet cancellation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="9e11abeccc8ce21b" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">SaveStreamToFile</a>(<span class="i">Stream</span> <span id="r34 rd" class="r34 r">stream</span>, <b>string</b> <span id="r35 rd" class="r35 r">filePath</span>, <a href="/System.Management.Automation/A.html#30543a6971fed1fc" class="t t">PSCmdlet</a> <span id="r36 rd" class="r36 r">cmdlet</span>, <span class="i">CancellationToken</span> <span id="r37 rd" class="r37 r">cancellationToken</span>)
+        {
+            <span class="c">// If the web cmdlet should resume, append the file instead of overwriting.</span>
+            <span class="i">FileMode</span> <span id="r38 rd" class="r38 r">fileMode</span> = <span class="r36 r">cmdlet</span> <b>is</b> <a href="../../../P/662e7ae18a2eef77.html#662e7ae18a2eef77" class="t t">WebRequestPSCmdlet</a> <span id="r39 rd" class="r39 r">webCmdlet</span> &amp;&amp; <span class="r39 r">webCmdlet</span>.<a href="Common/WebRequestPSCmdlet.Common.cs.html#ddb44e481166d331" class="i property">ShouldResume</a> ? <span class="i">FileMode</span>.<span class="i">Append</span> : <span class="i">FileMode</span>.<span class="i">Create</span>;
+            <b>using</b> <span class="i">FileStream</span> <span id="r40 rd" class="r40 r">output</span> = <b>new</b>(<span class="r35 r">filePath</span>, <span class="r38 r">fileMode</span>, <span class="i">FileAccess</span>.<span class="i">Write</span>, <span class="i">FileShare</span>.<span class="i">Read</span>);
+            <span class="i">WriteToStream</span>(<span class="r34 r">stream</span>, <span class="r40 r">output</span>, <span class="r36 r">cmdlet</span>, <span class="r37 r">cancellationToken</span>);
+        }
+ 
+        <b>private static string</b> <a id="ba453a75ea91c05a" href="../../../R/ba453a75ea91c05a.html" target="n" data-glyph="76,1" class="i method">StreamToString</a>(<span class="i">Stream</span> <span id="r41 rd" class="r41 r">stream</span>, <span class="i">Encoding</span> <span id="r42 rd" class="r42 r">encoding</span>)
+        {
+            <span class="i">StringBuilder</span> <span id="r43 rd" class="r43 r">result</span> = <b>new</b>(<span class="i">capacity</span>: <a href="#143cb2eb9a4d59fa" class="i field">ChunkSize</a>);
+            <span class="i">Decoder</span> <span id="r44 rd" class="r44 r">decoder</span> = <span class="r42 r">encoding</span>.<span class="i">GetDecoder</span>();
+ 
+            <b>int</b> <span id="r45 rd" class="r45 r">useBufferSize</span> = 64;
+            <b>if</b> (<span class="r45 r">useBufferSize</span> &lt; <span class="r42 r">encoding</span>.<span class="i">GetMaxCharCount</span>(10))
+            {
+                <span class="r45 r">useBufferSize</span> = <span class="r42 r">encoding</span>.<span class="i">GetMaxCharCount</span>(10);
+            }
+ 
+            <b>char</b>[] <span id="r46 rd" class="r46 r">chars</span> = <b>new</b> <b>char</b>[<span class="r45 r">useBufferSize</span>];
+            <b>byte</b>[] <span id="r47 rd" class="r47 r">bytes</span> = <b>new</b> <b>byte</b>[<span class="r45 r">useBufferSize</span> * 4];
+            <b>int</b> <span id="r48 rd" class="r48 r">bytesRead</span> = 0;
+            <b>do</b>
+            {
+                <span class="c">// Read at most the number of bytes that will fit in the input buffer. The</span>
+                <span class="c">// return value is the actual number of bytes read, or zero if no bytes remain.</span>
+                <span class="r48 r">bytesRead</span> = <span class="r41 r">stream</span>.<span class="i">Read</span>(<span class="r47 r">bytes</span>, 0, <span class="r45 r">useBufferSize</span> * 4);
+ 
+                <b>bool</b> <span id="r49 rd" class="r49 r">completed</span> = <b>false</b>;
+                <b>int</b> <span id="r50 rd" class="r50 r">byteIndex</span> = 0;
+                <b>int</b> <span id="r51 rd" class="r51 r">bytesUsed</span>;
+                <b>int</b> <span id="r52 rd" class="r52 r">charsUsed</span>;
+ 
+                <b>while</b> (!<span class="r49 r">completed</span>)
+                {
+                    <span class="c">// If this is the last input data, flush the decoder&#39;s internal buffer and state.</span>
+                    <b>bool</b> <span id="r53 rd" class="r53 r">flush</span> = (<span class="r48 r">bytesRead</span> == 0);
+                    <span class="r44 r">decoder</span>.<span class="i">Convert</span>(<span class="r47 r">bytes</span>, <span class="r50 r">byteIndex</span>, <span class="r48 r">bytesRead</span> - <span class="r50 r">byteIndex</span>,
+                                    <span class="r46 r">chars</span>, 0, <span class="r45 r">useBufferSize</span>, <span class="r53 r">flush</span>,
+                                    <b>out</b> <span class="r51 r">bytesUsed</span>, <b>out</b> <span class="r52 r">charsUsed</span>, <b>out</b> <span class="r49 r">completed</span>);
+ 
+                    <span class="c">// The conversion produced the number of characters indicated by charsUsed. Write that number</span>
+                    <span class="c">// of characters to our result buffer</span>
+                    <span class="r43 r">result</span>.<span class="i">Append</span>(<span class="r46 r">chars</span>, 0, <span class="r52 r">charsUsed</span>);
+ 
+                    <span class="c">// Increment byteIndex to the next block of bytes in the input buffer, if any, to convert.</span>
+                    <span class="r50 r">byteIndex</span> += <span class="r51 r">bytesUsed</span>;
+ 
+                    <span class="c">// The behavior of decoder.Convert changed start .NET 3.1-preview2.</span>
+                    <span class="c">// The change was made in https://github.com/dotnet/coreclr/pull/27229</span>
+                    <span class="c">// The recommendation from .NET team is to not check for &#39;completed&#39; if &#39;flush&#39; is false.</span>
+                    <span class="c">// Break out of the loop if all bytes have been read.</span>
+                    <b>if</b> (!<span class="r53 r">flush</span> &amp;&amp; <span class="r48 r">bytesRead</span> == <span class="r50 r">byteIndex</span>)
+                    {
+                        <b>break</b>;
+                    }
+                }
+            } <b>while</b> (<span class="r48 r">bytesRead</span> != 0);
+ 
+            <b>return</b> <span class="r43 r">result</span>.<span class="i">ToString</span>();
+        }
+ 
+        <b>internal static string</b> <a id="74acf91d2af3d282" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DecodeStream</a>(<span class="i">Stream</span> <span id="r54 rd" class="r54 r">stream</span>, <b>string</b> <span id="r55 rd" class="r55 r">characterSet</span>, <b>out</b> <span class="i">Encoding</span> <span id="r56 rd" class="r56 r">encoding</span>)
+        {
+            <b>try</b>
+            {
+                <span class="r56 r">encoding</span> = <span class="i">Encoding</span>.<span class="i">GetEncoding</span>(<span class="r55 r">characterSet</span>);
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span>)
+            {
+                <span class="r56 r">encoding</span> = <b>null</b>;
+            }
+ 
+            <b>return</b> <a href="#bf325420cb9893e3" class="i method">DecodeStream</a>(<span class="r54 r">stream</span>, <b>ref</b> <span class="r56 r">encoding</span>);
+        }
+ 
+        <b>internal static bool</b> <a id="8f3537a86438fe87" href="../../../R/8f3537a86438fe87.html" target="n" data-glyph="74,1" class="i method">TryGetEncoding</a>(<b>string</b> <span id="r57 rd" class="r57 r">characterSet</span>, <b>out</b> <span class="i">Encoding</span> <span id="r58 rd" class="r58 r">encoding</span>)
+        {
+            <b>bool</b> <span id="r59 rd" class="r59 r">result</span> = <b>false</b>;
+            <b>try</b>
+            {
+                <span class="r58 r">encoding</span> = <span class="i">Encoding</span>.<span class="i">GetEncoding</span>(<span class="r57 r">characterSet</span>);
+                <span class="r59 r">result</span> = <b>true</b>;
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span>)
+            {
+                <span class="r58 r">encoding</span> = <b>null</b>;
+            }
+ 
+            <b>return</b> <span class="r59 r">result</span>;
+        }
+ 
+        <b>private static readonly</b> <span class="i">Regex</span> <a id="c60e644fd03ebac2" href="../../../R/c60e644fd03ebac2.html" target="n" data-glyph="46,1" class="i field">s_metaexp</a> = <b>new</b>(
+                <span class="s">@&quot;&lt;meta\s.*[^.&gt;&lt;]*charset\s*=\s*[&quot;&quot;&#39;\n]?(?&lt;charset&gt;[A-Za-z].[^\s&quot;&quot;&#39;\n&lt;&gt;]*)[\s&quot;&quot;&#39;\n&gt;]&quot;</span>,
+                <span class="i">RegexOptions</span>.<span class="i">Compiled</span> | <span class="i">RegexOptions</span>.<span class="i">Singleline</span> | <span class="i">RegexOptions</span>.<span class="i">ExplicitCapture</span> | <span class="i">RegexOptions</span>.<span class="i">CultureInvariant</span> | <span class="i">RegexOptions</span>.<span class="i">IgnoreCase</span>
+            );
+ 
+        <b>internal static string</b> <a id="bf325420cb9893e3" href="../../../R/bf325420cb9893e3.html" target="n" data-glyph="74,1" class="i method">DecodeStream</a>(<span class="i">Stream</span> <span id="r60 rd" class="r60 r">stream</span>, <b>ref</b> <span class="i">Encoding</span> <span id="r61 rd" class="r61 r">encoding</span>)
+        {
+            <b>bool</b> <span id="r62 rd" class="r62 r">isDefaultEncoding</span> = <b>false</b>;
+            <b>if</b> (<span class="r61 r">encoding</span> == <b>null</b>)
+            {
+                <span class="c">// Use the default encoding if one wasn&#39;t provided</span>
+                <span class="r61 r">encoding</span> = <a href="Common/ContentHelper.Common.cs.html#a2c3d2d23cfdf964" class="t t">ContentHelper</a>.<a href="Common/ContentHelper.Common.cs.html#f99a5d5824233e63" class="i method">GetDefaultEncoding</a>();
+                <span class="r62 r">isDefaultEncoding</span> = <b>true</b>;
+            }
+ 
+            <b>string</b> <span id="r63 rd" class="r63 r">content</span> = <a href="#ba453a75ea91c05a" class="i method">StreamToString</a>(<span class="r60 r">stream</span>, <span class="r61 r">encoding</span>);
+            <b>if</b> (<span class="r62 r">isDefaultEncoding</span>)
+            {
+                <b>do</b>
+                {
+                    <span class="c">// check for a charset attribute on the meta element to override the default.</span>
+                    <span class="i">Match</span> <span id="r64 rd" class="r64 r">match</span> = <a href="#c60e644fd03ebac2" class="i field">s_metaexp</a>.<span class="i">Match</span>(<span class="r63 r">content</span>);
+                    <b>if</b> (<span class="r64 r">match</span>.<span class="i">Success</span>)
+                    {
+                        <span class="i">Encoding</span> <span id="r65 rd" class="r65 r">localEncoding</span> = <b>null</b>;
+                        <b>string</b> <span id="r66 rd" class="r66 r">characterSet</span> = <span class="r64 r">match</span>.<span class="i">Groups</span>[<span class="s">&quot;charset&quot;</span>].<span class="i">Value</span>;
+ 
+                        <b>if</b> (<a href="#8f3537a86438fe87" class="i method">TryGetEncoding</a>(<span class="r66 r">characterSet</span>, <b>out</b> <span class="r65 r">localEncoding</span>))
+                        {
+                            <span class="r60 r">stream</span>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+                            <span class="r63 r">content</span> = <a href="#ba453a75ea91c05a" class="i method">StreamToString</a>(<span class="r60 r">stream</span>, <span class="r65 r">localEncoding</span>);
+                            <span class="c">// report the encoding used.</span>
+                            <span class="r61 r">encoding</span> = <span class="r65 r">localEncoding</span>;
+                        }
+                    }
+                } <b>while</b> (<b>false</b>);
+            }
+ 
+            <b>return</b> <span class="r63 r">content</span>;
+        }
+ 
+        <b>internal static byte</b>[] <a id="565725894bb51d96" href="../../../R/565725894bb51d96.html" target="n" data-glyph="74,1" class="i method">EncodeToBytes</a>(<b>string</b> <span id="r67 rd" class="r67 r">str</span>, <span class="i">Encoding</span> <span id="r68 rd" class="r68 r">encoding</span>)
+        {
+            <b>if</b> (<span class="r68 r">encoding</span> == <b>null</b>)
+            {
+                <span class="c">// just use the default encoding if one wasn&#39;t provided</span>
+                <span class="r68 r">encoding</span> = <a href="Common/ContentHelper.Common.cs.html#a2c3d2d23cfdf964" class="t t">ContentHelper</a>.<a href="Common/ContentHelper.Common.cs.html#f99a5d5824233e63" class="i method">GetDefaultEncoding</a>();
+            }
+ 
+            <b>return</b> <span class="r68 r">encoding</span>.<span class="i">GetBytes</span>(<span class="r67 r">str</span>);
+        }
+ 
+        <b>internal static byte</b>[] <a id="74294510eac2fdf2" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">EncodeToBytes</a>(<b>string</b> <span id="r69 rd" class="r69 r">str</span>)
+        {
+            <b>return</b> <a href="#565725894bb51d96" class="i method">EncodeToBytes</a>(<span class="r69 r">str</span>, <b>null</b>);
+        }
+ 
+        <b>internal static</b> <span class="i">Stream</span> <a id="2ba676a5705cd62c" href="../../../R/2ba676a5705cd62c.html" target="n" data-glyph="74,1" class="i method">GetResponseStream</a>(<span class="i">HttpResponseMessage</span> <span id="r70 rd" class="r70 r">response</span>)
+        {
+            <span class="i">Stream</span> <span id="r71 rd" class="r71 r">responseStream</span> = <span class="r70 r">response</span>.<span class="i">Content</span>.<span class="i">ReadAsStreamAsync</span>().<span class="i">GetAwaiter</span>().<span class="i">GetResult</span>();
+            <b>var</b> <span id="r72 rd" class="r72 r">contentEncoding</span> = <span class="r70 r">response</span>.<span class="i">Content</span>.<span class="i">Headers</span>.<span class="i">ContentEncoding</span>;
+ 
+            <span class="c">// HttpClient by default will automatically decompress GZip and Deflate content.</span>
+            <span class="c">// We keep this decompression logic here just in case.</span>
+            <b>if</b> (<span class="r72 r">contentEncoding</span> != <b>null</b> &amp;&amp; <span class="r72 r">contentEncoding</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <b>if</b> (<span class="r72 r">contentEncoding</span>.<span class="i">Contains</span>(<span class="s">&quot;gzip&quot;</span>))
+                {
+                    <span class="r71 r">responseStream</span> = <b>new</b> <span class="i">GZipStream</span>(<span class="r71 r">responseStream</span>, <span class="i">CompressionMode</span>.<span class="i">Decompress</span>);
+                }
+                <b>else</b> <b>if</b> (<span class="r72 r">contentEncoding</span>.<span class="i">Contains</span>(<span class="s">&quot;deflate&quot;</span>))
+                {
+                    <span class="r71 r">responseStream</span> = <b>new</b> <span class="i">DeflateStream</span>(<span class="r71 r">responseStream</span>, <span class="i">CompressionMode</span>.<span class="i">Decompress</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r71 r">responseStream</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Static Methods
+    }
+}
+</pre></td></tr></table></div></body></html>

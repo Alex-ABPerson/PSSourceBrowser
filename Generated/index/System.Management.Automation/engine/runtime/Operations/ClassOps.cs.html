@@ -1,0 +1,385 @@
+﻿<!DOCTYPE html>
+<html><head><title>ClassOps.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(376);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/runtime/Operations/ClassOps.cs" target="_top">engine\runtime\Operations\ClassOps.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>.<span class="i">Emit</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<span class="c">// These APIs are not part of the public contract.</span>
+<span class="c">// They are implementation details and intended to be called from generated assemblies for PS classes.</span>
+<span class="c">//</span>
+<span class="c">// Because they are called from other assemblies, we have to make them public.</span>
+<span class="c">// We put them in Internal namespace to emphasise that despite the fact that they are public, it&#39;s not part of API contract.</span>
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Every Runspace in one process contains SessionStateInternal per module (module SessionState).</span>
+    <span class="c">///</span><span class="c"> Every RuntimeType is associated to only one SessionState in the Runspace, which creates it:</span>
+    <span class="c">///</span><span class="c"> it&#39;s ever global state or a module state.</span>
+    <span class="c">///</span><span class="c"> In the former case, module can be imported from the different runspaces in the same process.</span>
+    <span class="c">///</span><span class="c"> And so runspaces will share RuntimeType. But in every runspace, Type is associated with just one SessionState.</span>
+    <span class="c">///</span><span class="c"> We want type methods to be able access $script: variables and module-specific methods.</span>
+    <span class="c">///</span><span class="c"> To achieve it, we preserve reference to SessionState that creates type in the private field &#39;SessionStateFieldName&#39;.</span>
+    <span class="c">///</span><span class="c"> Later, we use it to call scriptBlocks captured in ScriptBlockMemberMethodWrapper with the right sessionState.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public class</b> <a id="af827321341eaffb" href="../../../R/af827321341eaffb.html" target="n" data-glyph="0,0" class="t t">SessionStateKeeper</a>
+    {
+        <span class="c">// We use ConditionalWeakTable, because if GC already collect Runspace, then there</span>
+        <span class="c">// is no way to call a ctor or a static method on the type in this Runspace.</span>
+        <b>private readonly</b> <span class="i">ConditionalWeakTable</span>&lt;<a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>, <a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>&gt; <a id="5127927d247a0e38" href="../../../R/5127927d247a0e38.html" target="n" data-glyph="46,1" class="i field">_stateMap</a>;
+ 
+        <b>internal</b> <a id="b2354655d2640b11" href="../../../R/b2354655d2640b11.html" target="n" data-glyph="74,1" class="t constructor">SessionStateKeeper</a>()
+        {
+            <a href="#5127927d247a0e38" class="i field">_stateMap</a> = <b>new</b> <span class="i">ConditionalWeakTable</span>&lt;<a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>, <a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>&gt;();
+        }
+ 
+        <b>internal void</b> <a id="df794f173bc50004" href="../../../R/df794f173bc50004.html" target="n" data-glyph="74,1" class="i method">RegisterRunspace</a>()
+        {
+            <a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r0 rd" class="r0 r">sessionStateInMap</span> = <b>null</b>;
+            <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r1 rd" class="r1 r">runspaceToUse</span> = <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#efcd2ba43103de17" class="i property">DefaultRunspace</a>;
+            <a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r2 rd" class="r2 r">sessionStateToUse</span> = <span class="r1 r">runspaceToUse</span>.<a href="../../hostifaces/Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a>.<a href="../../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>;
+ 
+            <span class="c">// Different threads will operate on different key/value pairs (default-runspace/session-state pairs),</span>
+            <span class="c">// and a ConditionalWeakTable itself is thread safe, so there won&#39;t be race condition here.</span>
+            <b>if</b> (!<a href="#5127927d247a0e38" class="i field">_stateMap</a>.<span class="i">TryGetValue</span>(<span class="r1 r">runspaceToUse</span>, <b>out</b> <span class="r0 r">sessionStateInMap</span>))
+            {
+                <span class="c">// If the key doesn&#39;t exist yet, add it</span>
+                <a href="#5127927d247a0e38" class="i field">_stateMap</a>.<span class="i">Add</span>(<span class="r1 r">runspaceToUse</span>, <span class="r2 r">sessionStateToUse</span>);
+            }
+            <b>else</b> <b>if</b> (<span class="r0 r">sessionStateInMap</span> != <span class="r2 r">sessionStateToUse</span>)
+            {
+                <span class="c">// If the key exists but the corresponding value is not what we should use, then remove the key/value pair and add the new pair.</span>
+                <span class="c">// This could happen when a powershell class is defined in a module and the module gets reloaded. In such case, the same TypeDefinitionAst</span>
+                <span class="c">// instance will get reused, but should be associated with the SessionState from the new module, instead of the one from the old module.</span>
+                <a href="#5127927d247a0e38" class="i field">_stateMap</a>.<span class="i">AddOrUpdate</span>(<span class="r1 r">runspaceToUse</span>, <span class="r2 r">sessionStateToUse</span>);
+            }
+            <span class="c">// If the key exists and the corresponding value is the one we should use, then do nothing.</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method should be called only from</span>
+        <span class="c">///</span><span class="c">  - generated ctors for PowerShell classes, AND</span>
+        <span class="c">///</span><span class="c">  - ScriptBlockMemberMethodWrapper when invoking static methods of PowerShell classes.</span>
+        <span class="c">///</span><span class="c"> It&#39;s not intended to be a public API, but because we generate type in a different assembly it has to be public.</span>
+        <span class="c">///</span><span class="c"> Return type should be SessionStateInternal, but it violates accessibility consistency, so we use object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> By default, PowerShell class instantiation usually happens in the same Runspace where the class is defined. In</span>
+        <span class="c">///</span><span class="c"> that case, the created instance will be bound to the session state used to define that class in the Runspace.</span>
+        <span class="c">///</span><span class="c"> However, if the instantiation happens in a different Runspace where the class is not defined, or it happens on</span>
+        <span class="c">///</span><span class="c"> a thread without a default Runspace, then the created instance won&#39;t be bound to any session state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">SessionStateInternal.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public object</b> <a id="4be7289f486394ba" href="../../../R/4be7289f486394ba.html" target="n" data-glyph="72,1" class="i method">GetSessionState</a>()
+        {
+            <a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r3 rd" class="r3 r">ss</span> = <b>null</b>;
+ 
+            <span class="c">// DefaultRunspace could be null when we reach here. For example, create instance of</span>
+            <span class="c">// a PowerShell class by using reflection on a thread without DefaultRunspace.</span>
+            <span class="c">// Make sure we call &#39;TryGetValue&#39; with a non-null key, otherwise ArgumentNullException will be thrown.</span>
+            <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r4 rd" class="r4 r">defaultRunspace</span> = <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#efcd2ba43103de17" class="i property">DefaultRunspace</a>;
+            <b>if</b> (<span class="r4 r">defaultRunspace</span> != <b>null</b>)
+            {
+                <a href="#5127927d247a0e38" class="i field">_stateMap</a>.<span class="i">TryGetValue</span>(<span class="r4 r">defaultRunspace</span>, <b>out</b> <span class="r3 r">ss</span>);
+            }
+ 
+            <b>return</b> <span class="r3 r">ss</span>;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">/&gt;</span>
+    <b>public class</b> <a id="89f66d4565154783" href="../../../R/89f66d4565154783.html" target="n" data-glyph="0,0" class="t t">ScriptBlockMemberMethodWrapper</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span><span class="c">Used in codegen</span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public static readonly object</b>[] <a id="1ee841ff00ab224e" href="../../../R/../../0000000000.html" target="n" data-glyph="42,1" class="i field">_emptyArgumentArray</a> = <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>object</b>&gt;(); <span class="c">// See TypeDefiner.DefineTypeHelper.DefineMethodBody</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicate the wrapper is for a static member method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly bool</b> <a id="bb16eaba46c7bb6c" href="../../../R/bb16eaba46c7bb6c.html" target="n" data-glyph="46,1" class="i field">_isStatic</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The SessionStateKeeper associated with the helper type generated from PowerShell class.</span>
+        <span class="c">///</span><span class="c"> We query it for the SessionState to run static method in.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <a href="#af827321341eaffb" class="t t">SessionStateKeeper</a> <a id="691d1461567092c0" href="../../../R/691d1461567092c0.html" target="n" data-glyph="46,1" class="i field">_sessionStateKeeper</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We use WeakReference object to point to the default SessionState because if GC already collect the SessionState,</span>
+        <span class="c">///</span><span class="c"> or the Runspace it chains to is closed and disposed, then we cannot run the static method there anyways.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remakr</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The default SessionState is used only if a static method is called from a Runspace where the PowerShell class is</span>
+        <span class="c">///</span><span class="c"> never defined, or is called on a thread without a default Runspace. Usage like those should be rare.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remakr</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">WeakReference</span>&lt;<a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>&gt; <a id="8cad05dae341158f" href="../../../R/8cad05dae341158f.html" target="n" data-glyph="46,1" class="i field">_defaultSessionStateToUse</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The body AST of the member method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <a href="../../parser/ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a> <a id="f371bfc9b38b11f4" href="../../../R/f371bfc9b38b11f4.html" target="n" data-glyph="46,1" class="i field">_ast</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We use _scriptBlock instance to provide the shared CompiledScriptBlockData.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">Lazy</span>&lt;<a href="../../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt; <a id="45fae342441d535c" href="../../../R/45fae342441d535c.html" target="n" data-glyph="46,1" class="i field">_scriptBlock</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We use ThreadLocal boundScriptBlock to allow multi-thread execution of member methods.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">ThreadLocal</span>&lt;<a href="../../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt; <a id="a2bc5e1c84e7d7e4" href="../../../R/a2bc5e1c84e7d7e4.html" target="n" data-glyph="46,1" class="i field">_boundScriptBlock</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor to be called when the wrapper is for a static member method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="0b13408ffdb310e9" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">ScriptBlockMemberMethodWrapper</a>(<a href="../../parser/ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a> <span id="r5 rd" class="r5 r">ast</span>, <a href="#af827321341eaffb" class="t t">SessionStateKeeper</a> <span id="r6 rd" class="r6 r">sessionStateKeeper</span>)
+            : <a href="#8c63c81377600099" class="k">this</a>(<span class="r5 r">ast</span>)
+        {
+            <a href="#bb16eaba46c7bb6c" class="i field">_isStatic</a> = <b>true</b>;
+            <a href="#691d1461567092c0" class="i field">_sessionStateKeeper</a> = <span class="r6 r">sessionStateKeeper</span>;
+            <a href="#8cad05dae341158f" class="i field">_defaultSessionStateToUse</a> = <b>new</b> <span class="i">WeakReference</span>&lt;<a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>&gt;(<b>null</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor to be called when the wrapper is for an instance member method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="8c63c81377600099" href="../../../R/8c63c81377600099.html" target="n" data-glyph="74,1" class="t constructor">ScriptBlockMemberMethodWrapper</a>(<a href="../../parser/ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a> <span id="r7 rd" class="r7 r">ast</span>)
+        {
+            <a href="#f371bfc9b38b11f4" class="i field">_ast</a> = <span class="r7 r">ast</span>;
+            <span class="c">// This &#39;Lazy&lt;T&gt;&#39; constructor ensures that only a single thread can initialize the instance in a thread-safe manner.</span>
+            <a href="#45fae342441d535c" class="i field">_scriptBlock</a> = <b>new</b> <span class="i">Lazy</span>&lt;<a href="../../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt;(() =&gt; <b>new</b> <a href="../CompiledScriptBlock.cs.html#7c5e468d9c460238" class="t constructor">ScriptBlock</a>(<a href="#f371bfc9b38b11f4" class="i field">_ast</a>, <span class="r8 r">isFilter</span>: <b>false</b>));
+            <a href="#a2bc5e1c84e7d7e4" class="i field">_boundScriptBlock</a> = <b>new</b> <span class="i">ThreadLocal</span>&lt;<a href="../../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt;(() =&gt; <a href="#45fae342441d535c" class="i field">_scriptBlock</a>.<span class="i">Value</span>.<span class="i">Clone</span>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initialization happens when the script that defines PowerShell class is executed.</span>
+        <span class="c">///</span><span class="c"> This initialization is required only if this wrapper is for a static method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remark</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When the same script file gets executed multiple times, the .NET type generated from the PowerShell class</span>
+        <span class="c">///</span><span class="c"> defined in the file will be shared in those executions, and thus this method will be called multiple times</span>
+        <span class="c">///</span><span class="c"> possibly in the contexts of different Runspace/SessionState.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> We always use the SessionState from the most recent execution as the default SessionState, so be noted that</span>
+        <span class="c">///</span><span class="c"> the default SessionState may change over time.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This should be OK because the common usage is to run the static method in the same Runspace where the class</span>
+        <span class="c">///</span><span class="c"> is declared, and thus we can always get the correct SessionState to use by querying the &#39;SessionStateKeeper&#39;.</span>
+        <span class="c">///</span><span class="c"> The default SessionState is used only if a static method is called from a Runspace where the class is never</span>
+        <span class="c">///</span><span class="c"> defined, or is called on a thread without a default Runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remark</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="13a2b5f71ea1c8bb" href="../../../R/13a2b5f71ea1c8bb.html" target="n" data-glyph="74,1" class="i method">InitAtRuntime</a>()
+        {
+            <b>if</b> (<a href="#bb16eaba46c7bb6c" class="i field">_isStatic</a>)
+            {
+                <span class="c">// WeakReference&lt;T&gt;&#39;s instance methods are not thread-safe, so we need the lock to guarantee</span>
+                <span class="c">// &#39;SetTarget&#39; and &#39;TryGetTarget&#39; are not called by multiple threads at the same time.</span>
+                <b>lock</b> (<a href="#8cad05dae341158f" class="i field">_defaultSessionStateToUse</a>)
+                {
+                    <a href="../../ExecutionContext.cs.html#130bda5418e8559c" class="k">var</a> <span id="r9 rd" class="r9 r">context</span> = <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#efcd2ba43103de17" class="i property">DefaultRunspace</a>.<a href="../../hostifaces/Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a>;
+                    <a href="#8cad05dae341158f" class="i field">_defaultSessionStateToUse</a>.<span class="i">SetTarget</span>(<span class="r9 r">context</span>.<a href="../../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set the SessionState of the script block appropriately.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="ff047e71fa3d4b1a" href="../../../R/ff047e71fa3d4b1a.html" target="n" data-glyph="76,1" class="i method">PrepareScriptBlockToInvoke</a>(<b>object</b> <span id="r10 rd" class="r10 r">instance</span>, <b>object</b> <span id="r11 rd" class="r11 r">sessionStateInternal</span>)
+        {
+            <a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r12 rd" class="r12 r">sessionStateToUse</span> = <b>null</b>;
+            <b>if</b> (<span class="r10 r">instance</span> != <b>null</b>)
+            {
+                <span class="c">// Use the SessionState passed in, which is the one associated with the instance.</span>
+                <span class="r12 r">sessionStateToUse</span> = (<a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>)<span class="r11 r">sessionStateInternal</span>;
+            }
+            <b>else</b>
+            {
+                <span class="c">// For static method, it&#39;s a little complex.</span>
+                <span class="c">// - Check if the current default runspace is registered with the SessionStateKeeper. If so, use the registered SessionState.</span>
+                <span class="c">// - Otherwise, check if default SessionState is still alive. If so, use the default SessionState.</span>
+                <span class="c">// - Otherwise, the &#39;SessionStateInternal&#39; property will be set to null, and thus the default runspace of the current thread will be used.</span>
+                <span class="c">//              If the current thread doesn&#39;t have a default Runspace, then an InvalidOperationException will be thrown when invoking the</span>
+                <span class="c">//              script block, which is expected.</span>
+                <span class="r12 r">sessionStateToUse</span> = (<a href="../../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>)<a href="#691d1461567092c0" class="i field">_sessionStateKeeper</a>.<a href="#4be7289f486394ba" class="i method">GetSessionState</a>();
+                <b>if</b> (<span class="r12 r">sessionStateToUse</span> == <b>null</b>)
+                {
+                    <b>lock</b> (<a href="#8cad05dae341158f" class="i field">_defaultSessionStateToUse</a>)
+                    {
+                        <a href="#8cad05dae341158f" class="i field">_defaultSessionStateToUse</a>.<span class="i">TryGetTarget</span>(<b>out</b> <span class="r12 r">sessionStateToUse</span>);
+                    }
+                }
+            }
+ 
+            <a href="#a2bc5e1c84e7d7e4" class="i field">_boundScriptBlock</a>.<span class="i">Value</span>.<span class="i">SessionStateInternal</span> = <span class="r12 r">sessionStateToUse</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">instance</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Target object or null for static call.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">sessionStateInternal</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">SessionStateInternal from private field of instance or null for static call.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="b85a303e0f1f22a3" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">InvokeHelper</a>(<b>object</b> <span id="r13 rd" class="r13 r">instance</span>, <b>object</b> <span id="r14 rd" class="r14 r">sessionStateInternal</span>, <b>object</b>[] <span id="r15 rd" class="r15 r">args</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#ff047e71fa3d4b1a" class="i method">PrepareScriptBlockToInvoke</a>(<span class="r13 r">instance</span>, <span class="r14 r">sessionStateInternal</span>);
+                <a href="#a2bc5e1c84e7d7e4" class="i field">_boundScriptBlock</a>.<span class="i">Value</span>.<span class="i">InvokeAsMemberFunction</span>(<span class="r13 r">instance</span>, <span class="r15 r">args</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="c">// &#39;_boundScriptBlock.Value&#39; for a thread will live until</span>
+                <span class="c">//  - the thread is gone, OR</span>
+                <span class="c">//  - the dyanmic assembly holding this wrapper instance is GC collected.</span>
+                <span class="c">// We don&#39;t hold on the SessionState object, so that GC can collect it as appropriate.</span>
+                <a href="#a2bc5e1c84e7d7e4" class="i field">_boundScriptBlock</a>.<span class="i">Value</span>.<span class="i">SessionStateInternal</span> = <b>null</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">instance</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Target object or null for static call.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">sessionStateInternal</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">SessionStateInternal from private field of instance or null for static call.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="r16 r t">T</span> <a id="39ef95daf38e25c9" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">InvokeHelperT</a>&lt;<span id="r16 rd t" class="r16 r t">T</span>&gt;(<b>object</b> <span id="r17 rd" class="r17 r">instance</span>, <b>object</b> <span id="r18 rd" class="r18 r">sessionStateInternal</span>, <b>object</b>[] <span id="r19 rd" class="r19 r">args</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#ff047e71fa3d4b1a" class="i method">PrepareScriptBlockToInvoke</a>(<span class="r17 r">instance</span>, <span class="r18 r">sessionStateInternal</span>);
+                <b>return</b> <a href="#a2bc5e1c84e7d7e4" class="i field">_boundScriptBlock</a>.<span class="i">Value</span>.<span class="i">InvokeAsMemberFunctionT</span>&lt;<span class="r16 r t">T</span>&gt;(<span class="r17 r">instance</span>, <span class="r19 r">args</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="c">// &#39;_boundScriptBlock.Value&#39; for a thread will live until</span>
+                <span class="c">//  - the thread is gone, OR</span>
+                <span class="c">//  - the dyanmic assembly holding this wrapper instance is GC collected.</span>
+                <span class="c">// We don&#39;t hold on the SessionState object, so that GC can collect it as appropriate.</span>
+                <a href="#a2bc5e1c84e7d7e4" class="i field">_boundScriptBlock</a>.<span class="i">Value</span>.<span class="i">SessionStateInternal</span> = <b>null</b>;
+            }
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Support methods for PowerShell classes.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public static class</b> <a id="b0981b6177f8dc22" href="../../../R/b0981b6177f8dc22.html" target="n" data-glyph="0,0" class="t t">ClassOps</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method calls all Validate attributes for the property to validate value.</span>
+        <span class="c">///</span><span class="c"> Called from class property setters with ValidateArgumentsAttribute attributes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">type</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">propertyName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="f022f751c6458643" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ValidateSetProperty</a>(<span class="i">Type</span> <span id="r20 rd" class="r20 r">type</span>, <b>string</b> <span id="r21 rd" class="r21 r">propertyName</span>, <b>object</b> <span id="r22 rd" class="r22 r">value</span>)
+        {
+            <b>var</b> <span id="r23 rd" class="r23 r">validateAttributes</span> = <span class="r20 r">type</span>.<span class="i">GetProperty</span>(<span class="r21 r">propertyName</span>).<span class="i">GetCustomAttributes</span>&lt;<a href="../../Attributes.cs.html#f182d3d1083583da" class="t t">ValidateArgumentsAttribute</a>&gt;();
+            <a href="../../ExecutionContext.cs.html#130bda5418e8559c" class="k">var</a> <span id="r24 rd" class="r24 r">executionContext</span> = <a href="../../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            <a href="../../EngineIntrinsics.cs.html#e9f6dd7d61246066" class="k">var</a> <span id="r25 rd" class="r25 r">engineIntrinsics</span> = <span class="r24 r">executionContext</span>?.<a href="../../ExecutionContext.cs.html#27c4e82ba7216ff8" class="i property">EngineIntrinsics</a>;
+            <b>foreach</b> (<b>var</b> <span id="r26 rd" class="r26 r">validateAttribute</span> <b>in</b> <span class="r23 r">validateAttributes</span>)
+            {
+                <span class="r26 r">validateAttribute</span>.<span class="i">InternalValidate</span>(<span class="r22 r">value</span>, <span class="r25 r">engineIntrinsics</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Performs base ctor call as a method call.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">target</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Object for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">ci</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Ctor info for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Design&quot;</span>, <span class="s">&quot;CA1011:ConsiderPassingBaseTypesAsParameters&quot;</span>)]
+        <b>public static void</b> <a id="b6cce410ace6e89f" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">CallBaseCtor</a>(<b>object</b> <span id="r27 rd" class="r27 r">target</span>, <span class="i">ConstructorInfo</span> <span id="r28 rd" class="r28 r">ci</span>, <b>object</b>[] <span id="r29 rd" class="r29 r">args</span>)
+        {
+            <span class="r28 r">ci</span>.<span class="i">Invoke</span>(<span class="r27 r">target</span>, <span class="r29 r">args</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Performs non-virtual method call with return value. Main usage: base class method call inside subclass method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">target</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Object for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">mi</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Method info for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static object</b> <a id="28206baffe992fd1" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">CallMethodNonVirtually</a>(<b>object</b> <span id="r30 rd" class="r30 r">target</span>, <span class="i">MethodInfo</span> <span id="r31 rd" class="r31 r">mi</span>, <b>object</b>[] <span id="r32 rd" class="r32 r">args</span>)
+        {
+            <b>return</b> <a href="#aa8ffe3e58d020df" class="i method">CallMethodNonVirtuallyImpl</a>(<span class="r30 r">target</span>, <span class="r31 r">mi</span>, <span class="r32 r">args</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Performs non-virtual void method call. Main usage: base class method call inside subclass method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">target</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Object for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">mi</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Method info for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="2a54e0eb66c266b3" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">CallVoidMethodNonVirtually</a>(<b>object</b> <span id="r33 rd" class="r33 r">target</span>, <span class="i">MethodInfo</span> <span id="r34 rd" class="r34 r">mi</span>, <b>object</b>[] <span id="r35 rd" class="r35 r">args</span>)
+        {
+            <a href="#aa8ffe3e58d020df" class="i method">CallMethodNonVirtuallyImpl</a>(<span class="r33 r">target</span>, <span class="r34 r">mi</span>, <span class="r35 r">args</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A cache for the DynamicMethod objects that call to base method non-virtually.</span>
+        <span class="c">///</span><span class="c"> The cache can clean up the outdated WeakReference entries by itself.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static readonly</b> <span class="i">ConditionalWeakTable</span>&lt;<span class="i">MethodInfo</span>, <span class="i">DynamicMethod</span>&gt; <a id="6f6b962abd7165d8" href="../../../R/6f6b962abd7165d8.html" target="n" data-glyph="46,1" class="i field">s_nonVirtualCallCache</a> =
+            <b>new</b> <span class="i">ConditionalWeakTable</span>&lt;<span class="i">MethodInfo</span>, <span class="i">DynamicMethod</span>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Implementation of non-virtual method call.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">target</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Object for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">mi</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Method info for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments for invocation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static object</b> <a id="aa8ffe3e58d020df" href="../../../R/aa8ffe3e58d020df.html" target="n" data-glyph="76,1" class="i method">CallMethodNonVirtuallyImpl</a>(<b>object</b> <span id="r36 rd" class="r36 r">target</span>, <span class="i">MethodInfo</span> <span id="r37 rd" class="r37 r">mi</span>, <b>object</b>[] <span id="r38 rd" class="r38 r">args</span>)
+        {
+            <span class="i">DynamicMethod</span> <span id="r39 rd" class="r39 r">dm</span> = <a href="#6f6b962abd7165d8" class="i field">s_nonVirtualCallCache</a>.<span class="i">GetValue</span>(<span class="r37 r">mi</span>, <span class="i">CreateDynamicMethod</span>);
+ 
+            <span class="c">// The target object will be passed to the hidden parameter &#39;this&#39; of the instance method</span>
+            <b>var</b> <span id="r40 rd" class="r40 r">newArgs</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;(<span class="r38 r">args</span>.<span class="i">Length</span> + 1) { <span class="r36 r">target</span> };
+            <span class="r40 r">newArgs</span>.<span class="i">AddRange</span>(<span class="r38 r">args</span>);
+ 
+            <b>return</b> <span class="r39 r">dm</span>.<span class="i">Invoke</span>(<b>null</b>, <span class="r40 r">newArgs</span>.<span class="i">ToArray</span>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Help method to create the DynamicMethod for calling base method non-virtually.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">DynamicMethod</span> <a id="554c922f420ba720" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CreateDynamicMethod</a>(<span class="i">MethodInfo</span> <span id="r41 rd" class="r41 r">mi</span>)
+        {
+            <span class="c">// Pass in the declaring type because instance method has a hidden parameter &#39;this&#39; as the first parameter.</span>
+            <b>var</b> <span id="r42 rd" class="r42 r">paramTypes</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Type</span>&gt; { <span class="r41 r">mi</span>.<span class="i">DeclaringType</span> };
+            <span class="r42 r">paramTypes</span>.<span class="i">AddRange</span>(<span class="r41 r">mi</span>.<span class="i">GetParameters</span>().<span class="i">Select</span>(<b>static</b> <span id="r43 rd" class="r43 r">x</span> =&gt; <span class="r43 r">x</span>.<span class="i">ParameterType</span>));
+ 
+            <b>var</b> <span id="r44 rd" class="r44 r">dm</span> = <b>new</b> <span class="i">DynamicMethod</span>(<span class="s">&quot;PSNonVirtualCall_&quot;</span> + <span class="r41 r">mi</span>.<span class="i">Name</span>, <span class="r41 r">mi</span>.<span class="i">ReturnType</span>, <span class="r42 r">paramTypes</span>.<span class="i">ToArray</span>(), <span class="r41 r">mi</span>.<span class="i">DeclaringType</span>);
+            <span class="i">ILGenerator</span> <span id="r45 rd" class="r45 r">il</span> = <span class="r44 r">dm</span>.<span class="i">GetILGenerator</span>();
+            <b>for</b> (<b>int</b> <span id="r46 rd" class="r46 r">i</span> = 0; <span class="r46 r">i</span> &lt; <span class="r42 r">paramTypes</span>.<span class="i">Count</span>; <span class="r46 r">i</span>++)
+            {
+                <span class="r45 r">il</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg</span>, <span class="r46 r">i</span>);
+            }
+ 
+            <span class="r45 r">il</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Tailcall</span>);
+            <span class="r45 r">il</span>.<span class="i">EmitCall</span>(<span class="i">OpCodes</span>.<span class="i">Call</span>, <span class="r41 r">mi</span>, <b>null</b>);
+            <span class="r45 r">il</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ret</span>);
+ 
+            <b>return</b> <span class="r44 r">dm</span>;
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

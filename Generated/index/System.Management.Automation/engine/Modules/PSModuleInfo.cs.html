@@ -1,0 +1,1657 @@
+﻿<!DOCTYPE html>
+<html><head><title>PSModuleInfo.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(1648);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/Modules/PSModuleInfo.cs" target="_top">engine\Modules\PSModuleInfo.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Class describing a PowerShell module...</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="4885a82159eebf7b" href="../../R/4885a82159eebf7b.html" target="n" data-glyph="0,0" class="t t">PSModuleInfo</a>
+    {
+        <b>internal const string</b> <a id="7838f30a127deb92" href="../../R/7838f30a127deb92.html" target="n" data-glyph="8,1" class="i field">DynamicModulePrefixString</a> = <span class="s">&quot;__DynamicModule_&quot;</span>;
+ 
+        <b>private static readonly</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt; <a id="8609ce42b4e01c30" href="../../R/8609ce42b4e01c30.html" target="n" data-glyph="46,1" class="i field">s_emptyTypeDefinitionDictionary</a> =
+            <b>new</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;(<b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>));
+ 
+        <span class="c">// This dictionary doesn&#39;t include ExportedTypes from nested modules.</span>
+        <b>private</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt; <a id="de3c5d165aabe170" href="../../R/de3c5d165aabe170.html" target="n" data-glyph="106,1" class="i property">_exportedTypeDefinitionsNoNested</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>private static readonly</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt; <a id="2007073125ec06f4" href="../../R/2007073125ec06f4.html" target="n" data-glyph="46,1" class="i field">s_scriptModuleExtensions</a> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>)
+            {
+                <a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#d3eec386d080fd52" class="i field">PowerShellModuleFileExtension</a>,
+            };
+ 
+        <b>internal static void</b> <a id="e10cd99b3b4867fa" href="../../R/e10cd99b3b4867fa.html" target="n" data-glyph="74,1" class="i method">SetDefaultDynamicNameAndPath</a>(<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r0 rd" class="r0 r">module</span>)
+        {
+            <b>string</b> <span id="r1 rd" class="r1 r">gs</span> = <a href="#474060a313707f03" class="i property">Guid</a>.<span class="i">NewGuid</span>().<span class="i">ToString</span>();
+            <span class="r0 r">module</span>.<a href="#82fc7c994af5e4ca" class="i property">Path</a> = <span class="r1 r">gs</span>;
+            <span class="r0 r">module</span>.<a href="#19beded88c944eb9" class="i property">Name</a> = <span class="s">&quot;__DynamicModule_&quot;</span> + <span class="r1 r">gs</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This object describes a PowerShell module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The absolute path to the module.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The execution context for this engine instance.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">sessionState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module&#39;s sessionstate object - this may be null if the module is a dll.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="59ece63f8f427775" href="../../R/59ece63f8f427775.html" target="n" data-glyph="74,1" class="t constructor">PSModuleInfo</a>(<b>string</b> <span id="r2 rd" class="r2 r">path</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r3 rd" class="r3 r">context</span>, <a href="../SessionStatePublic.cs.html#0a202aa6b2d52930" class="t t">SessionState</a> <span id="r4 rd" class="r4 r">sessionState</span>)
+            : <a href="#82c685f79205f6f4" class="k">this</a>(<b>null</b>, <span class="r2 r">path</span>, <span class="r3 r">context</span>, <span class="r4 r">sessionState</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This object describes a PowerShell module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">name</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name to use for the module. If null, get it from the path name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The absolute path to the module.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The execution context for this engine instance.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">sessionState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module&#39;s sessionstate object - this may be null if the module is a dll.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">languageMode</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Language mode for script based modules.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="281e3e6d5e6fd712" href="../../R/281e3e6d5e6fd712.html" target="n" data-glyph="74,1" class="t constructor">PSModuleInfo</a>(<b>string</b> <span id="r5 rd" class="r5 r">name</span>, <b>string</b> <span id="r6 rd" class="r6 r">path</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r7 rd" class="r7 r">context</span>, <a href="../SessionStatePublic.cs.html#0a202aa6b2d52930" class="t t">SessionState</a> <span id="r8 rd" class="r8 r">sessionState</span>, <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>? <span id="r9 rd" class="r9 r">languageMode</span>)
+            : <a href="#82c685f79205f6f4" class="k">this</a>(<span class="r5 r">name</span>, <span class="r6 r">path</span>, <span class="r7 r">context</span>, <span class="r8 r">sessionState</span>)
+        {
+            <a href="#8c5e251e6d3f0c67" class="i property">LanguageMode</a> = <span class="r9 r">languageMode</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This object describes a PowerShell module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">name</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name to use for the module. If null, get it from the path name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The absolute path to the module.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The execution context for this engine instance.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">sessionState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module&#39;s sessionstate object - this may be null if the module is a dll.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="82c685f79205f6f4" href="../../R/82c685f79205f6f4.html" target="n" data-glyph="74,1" class="t constructor">PSModuleInfo</a>(<b>string</b> <span id="r10 rd" class="r10 r">name</span>, <b>string</b> <span id="r11 rd" class="r11 r">path</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r12 rd" class="r12 r">context</span>, <a href="../SessionStatePublic.cs.html#0a202aa6b2d52930" class="t t">SessionState</a> <span id="r13 rd" class="r13 r">sessionState</span>)
+        {
+            <b>if</b> (<span class="r11 r">path</span> != <b>null</b>)
+            {
+                <b>string</b> <span id="r14 rd" class="r14 r">resolvedPath</span> = <a href="ModuleCmdletBase.cs.html#0479f5f00c7dafc1" class="t t">ModuleCmdletBase</a>.<a href="ModuleCmdletBase.cs.html#7c03df577cede1d9" class="i method">GetResolvedPath</a>(<span class="r11 r">path</span>, <span class="r12 r">context</span>);
+                <span class="c">// The resolved path might be null if we&#39;re building a dynamic module and the path</span>
+                <span class="c">// is just a GUID, not an actual path that can be resolved.</span>
+                <a href="#82fc7c994af5e4ca" class="i property">Path</a> = <span class="r14 r">resolvedPath</span> ?? <span class="r11 r">path</span>;
+            }
+ 
+            <a href="#a04dda42fbcbc013" class="i property">SessionState</a> = <span class="r13 r">sessionState</span>;
+            <b>if</b> (<span class="r13 r">sessionState</span> != <b>null</b>)
+            {
+                <span class="r13 r">sessionState</span>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#1900efdc2f293d5a" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a>;
+            }
+ 
+            <span class="c">// Use the name of basename of the path as the module name if no module name is supplied.</span>
+            <a href="#19beded88c944eb9" class="i property">Name</a> = <span class="r10 r">name</span> ?? <a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#3b1c534a2c3e41b0" class="i method">GetModuleName</a>(<a href="#82fc7c994af5e4ca" class="i property">Path</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Default constructor to create an empty module info.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a id="939468f9df565a07" href="../../R/939468f9df565a07.html" target="n" data-glyph="72,1" class="t constructor">PSModuleInfo</a>(<b>bool</b> <span id="r15 rd" class="r15 r">linkToGlobal</span>)
+            : <a href="#e14c13371b49cb57" class="k">this</a>(<a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>(), <span class="r15 r">linkToGlobal</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Default constructor to create an empty module info.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="e14c13371b49cb57" href="../../R/e14c13371b49cb57.html" target="n" data-glyph="74,1" class="t constructor">PSModuleInfo</a>(<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r16 rd" class="r16 r">context</span>, <b>bool</b> <span id="r17 rd" class="r17 r">linkToGlobal</span>)
+        {
+            <b>if</b> (<span class="r16 r">context</span> == <b>null</b>)
+                <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<span class="s">&quot;PSModuleInfo&quot;</span>);
+ 
+            <a href="#e10cd99b3b4867fa" class="i method">SetDefaultDynamicNameAndPath</a>(<a href="#4885a82159eebf7b" class="k">this</a>);
+ 
+            <span class="c">// By default the top-level scope in a session state object is the global scope for the instance.</span>
+            <span class="c">// For modules, we need to set its global scope to be another scope object and, chain the top</span>
+            <span class="c">// level scope for this sessionstate instance to be the parent. The top level scope for this ss is the</span>
+            <span class="c">// script scope for the ss.</span>
+ 
+            <span class="c">// Allocate the session state instance for this module.</span>
+            <a href="#a04dda42fbcbc013" class="i property">SessionState</a> = <b>new</b> <a href="../SessionStatePublic.cs.html#b5c2a459b4a3ca3e" class="t constructor">SessionState</a>(<span class="r16 r">context</span>, <b>true</b>, <span class="r17 r">linkToGlobal</span>);
+            <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#1900efdc2f293d5a" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct a PSModuleInfo instance initializing it from a scriptblock instead of a script file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">scriptBlock</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The scriptblock to use to initialize the module.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="d1bbbbb3ad7df2ec" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">PSModuleInfo</a>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r18 rd" class="r18 r">scriptBlock</span>)
+        {
+            <b>if</b> (<span class="r18 r">scriptBlock</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r18 r">scriptBlock</span>));
+            }
+ 
+            <span class="c">// Get the ExecutionContext from the thread.</span>
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="k">var</a> <span id="r19 rd" class="r19 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+ 
+            <b>if</b> (<span class="r19 r">context</span> == <b>null</b>)
+                <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<span class="s">&quot;PSModuleInfo&quot;</span>);
+ 
+            <a href="#e10cd99b3b4867fa" class="i method">SetDefaultDynamicNameAndPath</a>(<a href="#4885a82159eebf7b" class="k">this</a>);
+ 
+            <span class="c">// By default the top-level scope in a session state object is the global scope for the instance.</span>
+            <span class="c">// For modules, we need to set its global scope to be another scope object and, chain the top</span>
+            <span class="c">// level scope for this sessionstate instance to be the parent. The top level scope for this ss is the</span>
+            <span class="c">// script scope for the ss.</span>
+ 
+            <span class="c">// Allocate the session state instance for this module.</span>
+            <a href="#a04dda42fbcbc013" class="i property">SessionState</a> = <b>new</b> <a href="../SessionStatePublic.cs.html#b5c2a459b4a3ca3e" class="t constructor">SessionState</a>(<span class="r19 r">context</span>, <b>true</b>, <b>true</b>);
+            <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#1900efdc2f293d5a" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a>;
+ 
+            <a href="#8c5e251e6d3f0c67" class="i property">LanguageMode</a> = <span class="r18 r">scriptBlock</span>.<a href="../lang/scriptblock.cs.html#5e76a9fb0d1a7f12" class="i property">LanguageMode</a>;
+ 
+            <span class="c">// Now set up the module&#39;s session state to be the current session state</span>
+            <a href="../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r20 rd" class="r20 r">oldSessionState</span> = <span class="r19 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>;
+            <b>try</b>
+            {
+                <span class="r19 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a> = <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>;
+ 
+                <span class="c">// Set the PSScriptRoot variable...</span>
+                <span class="r19 r">context</span>.<a href="../ExecutionContext.cs.html#fa7f7322f772be22" class="i method">SetVariable</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#a8821ffec06dcc10" class="i field">PSScriptRootVarPath</a>, <a href="#82fc7c994af5e4ca" class="i property">Path</a>);
+ 
+                <span class="r18 r">scriptBlock</span> = <span class="r18 r">scriptBlock</span>.<a href="../runtime/CompiledScriptBlock.cs.html#13c9ab07535d8eb6" class="i method">Clone</a>();
+                <span class="r18 r">scriptBlock</span>.<a href="../lang/scriptblock.cs.html#6359018e5b4473dd" class="i property">SessionState</a> = <a href="#a04dda42fbcbc013" class="i property">SessionState</a>;
+ 
+                <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r21 rd" class="r21 r">outputPipe</span> = <b>new</b> <a href="../Pipe.cs.html#c1592456b1ff42b5" class="t constructor">Pipe</a> { <a href="../Pipe.cs.html#8ef98c4ec55d7204" class="i property">NullPipe</a> = <b>true</b> };
+                <span class="c">// And run the scriptblock...</span>
+                <span class="r18 r">scriptBlock</span>.<a href="../lang/scriptblock.cs.html#79e4a92eda3f9883" class="i method">InvokeWithPipe</a>(
+                    <span class="r22 r">useLocalScope</span>: <b>false</b>,
+                    <span class="r23 r">errorHandlingBehavior</span>: <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../lang/scriptblock.cs.html#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="../lang/scriptblock.cs.html#5e78734ffe1c6ed3" class="i field">WriteToCurrentErrorPipe</a>,
+                    <span class="r24 r">dollarUnder</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                    <span class="r25 r">input</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                    <span class="r26 r">scriptThis</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                    <span class="r27 r">outputPipe</span>: <span class="r21 r">outputPipe</span>,
+                    <span class="r28 r">invocationInfo</span>: <b>null</b>
+                    );
+            }
+            <b>finally</b>
+            {
+                <span class="r19 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a> = <span class="r20 r">oldSessionState</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Specifies the language mode for script based modules.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>? <a id="8c5e251e6d3f0c67" href="../../R/8c5e251e6d3f0c67.html" target="n" data-glyph="104,1" class="i property">LanguageMode</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        } = <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>.<a href="../SessionStatePublic.cs.html#eec721eb8c02f156" class="i field">FullLanguage</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set to true when script module automatically exports all functions by default.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="5ee81439d2408c7e" href="../../R/5ee81439d2408c7e.html" target="n" data-glyph="104,1" class="i property">ModuleAutoExportsAllFunctions</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal bool</b> <a id="63ba862d617a4c16" href="../../R/63ba862d617a4c16.html" target="n" data-glyph="104,1" class="i property">ModuleHasPrivateMembers</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the module had errors during loading.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="e160146a2d150faf" href="../../R/e160146a2d150faf.html" target="n" data-glyph="104,1" class="i property">HadErrorsLoading</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ToString() implementation which returns the name of the module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The name of the module.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="3839b3125bdf7b48" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ToString</a>()
+        {
+            <b>return</b> <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#19beded88c944eb9" class="i property">Name</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get/set whether to log Pipeline Execution Detail events.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="6fe1eefd0a6636c9" href="../../R/6fe1eefd0a6636c9.html" target="n" data-glyph="102,1" class="i property">LogPipelineExecutionDetails</a> { <b>get</b>; <b>set</b>; } = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The name of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="19beded88c944eb9" href="../../R/19beded88c944eb9.html" target="n" data-glyph="102,1" class="i property">Name</a> { <b>get</b>; <b>private set</b>; } = <b>string</b>.<span class="i">Empty</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Sets the name property of the PSModuleInfo object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">name</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name to set it to.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="5e647bf2ada83d76" href="../../R/5e647bf2ada83d76.html" target="n" data-glyph="74,1" class="i method">SetName</a>(<b>string</b> <span id="r29 rd" class="r29 r">name</span>)
+        {
+            <a href="#19beded88c944eb9" class="i property">Name</a> = <span class="r29 r">name</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The path to the file that defined this module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="82fc7c994af5e4ca" href="../../R/82fc7c994af5e4ca.html" target="n" data-glyph="102,1" class="i property">Path</a> { <b>get</b>; <b>internal set</b>; } = <b>string</b>.<span class="i">Empty</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the module is a binary module or a script module that defines</span>
+        <span class="c">///</span><span class="c"> classes, this property if a reference to the assembly, otherwise</span>
+        <span class="c">///</span><span class="c"> it is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Assembly</span> <a id="7adbb859c851b2e4" href="../../R/7adbb859c851b2e4.html" target="n" data-glyph="102,1" class="i property">ImplementingAssembly</a> { <b>get</b>; <b>internal set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If this is a script module, then this property will contain</span>
+        <span class="c">///</span><span class="c"> the PowerShell source text that was used to define this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="17d8087345de4626" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Definition</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#388f5c7e062e76df" class="i field">_definitionExtent</a> == <b>null</b> ? <b>string</b>.<span class="i">Empty</span> : <a href="#388f5c7e062e76df" class="i field">_definitionExtent</a>.<a href="../parser/Position.cs.html#43ce932d9225bc9c" class="i property">Text</a>; }
+        }
+ 
+        <b>internal</b> <a href="../parser/Position.cs.html#bbc751d075344454" class="t t">IScriptExtent</a> <a id="388f5c7e062e76df" href="../../R/388f5c7e062e76df.html" target="n" data-glyph="44,1" class="i field">_definitionExtent</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A description of this module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="9b617cc3f69baa1e" href="../../R/9b617cc3f69baa1e.html" target="n" data-glyph="102,1" class="i property">Description</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#3e6230855c46f67b" class="i field">_description</a>; }
+ 
+            <b>set</b> { <a href="#3e6230855c46f67b" class="i field">_description</a> = <b>value</b> ?? <b>string</b>.<span class="i">Empty</span>; }
+        }
+ 
+        <b>private string</b> <a id="3e6230855c46f67b" href="../../R/3e6230855c46f67b.html" target="n" data-glyph="46,1" class="i field">_description</a> = <b>string</b>.<span class="i">Empty</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The guid for this module if one was defined in the module manifest.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Guid</span> <a id="474060a313707f03" href="../../R/474060a313707f03.html" target="n" data-glyph="102,1" class="i property">Guid</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <b>internal void</b> <a id="4b6e2a1b9b5b92c2" href="../../R/4b6e2a1b9b5b92c2.html" target="n" data-glyph="74,1" class="i method">SetGuid</a>(<span class="i">Guid</span> <span id="r30 rd" class="r30 r">guid</span>)
+        {
+            <a href="#474060a313707f03" class="i property">Guid</a> = <span class="r30 r">guid</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The HelpInfo for this module if one was defined in the module manifest.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Design&quot;</span>, <span class="s">&quot;CA1056:UriPropertiesShouldNotBeStrings&quot;</span>)]
+        <b>public string</b> <a id="31f7e13110eb6db0" href="../../R/31f7e13110eb6db0.html" target="n" data-glyph="102,1" class="i property">HelpInfoUri</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <b>internal bool</b> <a id="a7cf8f3895ca3a4a" href="../../R/a7cf8f3895ca3a4a.html" target="n" data-glyph="104,1" class="i property">IsWindowsPowerShellCompatModule</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal void</b> <a id="c345165f675110e2" href="../../R/c345165f675110e2.html" target="n" data-glyph="74,1" class="i method">SetHelpInfoUri</a>(<b>string</b> <span id="r31 rd" class="r31 r">uri</span>)
+        {
+            <a href="#31f7e13110eb6db0" class="i property">HelpInfoUri</a> = <span class="r31 r">uri</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the module base directory for this module. For modules loaded via a module</span>
+        <span class="c">///</span><span class="c"> manifest, this will be the directory containing the manifest file rather than</span>
+        <span class="c">///</span><span class="c"> the directory containing the actual module file. This is particularly useful</span>
+        <span class="c">///</span><span class="c"> when loading a GAC&#39;ed assembly.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="3c412fbb7362d7c7" href="../../R/3c412fbb7362d7c7.html" target="n" data-glyph="102,1" class="i property">ModuleBase</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#59a00dfc81bf447f" class="i field">_moduleBase</a> ??= !<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#82fc7c994af5e4ca" class="i property">Path</a>) ? <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">GetDirectoryName</span>(<a href="#82fc7c994af5e4ca" class="i property">Path</a>) : <b>string</b>.<span class="i">Empty</span>;
+            }
+        }
+ 
+        <b>internal void</b> <a id="9533dfb5c77bd95f" href="../../R/9533dfb5c77bd95f.html" target="n" data-glyph="74,1" class="i method">SetModuleBase</a>(<b>string</b> <span id="r32 rd" class="r32 r">moduleBase</span>)
+        {
+            <a href="#59a00dfc81bf447f" class="i field">_moduleBase</a> = <span class="r32 r">moduleBase</span>;
+        }
+ 
+        <b>private string</b> <a id="59a00dfc81bf447f" href="../../R/59a00dfc81bf447f.html" target="n" data-glyph="46,1" class="i field">_moduleBase</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This value is set from the PrivateData member in the module manifest.</span>
+        <span class="c">///</span><span class="c"> It allows implementor specific data to be passed to the module</span>
+        <span class="c">///</span><span class="c"> via the manifest file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public object</b> <a id="964f6cf27d5eeb00" href="../../R/964f6cf27d5eeb00.html" target="n" data-glyph="102,1" class="i property">PrivateData</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#b1f28f0207f0abdf" class="i field">_privateData</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#b1f28f0207f0abdf" class="i field">_privateData</a> = <b>value</b>;
+                <a href="#558ff44c194e45d7" class="i method">SetPSDataPropertiesFromPrivateData</a>();
+            }
+        }
+ 
+        <b>private object</b> <a id="b1f28f0207f0abdf" href="../../R/b1f28f0207f0abdf.html" target="n" data-glyph="46,1" class="i field">_privateData</a> = <b>null</b>;
+ 
+        <b>private void</b> <a id="558ff44c194e45d7" href="../../R/558ff44c194e45d7.html" target="n" data-glyph="76,1" class="i method">SetPSDataPropertiesFromPrivateData</a>()
+        {
+            <span class="c">// Reset the old values of PSData properties.</span>
+            <a href="#58aba859706c65c8" class="i field">_tags</a>.<span class="i">Clear</span>();
+            <a href="#bfe7a113afff1c03" class="i property">ReleaseNotes</a> = <b>null</b>;
+            <a href="#bcf842e072eb8f87" class="i property">LicenseUri</a> = <b>null</b>;
+            <a href="#747adfc27ee44685" class="i property">ProjectUri</a> = <b>null</b>;
+            <a href="#f7b5f1b9a36523eb" class="i property">IconUri</a> = <b>null</b>;
+ 
+            <b>if</b> (<a href="#b1f28f0207f0abdf" class="i field">_privateData</a> <b>is</b> <span class="i">Hashtable</span> <span id="r33 rd" class="r33 r">hashData</span> &amp;&amp; <span class="r33 r">hashData</span>[<span class="s">&quot;PSData&quot;</span>] <b>is</b> <span class="i">Hashtable</span> <span id="r34 rd" class="r34 r">psData</span>)
+            {
+                <b>var</b> <span id="r35 rd" class="r35 r">tagsValue</span> = <span class="r34 r">psData</span>[<span class="s">&quot;Tags&quot;</span>];
+                <b>if</b> (<span class="r35 r">tagsValue</span> <b>is object</b>[] <span id="r36 rd" class="r36 r">tags</span> &amp;&amp; <span class="r36 r">tags</span>.<span class="i">Length</span> &gt; 0)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r37 rd" class="r37 r">tagString</span> <b>in</b> <span class="r36 r">tags</span>.<span class="i">OfType</span>&lt;<b>string</b>&gt;())
+                    {
+                        <span class="i">AddToTags</span>(<span class="r37 r">tagString</span>);
+                    }
+                }
+                <b>else</b> <b>if</b> (<span class="r35 r">tagsValue</span> <b>is string</b> <span id="r38 rd" class="r38 r">tag</span>)
+                {
+                    <a href="#9e1a25f8d663174c" class="i method">AddToTags</a>(<span class="r38 r">tag</span>);
+                }
+ 
+                <b>if</b> (<span class="r34 r">psData</span>[<span class="s">&quot;LicenseUri&quot;</span>] <b>is string</b> <span id="r39 rd" class="r39 r">licenseUri</span>)
+                {
+                    <a href="#bcf842e072eb8f87" class="i property">LicenseUri</a> = <a href="#372bfc7548b5cf72" class="i method">GetUriFromString</a>(<span class="r39 r">licenseUri</span>);
+                }
+ 
+                <b>if</b> (<span class="r34 r">psData</span>[<span class="s">&quot;ProjectUri&quot;</span>] <b>is string</b> <span id="r40 rd" class="r40 r">projectUri</span>)
+                {
+                    <a href="#747adfc27ee44685" class="i property">ProjectUri</a> = <a href="#372bfc7548b5cf72" class="i method">GetUriFromString</a>(<span class="r40 r">projectUri</span>);
+                }
+ 
+                <b>if</b> (<span class="r34 r">psData</span>[<span class="s">&quot;IconUri&quot;</span>] <b>is string</b> <span id="r41 rd" class="r41 r">iconUri</span>)
+                {
+                    <a href="#f7b5f1b9a36523eb" class="i property">IconUri</a> = <a href="#372bfc7548b5cf72" class="i method">GetUriFromString</a>(<span class="r41 r">iconUri</span>);
+                }
+ 
+                <a href="#bfe7a113afff1c03" class="i property">ReleaseNotes</a> = <span class="r34 r">psData</span>[<span class="s">&quot;ReleaseNotes&quot;</span>] <b>as string</b>;
+            }
+        }
+ 
+        <b>private static</b> <span class="i">Uri</span> <a id="372bfc7548b5cf72" href="../../R/372bfc7548b5cf72.html" target="n" data-glyph="76,1" class="i method">GetUriFromString</a>(<b>string</b> <span id="r42 rd" class="r42 r">uriString</span>)
+        {
+            <span class="i">Uri</span> <span id="r43 rd" class="r43 r">uri</span> = <b>null</b>;
+            <b>if</b> (<span class="r42 r">uriString</span> != <b>null</b>)
+            {
+                <span class="c">// try creating the Uri object</span>
+                <span class="c">// Ignoring the return value from Uri.TryCreate(), as uri value will be null on false or valid uri object on true.</span>
+                <span class="i">Uri</span>.<span class="i">TryCreate</span>(<span class="r42 r">uriString</span>, <span class="i">UriKind</span>.<span class="i">Absolute</span>, <b>out</b> <span class="r43 r">uri</span>);
+            }
+ 
+            <b>return</b> <span class="r43 r">uri</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the experimental features declared in this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<a href="../ExperimentalFeature/ExperimentalFeature.cs.html#6626da1ebcb2b206" class="t t">ExperimentalFeature</a>&gt; <a id="b2a843972231de0a" href="../../R/b2a843972231de0a.html" target="n" data-glyph="102,1" class="i property">ExperimentalFeatures</a> { <b>get</b>; <b>internal set</b>; } = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#6addb097ebf2d60e" class="i method">EmptyReadOnlyCollection</a>&lt;<a href="../ExperimentalFeature/ExperimentalFeature.cs.html#6626da1ebcb2b206" class="t t">ExperimentalFeature</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Tags of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="ad3c3cb073f101e1" href="../../R/ad3c3cb073f101e1.html" target="n" data-glyph="102,1" class="i property">Tags</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#58aba859706c65c8" class="i field">_tags</a>; }
+        }
+ 
+        <b>private readonly</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="58aba859706c65c8" href="../../R/58aba859706c65c8.html" target="n" data-glyph="46,1" class="i field">_tags</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+ 
+        <b>internal void</b> <a id="9e1a25f8d663174c" href="../../R/9e1a25f8d663174c.html" target="n" data-glyph="74,1" class="i method">AddToTags</a>(<b>string</b> <span id="r44 rd" class="r44 r">tag</span>)
+        {
+            <a href="#58aba859706c65c8" class="i field">_tags</a>.<span class="i">Add</span>(<span class="r44 r">tag</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ProjectUri of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Uri</span> <a id="747adfc27ee44685" href="../../R/747adfc27ee44685.html" target="n" data-glyph="102,1" class="i property">ProjectUri</a> { <b>get</b>; <b>internal set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> IconUri of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Uri</span> <a id="f7b5f1b9a36523eb" href="../../R/f7b5f1b9a36523eb.html" target="n" data-glyph="102,1" class="i property">IconUri</a> { <b>get</b>; <b>internal set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LicenseUri of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Uri</span> <a id="bcf842e072eb8f87" href="../../R/bcf842e072eb8f87.html" target="n" data-glyph="102,1" class="i property">LicenseUri</a> { <b>get</b>; <b>internal set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ReleaseNotes of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="bfe7a113afff1c03" href="../../R/bfe7a113afff1c03.html" target="n" data-glyph="102,1" class="i property">ReleaseNotes</a> { <b>get</b>; <b>internal set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Repository SourceLocation of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Uri</span> <a id="b0cc1fefc6f988f8" href="../../R/b0cc1fefc6f988f8.html" target="n" data-glyph="102,1" class="i property">RepositorySourceLocation</a> { <b>get</b>; <b>internal set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The version of this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Version</span> <a id="bb592ab5243224bb" href="../../R/bb592ab5243224bb.html" target="n" data-glyph="102,1" class="i property">Version</a> { <b>get</b>; <b>private set</b>; } = <b>new</b> <span class="i">Version</span>(0, 0);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Sets the module version.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">version</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The version to set...</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="86de19074268f803" href="../../R/86de19074268f803.html" target="n" data-glyph="74,1" class="i method">SetVersion</a>(<span class="i">Version</span> <span id="r45 rd" class="r45 r">version</span>)
+        {
+            <a href="#bb592ab5243224bb" class="i property">Version</a> = <span class="r45 r">version</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the module was compiled (i.e. a .DLL) instead of</span>
+        <span class="c">///</span><span class="c"> being in PowerShell script...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="#c7db608d3be6a241" class="t t">ModuleType</a> <a id="67b7b84826910a13" href="../../R/67b7b84826910a13.html" target="n" data-glyph="102,1" class="i property">ModuleType</a> { <b>get</b>; <b>private set</b>; } = <a href="#c7db608d3be6a241" class="t t">ModuleType</a>.<a href="#15536cea81510839" class="i field">Script</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This this module as being a compiled module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="1f023afba84f0181" href="../../R/1f023afba84f0181.html" target="n" data-glyph="74,1" class="i method">SetModuleType</a>(<a href="#c7db608d3be6a241" class="t t">ModuleType</a> <span id="r46 rd" class="r46 r">moduleType</span>) { <a href="#67b7b84826910a13" class="i property">ModuleType</a> = <span class="r46 r">moduleType</span>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Module Author.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="5575df040d9e83ad" href="../../R/5575df040d9e83ad.html" target="n" data-glyph="102,1" class="i property">Author</a>
+        {
+            <b>get</b>; <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Controls the module access mode...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="#7988bbf518356b24" class="t t">ModuleAccessMode</a> <a id="09ac44907d839e91" href="../../R/09ac44907d839e91.html" target="n" data-glyph="102,1" class="i property">AccessMode</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#14b754f5cc6c7c4e" class="i field">_accessMode</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="#14b754f5cc6c7c4e" class="i field">_accessMode</a> == <a href="#7988bbf518356b24" class="t t">ModuleAccessMode</a>.<a href="#7cf5d9ea4767ce97" class="i field">Constant</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+ 
+                <a href="#14b754f5cc6c7c4e" class="i field">_accessMode</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private</b> <a href="#7988bbf518356b24" class="t t">ModuleAccessMode</a> <a id="14b754f5cc6c7c4e" href="../../R/14b754f5cc6c7c4e.html" target="n" data-glyph="46,1" class="i field">_accessMode</a> = <a href="#7988bbf518356b24" class="t t">ModuleAccessMode</a>.<a href="#7962ff912008860f" class="i field">ReadWrite</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> CLR Version.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Version</span> <a id="9102cf9f060d4060" href="../../R/9102cf9f060d4060.html" target="n" data-glyph="102,1" class="i property">ClrVersion</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Company Name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="5712d91db996f4b9" href="../../R/5712d91db996f4b9.html" target="n" data-glyph="102,1" class="i property">CompanyName</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Copyright.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="f874db839f072c87" href="../../R/f874db839f072c87.html" target="n" data-glyph="102,1" class="i property">Copyright</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> .NET Framework Version.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Version</span> <a id="b02be56548e4c3c7" href="../../R/b02be56548e4c3c7.html" target="n" data-glyph="102,1" class="i property">DotNetFrameworkVersion</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <b>internal</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="563d276b2d63feda" href="../../R/563d276b2d63feda.html" target="n" data-glyph="44,1" class="i field">DeclaredFunctionExports</a> = <b>null</b>;
+        <b>internal</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="3c033ee6fd121e5a" href="../../R/3c033ee6fd121e5a.html" target="n" data-glyph="44,1" class="i field">DeclaredCmdletExports</a> = <b>null</b>;
+        <b>internal</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="73ffedf722a35065" href="../../R/73ffedf722a35065.html" target="n" data-glyph="44,1" class="i field">DeclaredAliasExports</a> = <b>null</b>;
+        <b>internal</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="73b386e1f1d9f46c" href="../../R/73b386e1f1d9f46c.html" target="n" data-glyph="44,1" class="i field">DeclaredVariableExports</a> = <b>null</b>;
+ 
+        <b>internal</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="65d67455dc852b54" href="../../R/65d67455dc852b54.html" target="n" data-glyph="44,1" class="i field">DetectedFunctionExports</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+        <b>internal</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="ce6f9af141ce43ab" href="../../R/ce6f9af141ce43ab.html" target="n" data-glyph="44,1" class="i field">DetectedCmdletExports</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+        <b>internal</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <a id="a3ce3f0c83627aa9" href="../../R/a3ce3f0c83627aa9.html" target="n" data-glyph="44,1" class="i field">DetectedAliasExports</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lists the functions exported by this module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a>&gt; <a id="2faddd301cf044c5" href="../../R/2faddd301cf044c5.html" target="n" data-glyph="102,1" class="i property">ExportedFunctions</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a>&gt; <span id="r47 rd" class="r47 r">exports</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+                <span class="c">// If the module is not binary, it may also have functions...</span>
+                <b>if</b> (<a href="#563d276b2d63feda" class="i field">DeclaredFunctionExports</a> != <b>null</b>)
+                {
+                    <b>if</b> (<a href="#563d276b2d63feda" class="i field">DeclaredFunctionExports</a>.<span class="i">Count</span> == 0) { <b>return</b> <span class="r47 r">exports</span>; }
+ 
+                    <b>foreach</b> (<b>string</b> <span id="r48 rd" class="r48 r">fn</span> <b>in</b> <a href="#563d276b2d63feda" class="i field">DeclaredFunctionExports</a>)
+                    {
+                        <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a> <span id="r49 rd" class="r49 r">tempFunction</span> = <b>new</b> <a href="../FunctionInfo.cs.html#daf907e5a42ad149" class="t constructor">FunctionInfo</a>(<span class="r48 r">fn</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <b>null</b>) { <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a> };
+                        <span class="r47 r">exports</span>[<span class="r48 r">fn</span>] = <span class="r49 r">tempFunction</span>;
+                    }
+                }
+                <b>else</b> <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> != <b>null</b>)
+                {
+                    <span class="c">// If there is no session state object associated with this list,</span>
+                    <span class="c">// just return a null list of exports...</span>
+                    <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateFunctionAPIs.cs.html#1d2490e3ba3a324b" class="i property">ExportedFunctions</a> != <b>null</b>)
+                    {
+                        <b>foreach</b> (<a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a> <span id="r50 rd" class="r50 r">fi</span> <b>in</b> <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateFunctionAPIs.cs.html#1d2490e3ba3a324b" class="i property">ExportedFunctions</a>)
+                        {
+                            <b>if</b> (!<span class="r47 r">exports</span>.<span class="i">ContainsKey</span>(<span class="r50 r">fi</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>))
+                            {
+                                <span class="r47 r">exports</span>[<a href="ModuleCmdletBase.cs.html#0479f5f00c7dafc1" class="t t">ModuleCmdletBase</a>.<a href="ModuleCmdletBase.cs.html#589040fe58a3c16e" class="i method">AddPrefixToCommandName</a>(<span class="r50 r">fi</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>, <span class="r50 r">fi</span>.<a href="../CommandInfo.cs.html#48e9ebf217764505" class="i property">Prefix</a>)] = <span class="r50 r">fi</span>;
+                            }
+                        }
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r51 rd" class="r51 r">detectedExport</span> <b>in</b> <a href="#65d67455dc852b54" class="i field">DetectedFunctionExports</a>)
+                    {
+                        <b>if</b> (!<span class="r47 r">exports</span>.<span class="i">ContainsKey</span>(<span class="r51 r">detectedExport</span>))
+                        {
+                            <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a> <span id="r52 rd" class="r52 r">tempFunction</span> = <b>new</b> <span class="t">FunctionInfo</span>(<span class="r51 r">detectedExport</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <b>null</b>) { <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a> };
+                            <span class="r47 r">exports</span>[<span class="r51 r">detectedExport</span>] = <span class="r52 r">tempFunction</span>;
+                        }
+                    }
+                }
+ 
+                <b>return</b> <span class="r47 r">exports</span>;
+            }
+        }
+ 
+        <b>private static bool</b> <a id="e59c1d5809814b4c" href="../../R/e59c1d5809814b4c.html" target="n" data-glyph="76,1" class="i method">IsScriptModuleFile</a>(<b>string</b> <span id="r53 rd" class="r53 r">path</span>)
+        {
+            <b>var</b> <span id="r54 rd" class="r54 r">ext</span> = <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">Path</span>.<span class="i">GetExtension</span>(<span class="r53 r">path</span>);
+            <b>return</b> <span class="r54 r">ext</span> != <b>null</b> &amp;&amp; <a href="#2007073125ec06f4" class="i field">s_scriptModuleExtensions</a>.<span class="i">Contains</span>(<span class="r54 r">ext</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lists the types (PowerShell classes, enums, interfaces) exported by this module.</span>
+        <span class="c">///</span><span class="c"> This returns ASTs for types, created in parse time.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt; <a id="7d3f55f45bfcc4cc" href="../../R/7d3f55f45bfcc4cc.html" target="n" data-glyph="72,1" class="i method">GetExportedTypeDefinitions</a>()
+        {
+            <span class="c">// We cache exported types from this modules, but not from nestedModules,</span>
+            <span class="c">// because we may not have NestedModules list populated on the first call.</span>
+            <span class="c">// TODO(sevoroby): it may harm perf a little bit. Can we sort it out?</span>
+ 
+            <b>if</b> (<a href="#de3c5d165aabe170" class="i property">_exportedTypeDefinitionsNoNested</a> == <b>null</b>)
+            {
+                <b>string</b> <span id="r55 rd" class="r55 r">rootedPath</span> = <b>null</b>;
+                <b>if</b> (<a href="#1d8575eacaa7f07f" class="i property">RootModule</a> == <b>null</b>)
+                {
+                    <b>if</b> (<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#82fc7c994af5e4ca" class="i property">Path</a> != <b>null</b>)
+                    {
+                        <span class="r55 r">rootedPath</span> = <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#82fc7c994af5e4ca" class="i property">Path</a>;
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="r55 r">rootedPath</span> = <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">Combine</span>(<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#3c412fbb7362d7c7" class="i property">ModuleBase</a>, <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#1d8575eacaa7f07f" class="i property">RootModule</a>);
+                }
+ 
+                <span class="c">// ExternalScriptInfo.GetScriptBlockAst() uses a cache layer to avoid re-parsing.</span>
+                <a href="#2a76bc9a1c530a4a" class="i method">CreateExportedTypeDefinitions</a>(<span class="r55 r">rootedPath</span> != <b>null</b> &amp;&amp; <a href="#e59c1d5809814b4c" class="i method">IsScriptModuleFile</a>(<span class="r55 r">rootedPath</span>) &amp;&amp; <span class="i">IO</span>.<span class="i">File</span>.<span class="i">Exists</span>(<span class="r55 r">rootedPath</span>) ?
+                    (<b>new</b> <a href="../ExternalScriptInfo.cs.html#12b68b14765ad8b7" class="t constructor">ExternalScriptInfo</a>(<span class="r55 r">rootedPath</span>, <span class="r55 r">rootedPath</span>)).<a href="../ExternalScriptInfo.cs.html#64095d3798f7f96a" class="i method">GetScriptBlockAst</a>() : <b>null</b>);
+            }
+ 
+            <b>var</b> <span id="r56 rd" class="r56 r">res</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+            <b>foreach</b> (<b>var</b> <span id="r57 rd" class="r57 r">nestedModule</span> <b>in</b> <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#f1459faf08e930a8" class="i property">NestedModules</a>)
+            {
+                <b>if</b> (<span class="r57 r">nestedModule</span> == <a href="#4885a82159eebf7b" class="k">this</a>)
+                {
+                    <span class="c">// Circular nested modules could happen with ill-organized module structure.</span>
+                    <span class="c">// For example, module folder &#39;test&#39; has two files: &#39;test.psd1&#39; and &#39;test.psm1&#39;, and &#39;test.psd1&#39; has the following content:</span>
+                    <span class="c">//    &quot;@{ ModuleVersion = &#39;0.0.1&#39;; RootModule = &#39;test&#39;; NestedModules = @(&#39;test&#39;) }&quot;</span>
+                    <span class="c">// Then, &#39;Import-Module test.psd1 -PassThru&#39; will return a ModuleInfo object with circular nested modules.</span>
+                    <b>continue</b>;
+                }
+ 
+                <b>foreach</b> (<b>var</b> <span id="r58 rd" class="r58 r">typePairs</span> <b>in</b> <span class="r57 r">nestedModule</span>.<span class="i">GetExportedTypeDefinitions</span>())
+                {
+                    <span class="c">// The last one name wins! It&#39;s the same for command names in nested modules.</span>
+                    <span class="c">// For rootModule C with Two nested modules (A, B) the order is: A, B, C</span>
+                    <span class="r56 r">res</span>[<span class="r58 r">typePairs</span>.<span class="i">Key</span>] = <span class="r58 r">typePairs</span>.<span class="i">Value</span>;
+                }
+            }
+ 
+            <b>foreach</b> (<b>var</b> <span id="r59 rd" class="r59 r">typePairs</span> <b>in</b> <a href="#de3c5d165aabe170" class="i property">_exportedTypeDefinitionsNoNested</a>)
+            {
+                <span class="r56 r">res</span>[<span class="r59 r">typePairs</span>.<span class="i">Key</span>] = <span class="r59 r">typePairs</span>.<span class="i">Value</span>;
+            }
+ 
+            <b>return</b> <b>new</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;(<span class="r56 r">res</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create ExportedTypeDefinitions from ast.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">moduleContentScriptBlockAsts</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="2a76bc9a1c530a4a" href="../../R/2a76bc9a1c530a4a.html" target="n" data-glyph="74,1" class="i method">CreateExportedTypeDefinitions</a>(<a href="../parser/ast.cs.html#6f963589327835a4" class="t t">ScriptBlockAst</a> <span id="r60 rd" class="r60 r">moduleContentScriptBlockAsts</span>)
+        {
+            <b>if</b> (<span class="r60 r">moduleContentScriptBlockAsts</span> == <b>null</b>)
+            {
+                <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#de3c5d165aabe170" class="i property">_exportedTypeDefinitionsNoNested</a> = <a href="#8609ce42b4e01c30" class="i field">s_emptyTypeDefinitionDictionary</a>;
+            }
+            <b>else</b>
+            {
+                <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#de3c5d165aabe170" class="i property">_exportedTypeDefinitionsNoNested</a> = <b>new</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;(
+                    <span class="r60 r">moduleContentScriptBlockAsts</span>.<span class="i">FindAll</span>(<b>static</b> <span id="r61 rd" class="r61 r">a</span> =&gt; (<span class="r61 r">a</span> <b>is</b> <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>), <b>false</b>)
+                        .<span class="i">OfType</span>&lt;<a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;()
+                        .<span class="i">ToDictionary</span>(<b>static</b> <span id="r62 rd" class="r62 r">a</span> =&gt; <span class="r62 r">a</span>.<span class="i">Name</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>));
+            }
+        }
+ 
+        <b>internal void</b> <a id="2c2bd915b7feab1a" href="../../R/2c2bd915b7feab1a.html" target="n" data-glyph="74,1" class="i method">AddDetectedTypeExports</a>(<span class="i">List</span>&lt;<a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt; <span id="r63 rd" class="r63 r">typeDefinitions</span>)
+        {
+            <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#de3c5d165aabe170" class="i property">_exportedTypeDefinitionsNoNested</a> = <b>new</b> <span class="i">ReadOnlyDictionary</span>&lt;<b>string</b>, <a href="../parser/ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;(
+                <span class="r63 r">typeDefinitions</span>.<span class="i">ToDictionary</span>(<b>static</b> <span id="r64 rd" class="r64 r">a</span> =&gt; <span class="r64 r">a</span>.<span class="i">Name</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Prefix.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="50046b8fca919b99" href="../../R/50046b8fca919b99.html" target="n" data-glyph="102,1" class="i property">Prefix</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add function to the fixed exports list.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">name</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The function to add.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="da6b3bbed9e6a774" href="../../R/da6b3bbed9e6a774.html" target="n" data-glyph="74,1" class="i method">AddDetectedFunctionExport</a>(<b>string</b> <span id="r65 rd" class="r65 r">name</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r65 r">name</span> != <b>null</b>, <span class="s">&quot;AddDetectedFunctionExport should not be called with a null value&quot;</span>);
+ 
+            <b>if</b> (!<a href="#65d67455dc852b54" class="i field">DetectedFunctionExports</a>.<span class="i">Contains</span>(<span class="r65 r">name</span>))
+            {
+                <a href="#65d67455dc852b54" class="i field">DetectedFunctionExports</a>.<span class="i">Add</span>(<span class="r65 r">name</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lists the functions exported by this module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt; <a id="7afed1303b45c0b4" href="../../R/7afed1303b45c0b4.html" target="n" data-glyph="102,1" class="i property">ExportedCmdlets</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt; <span id="r66 rd" class="r66 r">exports</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+                <b>if</b> (<a href="#3c033ee6fd121e5a" class="i field">DeclaredCmdletExports</a> != <b>null</b>)
+                {
+                    <b>if</b> (<a href="#3c033ee6fd121e5a" class="i field">DeclaredCmdletExports</a>.<span class="i">Count</span> == 0) { <b>return</b> <span class="r66 r">exports</span>; }
+ 
+                    <b>foreach</b> (<b>string</b> <span id="r67 rd" class="r67 r">fn</span> <b>in</b> <a href="#3c033ee6fd121e5a" class="i field">DeclaredCmdletExports</a>)
+                    {
+                        <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r68 rd" class="r68 r">tempCmdlet</span> = <b>new</b> <a href="../CmdletInfo.cs.html#cdd24b9416013a7d" class="t constructor">CmdletInfo</a>(<span class="r67 r">fn</span>, <b>null</b>, <b>null</b>, <b>null</b>, <b>null</b>) { <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a> };
+                        <span class="r66 r">exports</span>[<span class="r67 r">fn</span>] = <span class="r68 r">tempCmdlet</span>;
+                    }
+                }
+                <b>else</b> <b>if</b> ((<a href="#efe3e67f5284ef89" class="i property">CompiledExports</a> != <b>null</b>) &amp;&amp; (<a href="#efe3e67f5284ef89" class="i property">CompiledExports</a>.<span class="i">Count</span> &gt; 0))
+                {
+                    <b>foreach</b> (<a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r69 rd" class="r69 r">cmdlet</span> <b>in</b> <a href="#efe3e67f5284ef89" class="i property">CompiledExports</a>)
+                    {
+                        <span class="r66 r">exports</span>[<span class="r69 r">cmdlet</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>] = <span class="r69 r">cmdlet</span>;
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r70 rd" class="r70 r">detectedExport</span> <b>in</b> <a href="#ce6f9af141ce43ab" class="i field">DetectedCmdletExports</a>)
+                    {
+                        <b>if</b> (!<span class="r66 r">exports</span>.<span class="i">ContainsKey</span>(<span class="r70 r">detectedExport</span>))
+                        {
+                            <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r71 rd" class="r71 r">tempCmdlet</span> = <b>new</b> <a href="../CmdletInfo.cs.html#cdd24b9416013a7d" class="t constructor">CmdletInfo</a>(<span class="r70 r">detectedExport</span>, <b>null</b>, <b>null</b>, <b>null</b>, <b>null</b>) { <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a> };
+                            <span class="r66 r">exports</span>[<span class="r70 r">detectedExport</span>] = <span class="r71 r">tempCmdlet</span>;
+                        }
+                    }
+                }
+ 
+                <b>return</b> <span class="r66 r">exports</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add CmdletInfo to the fixed exports list...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r72 r">cmdlet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The cmdlet to add...</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="7b16924d44edf912" href="../../R/7b16924d44edf912.html" target="n" data-glyph="74,1" class="i method">AddDetectedCmdletExport</a>(<b>string</b> <span id="r72 rd" class="r72 r">cmdlet</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r72 r">cmdlet</span> != <b>null</b>, <span class="s">&quot;AddDetectedCmdletExport should not be called with a null value&quot;</span>);
+ 
+            <b>if</b> (!<a href="#ce6f9af141ce43ab" class="i field">DetectedCmdletExports</a>.<span class="i">Contains</span>(<span class="r72 r">cmdlet</span>))
+            {
+                <a href="#ce6f9af141ce43ab" class="i field">DetectedCmdletExports</a>.<span class="i">Add</span>(<span class="r72 r">cmdlet</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the aggregated list of visible commands exported from the module. If there are two</span>
+        <span class="c">///</span><span class="c"> commands of different types exported with the same name (e.g. alias &#39;foo&#39; and cmdlet &#39;foo&#39;) the</span>
+        <span class="c">///</span><span class="c"> combined dictionary will only contain the highest precedence cmdlet (e.g. the alias &#39;foo&#39; since</span>
+        <span class="c">///</span><span class="c"> aliases shadow cmdlets.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a>&gt; <a id="032fe7ae84c51dab" href="../../R/032fe7ae84c51dab.html" target="n" data-glyph="102,1" class="i property">ExportedCommands</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a>&gt; <span id="r73 rd" class="r73 r">exports</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt; <span id="r74 rd" class="r74 r">cmdlets</span> = <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#7afed1303b45c0b4" class="i property">ExportedCmdlets</a>;
+                <b>if</b> (<span class="r74 r">cmdlets</span> != <b>null</b>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r75 rd" class="r75 r">cmdlet</span> <b>in</b> <span class="r74 r">cmdlets</span>)
+                    {
+                        <span class="r73 r">exports</span>[<span class="r75 r">cmdlet</span>.<span class="i">Key</span>] = <span class="r75 r">cmdlet</span>.<span class="i">Value</span>;
+                    }
+                }
+ 
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a>&gt; <span id="r76 rd" class="r76 r">functions</span> = <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#2faddd301cf044c5" class="i property">ExportedFunctions</a>;
+                <b>if</b> (<span class="r76 r">functions</span> != <b>null</b>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r77 rd" class="r77 r">function</span> <b>in</b> <span class="r76 r">functions</span>)
+                    {
+                        <span class="r73 r">exports</span>[<span class="r77 r">function</span>.<span class="i">Key</span>] = <span class="r77 r">function</span>.<span class="i">Value</span>;
+                    }
+                }
+ 
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a>&gt; <span id="r78 rd" class="r78 r">aliases</span> = <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#992cd7d7155ed907" class="i property">ExportedAliases</a>;
+                <b>if</b> (<span class="r78 r">aliases</span> != <b>null</b>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r79 rd" class="r79 r">alias</span> <b>in</b> <span class="r78 r">aliases</span>)
+                    {
+                        <span class="r73 r">exports</span>[<span class="r79 r">alias</span>.<span class="i">Key</span>] = <span class="r79 r">alias</span>.<span class="i">Value</span>;
+                    }
+                }
+ 
+                <b>return</b> <span class="r73 r">exports</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add CmdletInfo to the fixed exports list...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">cmdlet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The cmdlet to add...</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="00c08690ec7bebe4" href="../../R/00c08690ec7bebe4.html" target="n" data-glyph="74,1" class="i method">AddExportedCmdlet</a>(<a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r80 rd" class="r80 r">cmdlet</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r80 r">cmdlet</span> != <b>null</b>, <span class="s">&quot;AddExportedCmdlet should not be called with a null value&quot;</span>);
+            <a href="#be3fbcc512590374" class="i field">_compiledExports</a>.<span class="i">Add</span>(<span class="r80 r">cmdlet</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return the merged list of exported cmdlets. This is necessary</span>
+        <span class="c">///</span><span class="c"> because you may have a binary module with nested modules where</span>
+        <span class="c">///</span><span class="c"> some cmdlets come from the module and others come from the nested</span>
+        <span class="c">///</span><span class="c"> module. We need to consolidate the list so it can properly be constrained.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">List</span>&lt;<a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt; <a id="efe3e67f5284ef89" href="../../R/efe3e67f5284ef89.html" target="n" data-glyph="104,1" class="i property">CompiledExports</a>
+        {
+            <b>get</b>
+            {
+                <span class="c">// If this module has a session state instance and there are any</span>
+                <span class="c">// exported cmdlets in the session state, migrate them to the</span>
+                <span class="c">// module info _compiledCmdlets entry.</span>
+                <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> != <b>null</b> &amp;&amp; <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#51f4f7bc9645d49d" class="i property">ExportedCmdlets</a> != <b>null</b> &amp;&amp;
+                    <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#51f4f7bc9645d49d" class="i property">ExportedCmdlets</a>.<span class="i">Count</span> &gt; 0)
+                {
+                    <b>foreach</b> (<a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r81 rd" class="r81 r">ci</span> <b>in</b> <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#51f4f7bc9645d49d" class="i property">ExportedCmdlets</a>)
+                    {
+                        <a href="#be3fbcc512590374" class="i field">_compiledExports</a>.<span class="i">Add</span>(<span class="r81 r">ci</span>);
+                    }
+ 
+                    <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#51f4f7bc9645d49d" class="i property">ExportedCmdlets</a>.<span class="i">Clear</span>();
+                }
+ 
+                <b>return</b> <a href="#be3fbcc512590374" class="i field">_compiledExports</a>;
+            }
+        }
+ 
+        <b>private readonly</b> <span class="i">List</span>&lt;<a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt; <a id="be3fbcc512590374" href="../../R/be3fbcc512590374.html" target="n" data-glyph="46,1" class="i field">_compiledExports</a> = <b>new</b> <span class="i">List</span>&lt;<a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add AliasInfo to the fixed exports list...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r82 r">aliasInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The cmdlet to add...</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="f48a9502454a0a85" href="../../R/f48a9502454a0a85.html" target="n" data-glyph="74,1" class="i method">AddExportedAlias</a>(<a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a> <span id="r82 rd" class="r82 r">aliasInfo</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r82 r">aliasInfo</span> != <b>null</b>, <span class="s">&quot;AddExportedAlias should not be called with a null value&quot;</span>);
+            <a href="#aaa486cc66863e15" class="i property">CompiledAliasExports</a>.<span class="i">Add</span>(<span class="r82 r">aliasInfo</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return the merged list of exported aliases. This is necessary</span>
+        <span class="c">///</span><span class="c"> because you may have a binary module with nested modules where</span>
+        <span class="c">///</span><span class="c"> some aliases come from the module and others come from the nested</span>
+        <span class="c">///</span><span class="c"> module. We need to consolidate the list so it can properly be constrained.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">List</span>&lt;<a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a>&gt; <a id="aaa486cc66863e15" href="../../R/aaa486cc66863e15.html" target="n" data-glyph="104,1" class="i property">CompiledAliasExports</a> { <b>get</b>; } = <b>new</b> <span class="i">List</span>&lt;<a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> FileList.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="381d211036760344" href="../../R/381d211036760344.html" target="n" data-glyph="102,1" class="i property">FileList</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#e824efbb2b2810da" class="i field">_fileList</a>; }
+        }
+ 
+        <b>private</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="e824efbb2b2810da" href="../../R/e824efbb2b2810da.html" target="n" data-glyph="46,1" class="i field">_fileList</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+ 
+        <b>internal void</b> <a id="52b424e50f8f0086" href="../../R/52b424e50f8f0086.html" target="n" data-glyph="74,1" class="i method">AddToFileList</a>(<b>string</b> <span id="r83 rd" class="r83 r">file</span>)
+        {
+            <a href="#e824efbb2b2810da" class="i field">_fileList</a>.<span class="i">Add</span>(<span class="r83 r">file</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lists the PowerShell editions this module is compatible with. This should</span>
+        <span class="c">///</span><span class="c"> reflect the module manifest the module was loaded with, or if no manifest was given</span>
+        <span class="c">///</span><span class="c"> or the key was not in the manifest, this should be an empty collection. This</span>
+        <span class="c">///</span><span class="c"> property is never null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="b7497b7e6a83b314" href="../../R/b7497b7e6a83b314.html" target="n" data-glyph="102,1" class="i property">CompatiblePSEditions</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#58ed3f1481c6310d" class="i field">_compatiblePSEditions</a>; }
+        }
+ 
+        <b>private readonly</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="58ed3f1481c6310d" href="../../R/58ed3f1481c6310d.html" target="n" data-glyph="46,1" class="i field">_compatiblePSEditions</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+ 
+        <b>internal void</b> <a id="9fd61d133adc06df" href="../../R/9fd61d133adc06df.html" target="n" data-glyph="74,1" class="i method">AddToCompatiblePSEditions</a>(<b>string</b> <span id="r84 rd" class="r84 r">psEdition</span>)
+        {
+            <a href="#58ed3f1481c6310d" class="i field">_compatiblePSEditions</a>.<span class="i">Add</span>(<span class="r84 r">psEdition</span>);
+        }
+ 
+        <b>internal void</b> <a id="43fca8078e8b31b4" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">AddToCompatiblePSEditions</a>(<span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r85 rd" class="r85 r">psEditions</span>)
+        {
+            <a href="#58ed3f1481c6310d" class="i field">_compatiblePSEditions</a>.<span class="i">AddRange</span>(<span class="r85 r">psEditions</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Describes whether the module was considered compatible at load time.</span>
+        <span class="c">///</span><span class="c"> Any module not on the System32 module path should have this as true.</span>
+        <span class="c">///</span><span class="c"> Modules loaded from the System32 module path will have this as true if they</span>
+        <span class="c">///</span><span class="c"> have declared edition compatibility with PowerShell 6+. Currently, this field</span>
+        <span class="c">///</span><span class="c"> is true for all non-psd1 module files, when it should not be. Being able to</span>
+        <span class="c">///</span><span class="c"> load psm1/dll modules from the System32 module path without needing to skip</span>
+        <span class="c">///</span><span class="c"> the edition check is considered a bug and should be fixed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="49109b84a960dd4e" href="../../R/49109b84a960dd4e.html" target="n" data-glyph="104,1" class="i property">IsConsideredEditionCompatible</a> { <b>get</b>; <b>set</b>; } = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ModuleList.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<b>object</b>&gt; <a id="06a6accd9696335e" href="../../R/06a6accd9696335e.html" target="n" data-glyph="102,1" class="i property">ModuleList</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#da3ffc0c0673c284" class="i field">_moduleList</a>; }
+        }
+ 
+        <b>private</b> <span class="i">Collection</span>&lt;<b>object</b>&gt; <a id="da3ffc0c0673c284" href="../../R/da3ffc0c0673c284.html" target="n" data-glyph="46,1" class="i field">_moduleList</a> = <b>new</b> <span class="i">Collection</span>&lt;<b>object</b>&gt;();
+ 
+        <b>internal void</b> <a id="8c37262071a4bb09" href="../../R/8c37262071a4bb09.html" target="n" data-glyph="74,1" class="i method">AddToModuleList</a>(<b>object</b> <span id="r86 rd" class="r86 r">m</span>)
+        {
+            <a href="#da3ffc0c0673c284" class="i field">_moduleList</a>.<span class="i">Add</span>(<span class="r86 r">m</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the list of child modules of this module. This will only</span>
+        <span class="c">///</span><span class="c"> be non-empty for module manifests.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="f1459faf08e930a8" href="../../R/f1459faf08e930a8.html" target="n" data-glyph="102,1" class="i property">NestedModules</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#80055e2ea0962d4e" class="i field">_readonlyNestedModules</a> ??= <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;(<a href="#440738e332489fa2" class="i field">_nestedModules</a>);
+            }
+        }
+ 
+        <b>private</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="80055e2ea0962d4e" href="../../R/80055e2ea0962d4e.html" target="n" data-glyph="46,1" class="i field">_readonlyNestedModules</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a module to the list of child modules.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r87 r">nestedModule</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module to add.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="f6de469f9f30a6ec" href="../../R/f6de469f9f30a6ec.html" target="n" data-glyph="74,1" class="i method">AddNestedModule</a>(<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r87 rd" class="r87 r">nestedModule</span>)
+        {
+            <a href="#c66dd863c18dbd72" class="i method">AddModuleToList</a>(<span class="r87 r">nestedModule</span>, <a href="#440738e332489fa2" class="i field">_nestedModules</a>);
+        }
+ 
+        <b>private readonly</b> <span class="i">List</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="440738e332489fa2" href="../../R/440738e332489fa2.html" target="n" data-glyph="46,1" class="i field">_nestedModules</a> = <b>new</b> <span class="i">List</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell Host Name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="4225b887eec850c2" href="../../R/4225b887eec850c2.html" target="n" data-glyph="102,1" class="i property">PowerShellHostName</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell Host Version.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Version</span> <a id="8461cce8296d3118" href="../../R/8461cce8296d3118.html" target="n" data-glyph="102,1" class="i property">PowerShellHostVersion</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell Version.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Version</span> <a id="6d8cd807d9d4d3ed" href="../../R/6d8cd807d9d4d3ed.html" target="n" data-glyph="102,1" class="i property">PowerShellVersion</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Processor Architecture.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ProcessorArchitecture</span> <a id="72fb99b54c9a7f07" href="../../R/72fb99b54c9a7f07.html" target="n" data-glyph="102,1" class="i property">ProcessorArchitecture</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Scripts to Process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="43c076cc90190d20" href="../../R/43c076cc90190d20.html" target="n" data-glyph="102,1" class="i property">Scripts</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#933fd5fe195e45e9" class="i field">_scripts</a>; }
+        }
+ 
+        <b>private</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="933fd5fe195e45e9" href="../../R/933fd5fe195e45e9.html" target="n" data-glyph="46,1" class="i field">_scripts</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+ 
+        <b>internal void</b> <a id="fa3d60018541e9c3" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">AddScript</a>(<b>string</b> <span id="r88 rd" class="r88 r">s</span>)
+        {
+            <a href="#933fd5fe195e45e9" class="i field">_scripts</a>.<span class="i">Add</span>(<span class="r88 r">s</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Required Assemblies.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="85c90ea22293c8e2" href="../../R/85c90ea22293c8e2.html" target="n" data-glyph="102,1" class="i property">RequiredAssemblies</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#6278a9aee8847846" class="i field">_requiredAssemblies</a>; }
+        }
+ 
+        <b>private</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="6278a9aee8847846" href="../../R/6278a9aee8847846.html" target="n" data-glyph="46,1" class="i field">_requiredAssemblies</a> = <b>new</b> <span class="i">Collection</span>&lt;<b>string</b>&gt;();
+ 
+        <b>internal void</b> <a id="34e474148f75372d" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">AddRequiredAssembly</a>(<b>string</b> <span id="r89 rd" class="r89 r">assembly</span>)
+        {
+            <a href="#6278a9aee8847846" class="i field">_requiredAssemblies</a>.<span class="i">Add</span>(<span class="r89 r">assembly</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the list of required modules of this module. This will only</span>
+        <span class="c">///</span><span class="c"> be non-empty for module manifests.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="dc1c7049a4d6e347" href="../../R/dc1c7049a4d6e347.html" target="n" data-glyph="102,1" class="i property">RequiredModules</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#777f3b19223ea76c" class="i field">_readonlyRequiredModules</a> ??= <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;(<a href="#b15cf986aa1b6a0d" class="i field">_requiredModules</a>);
+            }
+        }
+ 
+        <b>private</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="777f3b19223ea76c" href="../../R/777f3b19223ea76c.html" target="n" data-glyph="46,1" class="i field">_readonlyRequiredModules</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a module to the list of required modules.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">requiredModule</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module to add.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="57a95e451ee3143b" href="../../R/57a95e451ee3143b.html" target="n" data-glyph="74,1" class="i method">AddRequiredModule</a>(<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r90 rd" class="r90 r">requiredModule</span>)
+        {
+            <a href="#c66dd863c18dbd72" class="i method">AddModuleToList</a>(<span class="r90 r">requiredModule</span>, <a href="#b15cf986aa1b6a0d" class="i field">_requiredModules</a>);
+        }
+ 
+        <b>private</b> <span class="i">List</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <a id="b15cf986aa1b6a0d" href="../../R/b15cf986aa1b6a0d.html" target="n" data-glyph="46,1" class="i field">_requiredModules</a> = <b>new</b> <span class="i">List</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the list of required modules specified in the module manifest of this module. This will only</span>
+        <span class="c">///</span><span class="c"> be non-empty for module manifests.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <a id="5328c12b254f3516" href="../../R/5328c12b254f3516.html" target="n" data-glyph="104,1" class="i property">RequiredModulesSpecification</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#1e0032fc20a66de2" class="i field">_readonlyRequiredModulesSpecification</a> ??= <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt;(<a href="#4b368dec251d9f24" class="i field">_requiredModulesSpecification</a>);
+            }
+        }
+ 
+        <b>private</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <a id="1e0032fc20a66de2" href="../../R/1e0032fc20a66de2.html" target="n" data-glyph="46,1" class="i field">_readonlyRequiredModulesSpecification</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a module to the list of required modules specification.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r91 r">requiredModuleSpecification</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The module to add.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="ae1ef9e0dfb6b521" href="../../R/ae1ef9e0dfb6b521.html" target="n" data-glyph="74,1" class="i method">AddRequiredModuleSpecification</a>(<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a> <span id="r91 rd" class="r91 r">requiredModuleSpecification</span>)
+        {
+            <a href="#4b368dec251d9f24" class="i field">_requiredModulesSpecification</a>.<span class="i">Add</span>(<span class="r91 r">requiredModuleSpecification</span>);
+        }
+ 
+        <b>private</b> <span class="i">List</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt; <a id="4b368dec251d9f24" href="../../R/4b368dec251d9f24.html" target="n" data-glyph="46,1" class="i field">_requiredModulesSpecification</a> = <b>new</b> <span class="i">List</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Root Module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="1d8575eacaa7f07f" href="../../R/1d8575eacaa7f07f.html" target="n" data-glyph="102,1" class="i property">RootModule</a>
+        {
+            <b>get</b>;
+            <b>internal set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This member is used to copy over the RootModule in case the module is a manifest module</span>
+        <span class="c">///</span><span class="c"> This is so that only ModuleInfo for modules with type=Manifest have RootModule populated.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="47b6cc5327f1b053" href="../../R/47b6cc5327f1b053.html" target="n" data-glyph="104,1" class="i property">RootModuleForManifest</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a module to the list of modules, avoiding adding duplicates.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="c66dd863c18dbd72" href="../../R/c66dd863c18dbd72.html" target="n" data-glyph="76,1" class="i method">AddModuleToList</a>(<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r92 rd" class="r92 r">module</span>, <span class="i">List</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r93 rd" class="r93 r">moduleList</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r92 r">module</span> != <b>null</b>, <span class="s">&quot;AddModuleToList should not be called with a null value&quot;</span>);
+            <span class="c">// Add the module if it isn&#39;t already there...</span>
+            <b>foreach</b> (<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r94 rd" class="r94 r">m</span> <b>in</b> <span class="r93 r">moduleList</span>)
+            {
+                <b>if</b> (<span class="r94 r">m</span>.<a href="#82fc7c994af5e4ca" class="i property">Path</a>.<span class="i">Equals</span>(<span class="r92 r">module</span>.<a href="#82fc7c994af5e4ca" class="i property">Path</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    <b>return</b>;
+            }
+ 
+            <span class="r93 r">moduleList</span>.<span class="i">Add</span>(<span class="r92 r">module</span>);
+        }
+ 
+        <b>internal static readonly string</b>[] <a id="10376745e0533336" href="../../R/10376745e0533336.html" target="n" data-glyph="44,1" class="i field">_builtinVariables</a> = <b>new</b> <b>string</b>[] { <span class="s">&quot;_&quot;</span>, <span class="s">&quot;this&quot;</span>, <span class="s">&quot;input&quot;</span>, <span class="s">&quot;args&quot;</span>, <span class="s">&quot;true&quot;</span>, <span class="s">&quot;false&quot;</span>, <span class="s">&quot;null&quot;</span>,
+            <span class="s">&quot;PSDefaultParameterValues&quot;</span>, <span class="s">&quot;Error&quot;</span>, <span class="s">&quot;PSScriptRoot&quot;</span>, <span class="s">&quot;PSCommandPath&quot;</span>, <span class="s">&quot;MyInvocation&quot;</span>, <span class="s">&quot;ExecutionContext&quot;</span>, <span class="s">&quot;StackTrace&quot;</span> };
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lists the variables exported by this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <a id="e1ead588d55d493d" href="../../R/e1ead588d55d493d.html" target="n" data-glyph="102,1" class="i property">ExportedVariables</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <span id="r95 rd" class="r95 r">exportedVariables</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+                <b>if</b> ((<a href="#73b386e1f1d9f46c" class="i field">DeclaredVariableExports</a> != <b>null</b>) &amp;&amp; (<a href="#73b386e1f1d9f46c" class="i field">DeclaredVariableExports</a>.<span class="i">Count</span> &gt; 0))
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r96 rd" class="r96 r">fn</span> <b>in</b> <a href="#73b386e1f1d9f46c" class="i field">DeclaredVariableExports</a>)
+                    {
+                        <span class="r95 r">exportedVariables</span>[<span class="r96 r">fn</span>] = <b>null</b>;
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="c">// If there is no session state object associated with this list,</span>
+                    <span class="c">// just return a null list of exports. This will be true if the</span>
+                    <span class="c">// module is a compiled module.</span>
+                    <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> == <b>null</b> || <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateVariableAPIs.cs.html#2410b52a592096c8" class="i property">ExportedVariables</a> == <b>null</b>)
+                    {
+                        <b>return</b> <span class="r95 r">exportedVariables</span>;
+                    }
+ 
+                    <b>foreach</b> (<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a> <span id="r97 rd" class="r97 r">v</span> <b>in</b> <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateVariableAPIs.cs.html#2410b52a592096c8" class="i property">ExportedVariables</a>)
+                    {
+                        <span class="r95 r">exportedVariables</span>[<span class="r97 r">v</span>.<a href="../ShellVariable.cs.html#fedaff61e8100bc1" class="i property">Name</a>] = <span class="r97 r">v</span>;
+                    }
+                }
+ 
+                <b>return</b> <span class="r95 r">exportedVariables</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lists the aliases exported by this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a>&gt; <a id="992cd7d7155ed907" href="../../R/992cd7d7155ed907.html" target="n" data-glyph="102,1" class="i property">ExportedAliases</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a>&gt; <span id="r98 rd" class="r98 r">exportedAliases</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+                <b>if</b> ((<a href="#73ffedf722a35065" class="i field">DeclaredAliasExports</a> != <b>null</b>) &amp;&amp; (<a href="#73ffedf722a35065" class="i field">DeclaredAliasExports</a>.<span class="i">Count</span> &gt; 0))
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r99 rd" class="r99 r">fn</span> <b>in</b> <a href="#73ffedf722a35065" class="i field">DeclaredAliasExports</a>)
+                    {
+                        <a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a> <span id="r100 rd" class="r100 r">tempAlias</span> = <b>new</b> <a href="../AliasInfo.cs.html#81b0ee0063948411" class="t constructor">AliasInfo</a>(<span class="r99 r">fn</span>, <b>null</b>, <b>null</b>) { <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a> };
+                        <span class="r98 r">exportedAliases</span>[<span class="r99 r">fn</span>] = <span class="r100 r">tempAlias</span>;
+                    }
+                }
+                <b>else</b> <b>if</b> ((<a href="#aaa486cc66863e15" class="i property">CompiledAliasExports</a> != <b>null</b>) &amp;&amp; (<a href="#aaa486cc66863e15" class="i property">CompiledAliasExports</a>.<span class="i">Count</span> &gt; 0))
+                {
+                    <b>foreach</b> (<a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a> <span id="r101 rd" class="r101 r">ai</span> <b>in</b> <a href="#aaa486cc66863e15" class="i property">CompiledAliasExports</a>)
+                    {
+                        <span class="r98 r">exportedAliases</span>[<span class="r101 r">ai</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>] = <span class="r101 r">ai</span>;
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="c">// There is no session state object associated with this list.</span>
+                    <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> == <b>null</b>)
+                    {
+                        <span class="c">// Check if we detected any</span>
+                        <b>if</b> (<a href="#a3ce3f0c83627aa9" class="i field">DetectedAliasExports</a>.<span class="i">Count</span> &gt; 0)
+                        {
+                            <b>foreach</b> (<b>var</b> <span id="r102 rd" class="r102 r">pair</span> <b>in</b> <a href="#a3ce3f0c83627aa9" class="i field">DetectedAliasExports</a>)
+                            {
+                                <b>string</b> <span id="r103 rd" class="r103 r">detectedExport</span> = <span class="r102 r">pair</span>.<span class="i">Key</span>;
+                                <b>if</b> (!<span class="r98 r">exportedAliases</span>.<span class="i">ContainsKey</span>(<span class="r103 r">detectedExport</span>))
+                                {
+                                    <a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a> <span id="r104 rd" class="r104 r">tempAlias</span> = <b>new</b> <span class="t">AliasInfo</span>(<span class="r103 r">detectedExport</span>, <span class="r102 r">pair</span>.<span class="i">Value</span>, <b>null</b>) { <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <a href="#4885a82159eebf7b" class="k">this</a> };
+                                    <span class="r98 r">exportedAliases</span>[<span class="r103 r">detectedExport</span>] = <span class="r104 r">tempAlias</span>;
+                                }
+                            }
+                        }
+                        <b>else</b>
+                        {
+                            <span class="c">// just return a null list of exports. This will be true if the</span>
+                            <span class="c">// module is a compiled module.</span>
+                            <b>return</b> <span class="r98 r">exportedAliases</span>;
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// We have a session state</span>
+                        <b>foreach</b> (<a href="../AliasInfo.cs.html#cf27095b0a2fb6ea" class="t t">AliasInfo</a> <span id="r105 rd" class="r105 r">ai</span> <b>in</b> <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateAliasAPIs.cs.html#c15aa2530ddf93b0" class="i property">ExportedAliases</a>)
+                        {
+                            <span class="r98 r">exportedAliases</span>[<span class="r105 r">ai</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>] = <span class="r105 r">ai</span>;
+                        }
+                    }
+                }
+ 
+                <b>return</b> <span class="r98 r">exportedAliases</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add alias to the detected alias list.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r106 r">name</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The alias to add.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r107 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The command it resolves to.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="eb488da5393f4d02" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">AddDetectedAliasExport</a>(<b>string</b> <span id="r106 rd" class="r106 r">name</span>, <b>string</b> <span id="r107 rd" class="r107 r">value</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r106 r">name</span> != <b>null</b>, <span class="s">&quot;AddDetectedAliasExport should not be called with a null value&quot;</span>);
+ 
+            <a href="#a3ce3f0c83627aa9" class="i field">DetectedAliasExports</a>[<span class="r106 r">name</span>] = <span class="r107 r">value</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt; <a id="c73d6ce71cbadf4c" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">ExportedDscResources</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#269063d3d879560b" class="i field">_declaredDscResourceExports</a> != <b>null</b>
+                    ? <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt;(<a href="#269063d3d879560b" class="i field">_declaredDscResourceExports</a>)
+                    : <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#6addb097ebf2d60e" class="i method">EmptyReadOnlyCollection</a>&lt;<b>string</b>&gt;();
+            }
+        }
+ 
+        <b>internal</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="269063d3d879560b" href="../../R/269063d3d879560b.html" target="n" data-glyph="44,1" class="i field">_declaredDscResourceExports</a> = <b>null</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The session state instance associated with this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../SessionStatePublic.cs.html#0a202aa6b2d52930" class="t t">SessionState</a> <a id="a04dda42fbcbc013" href="../../R/a04dda42fbcbc013.html" target="n" data-glyph="102,1" class="i property">SessionState</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns a new scriptblock bound to this module instance.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r108 r">scriptBlockToBind</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The original scriptblock.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The new bound scriptblock.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="a8f909982f5b4b9e" href="../../R/a8f909982f5b4b9e.html" target="n" data-glyph="72,1" class="i method">NewBoundScriptBlock</a>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r108 rd" class="r108 r">scriptBlockToBind</span>)
+        {
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="k">var</a> <span id="r109 rd" class="r109 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            <b>return</b> <a href="#a341eb9bedb02d6b" class="i method">NewBoundScriptBlock</a>(<span class="r108 r">scriptBlockToBind</span>, <span class="r109 r">context</span>);
+        }
+ 
+        <b>internal</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="a341eb9bedb02d6b" href="../../R/a341eb9bedb02d6b.html" target="n" data-glyph="74,1" class="i method">NewBoundScriptBlock</a>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r110 rd" class="r110 r">scriptBlockToBind</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r111 rd" class="r111 r">context</span>)
+        {
+            <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> == <b>null</b> || <span class="r111 r">context</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">Modules</span>.<span class="i">InvalidOperationOnBinaryModule</span>);
+            }
+ 
+            <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r112 rd" class="r112 r">newsb</span>;
+ 
+            <span class="c">// Now set up the module&#39;s session state to be the current session state</span>
+            <b>lock</b> (<span class="r111 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>)
+            {
+                <a href="../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r113 rd" class="r113 r">oldSessionState</span> = <span class="r111 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>;
+ 
+                <b>try</b>
+                {
+                    <span class="r111 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a> = <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>;
+                    <span class="r112 r">newsb</span> = <span class="r110 r">scriptBlockToBind</span>.<a href="../runtime/CompiledScriptBlock.cs.html#13c9ab07535d8eb6" class="i method">Clone</a>();
+                    <span class="r112 r">newsb</span>.<a href="../lang/scriptblock.cs.html#6359018e5b4473dd" class="i property">SessionState</a> = <a href="#a04dda42fbcbc013" class="i property">SessionState</a>;
+                }
+                <b>finally</b>
+                {
+                    <span class="r111 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a> = <span class="r113 r">oldSessionState</span>;
+                }
+            }
+ 
+            <b>return</b> <span class="r112 r">newsb</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Invoke a scriptblock in the context of this module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r114 r">sb</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The scriptblock to invoke.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r115 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments to the scriptblock.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The result of the invocation.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public object</b> <a id="dc32771b9cc45938" href="../../R/dc32771b9cc45938.html" target="n" data-glyph="72,1" class="i method">Invoke</a>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r114 rd" class="r114 r">sb</span>, <b>params object</b>[] <span id="r115 rd" class="r115 r">args</span>)
+        {
+            <b>if</b> (<span class="r114 r">sb</span> == <b>null</b>)
+                <b>return</b> <b>null</b>;
+ 
+            <span class="c">// Temporarily set the scriptblocks session state to be the</span>
+            <span class="c">// modules...</span>
+            <a href="../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r116 rd" class="r116 r">oldSessionState</span> = <span class="r114 r">sb</span>.<a href="../lang/scriptblock.cs.html#d25a345294fd74f0" class="i property">SessionStateInternal</a>;
+            <b>object</b> <span id="r117 rd" class="r117 r">result</span>;
+            <b>try</b>
+            {
+                <span class="r114 r">sb</span>.<a href="../lang/scriptblock.cs.html#d25a345294fd74f0" class="i property">SessionStateInternal</a> = <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>;
+                <span class="r117 r">result</span> = <span class="r114 r">sb</span>.<a href="../lang/scriptblock.cs.html#1a7b06a284505bc5" class="i method">InvokeReturnAsIs</a>(<span class="r115 r">args</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="c">// and restore the scriptblocks session state...</span>
+                <span class="r114 r">sb</span>.<a href="../lang/scriptblock.cs.html#d25a345294fd74f0" class="i property">SessionStateInternal</a> = <span class="r116 r">oldSessionState</span>;
+            }
+ 
+            <b>return</b> <span class="r117 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This routine allows you to get access variable objects in the callers module</span>
+        <span class="c">///</span><span class="c"> or from the toplevel sessionstate if there is no calling module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r118 r">variableName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a> <a id="9bc31417069c50e6" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetVariableFromCallersModule</a>(<b>string</b> <span id="r118 rd" class="r118 r">variableName</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r118 r">variableName</span>))
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r118 r">variableName</span>));
+            }
+ 
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="k">var</a> <span id="r119 rd" class="r119 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            <a href="../SessionStatePublic.cs.html#0a202aa6b2d52930" class="t t">SessionState</a> <span id="r120 rd" class="r120 r">callersSessionState</span> = <b>null</b>;
+            <b>foreach</b> (<b>var</b> <span id="r121 rd" class="r121 r">sf</span> <b>in</b> <span class="r119 r">context</span>.<a href="../ExecutionContext.cs.html#3e56b2d709de0d80" class="i property">Debugger</a>.<a href="../debugger/debugger.cs.html#6e5b14dde8877cdc" class="i method">GetCallStack</a>())
+            {
+                <b>var</b> <span id="r122 rd" class="r122 r">frameModule</span> = <span class="r121 r">sf</span>.<span class="i">InvocationInfo</span>.<span class="i">MyCommand</span>.<span class="i">Module</span>;
+                <b>if</b> (<span class="r122 r">frameModule</span> == <b>null</b>)
+                {
+                    <b>break</b>;
+                }
+ 
+                <b>if</b> (<span class="r122 r">frameModule</span>.<span class="i">SessionState</span> != <a href="#a04dda42fbcbc013" class="i property">SessionState</a>)
+                {
+                    <span class="r120 r">callersSessionState</span> = <span class="r121 r">sf</span>.<span class="i">InvocationInfo</span>.<span class="i">MyCommand</span>.<span class="i">Module</span>.<span class="i">SessionState</span>;
+                    <b>break</b>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r120 r">callersSessionState</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r120 r">callersSessionState</span>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateVariableAPIs.cs.html#e8489f28d543d2b6" class="i method">GetVariable</a>(<span class="r118 r">variableName</span>);
+            }
+            <b>else</b>
+            {
+                <b>return</b> <span class="r119 r">context</span>.<a href="../ExecutionContext.cs.html#95bc6698d12886ee" class="i property">TopLevelSessionState</a>.<a href="../SessionStateVariableAPIs.cs.html#e8489f28d543d2b6" class="i method">GetVariable</a>(<span class="r118 r">variableName</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Copies the local variables in the caller&#39;s cope into the module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="351eaa517032c88c" href="../../R/351eaa517032c88c.html" target="n" data-glyph="74,1" class="i method">CaptureLocals</a>()
+        {
+            <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">Modules</span>.<span class="i">InvalidOperationOnBinaryModule</span>);
+            }
+ 
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="k">var</a> <span id="r123 rd" class="r123 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            <a href="../runtime/MutableTuple.cs.html#d4c692d6a8bac31d" class="k">var</a> <span id="r124 rd" class="r124 r">tuple</span> = <span class="r123 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>.<a href="../SessionStateScope.cs.html#d10101bbc5961e39" class="i property">LocalsTuple</a>;
+            <span class="i">IEnumerable</span>&lt;<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <span id="r125 rd" class="r125 r">variables</span> = <span class="r123 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>.<a href="../SessionStateScope.cs.html#f3f7c22a2d29d233" class="i property">Variables</a>.<span class="i">Values</span>;
+            <b>if</b> (<span class="r124 r">tuple</span> != <b>null</b>)
+            {
+                <b>var</b> <span id="r126 rd" class="r126 r">result</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt;();
+                <span class="r124 r">tuple</span>.<a href="../runtime/MutableTuple.cs.html#8e4cde215c4b97af" class="i method">GetVariableTable</a>(<span class="r126 r">result</span>, <b>false</b>);
+                <span class="r125 r">variables</span> = <span class="r126 r">result</span>.<span class="i">Values</span>.<span class="i">Concat</span>(<span class="r125 r">variables</span>);
+            }
+ 
+            <b>foreach</b> (<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a> <span id="r127 rd" class="r127 r">v</span> <b>in</b> <span class="r125 r">variables</span>)
+            {
+                <b>try</b>
+                {
+                    <span class="c">// Only copy simple mutable variables...</span>
+                    <b>if</b> (<span class="r127 r">v</span>.<a href="../ShellVariable.cs.html#388974547ffee0d7" class="i property">Options</a> == <a href="../ShellVariable.cs.html#8d6fb934c02e4185" class="t t">ScopedItemOptions</a>.<a href="../ShellVariable.cs.html#76fffaf5453ae116" class="i field">None</a> &amp;&amp; <span class="r127 r">v</span> <b>is not</b> <a href="../ShellVariable.cs.html#1d73190f8da7c3d2" class="t t">NullVariable</a>)
+                    {
+                        <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a> <span id="r128 rd" class="r128 r">newVar</span> = <b>new</b> <a href="../ShellVariable.cs.html#46f590f26072d557" class="t constructor">PSVariable</a>(<span class="r127 r">v</span>.<a href="../ShellVariable.cs.html#fedaff61e8100bc1" class="i property">Name</a>, <span class="r127 r">v</span>.<a href="../ShellVariable.cs.html#8b1105722178c660" class="i property">Value</a>, <span class="r127 r">v</span>.<a href="../ShellVariable.cs.html#388974547ffee0d7" class="i property">Options</a>, <span class="r127 r">v</span>.<a href="../ShellVariable.cs.html#5f551c3a69d87108" class="i property">Description</a>);
+                        <span class="c">// The variable is already defined/set in the scope, and that means the attributes</span>
+                        <span class="c">// have already been checked if it was needed, so we don&#39;t do it again.</span>
+                        <span class="r128 r">newVar</span>.<a href="../ShellVariable.cs.html#0c6009ec4663b7e9" class="i method">AddParameterAttributesNoChecks</a>(<span class="r127 r">v</span>.<a href="../ShellVariable.cs.html#5a5702c328974ec4" class="i property">Attributes</a>);
+                        <a href="#a04dda42fbcbc013" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionStateVariableAPIs.cs.html#3d870fa459a73c4f" class="i method">NewVariable</a>(<span class="r128 r">newVar</span>, <b>false</b>);
+                    }
+                }
+                <b>catch</b> (<a href="../../utils/SessionStateExceptions.cs.html#3f7cfda90a75013a" class="t t">SessionStateException</a>)
+                {
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Build a custom object out of this module...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A custom object.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="58e6c17bb914a346" href="../../R/58e6c17bb914a346.html" target="n" data-glyph="72,1" class="i method">AsCustomObject</a>()
+        {
+            <b>if</b> (<a href="#a04dda42fbcbc013" class="i property">SessionState</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">Modules</span>.<span class="i">InvalidOperationOnBinaryModule</span>);
+            }
+ 
+            <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r129 rd" class="r129 r">obj</span> = <b>new</b> <a href="../MshObject.cs.html#cbbe437e20e8b8b8" class="t constructor">PSObject</a>();
+ 
+            <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a>&gt; <span id="r130 rd" class="r130 r">entry</span> <b>in</b> <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#2faddd301cf044c5" class="i property">ExportedFunctions</a>)
+            {
+                <a href="../FunctionInfo.cs.html#e37ab42bb144c43b" class="t t">FunctionInfo</a> <span id="r131 rd" class="r131 r">func</span> = <span class="r130 r">entry</span>.<span class="i">Value</span>;
+                <b>if</b> (<span class="r131 r">func</span> != <b>null</b>)
+                {
+                    <a href="../MshMemberInfo.cs.html#2332c149036fdcf2" class="t t">PSScriptMethod</a> <span id="r132 rd" class="r132 r">sm</span> = <b>new</b> <a href="../MshMemberInfo.cs.html#7048e7e3b6aa8e65" class="t constructor">PSScriptMethod</a>(<span class="r131 r">func</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>, <span class="r131 r">func</span>.<a href="../FunctionInfo.cs.html#aa3a9db104bb0f61" class="i property">ScriptBlock</a>);
+                    <span class="r129 r">obj</span>.<a href="../MshObject.cs.html#56bc82b240e4291b" class="i property">Members</a>.<a href="../MshMemberInfo.cs.html#a9e3a2dc56d98237" class="i method">Add</a>(<span class="r132 r">sm</span>);
+                }
+            }
+ 
+            <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <span id="r133 rd" class="r133 r">entry</span> <b>in</b> <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#e1ead588d55d493d" class="i property">ExportedVariables</a>)
+            {
+                <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a> <span id="r134 rd" class="r134 r">var</span> = <span class="r133 r">entry</span>.<span class="i">Value</span>;
+                <b>if</b> (<span class="r134 r">var</span> != <b>null</b>)
+                {
+                    <a href="../MshMemberInfo.cs.html#e8b0e82a2d777090" class="t t">PSVariableProperty</a> <span id="r135 rd" class="r135 r">sm</span> = <b>new</b> <a href="../MshMemberInfo.cs.html#ffd8f02506c143cf" class="t constructor">PSVariableProperty</a>(<span class="r134 r">var</span>);
+                    <span class="r129 r">obj</span>.<a href="../MshObject.cs.html#56bc82b240e4291b" class="i property">Members</a>.<a href="../MshMemberInfo.cs.html#a9e3a2dc56d98237" class="i method">Add</a>(<span class="r135 r">sm</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r129 r">obj</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Optional script that is going to be called just before Remove-Module cmdlet removes the module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="a91c0dfe9b197014" href="../../R/a91c0dfe9b197014.html" target="n" data-glyph="102,1" class="i property">OnRemove</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The list of Format files imported by this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt; <a id="9255531221898da3" href="../../R/9255531221898da3.html" target="n" data-glyph="102,1" class="i property">ExportedFormatFiles</a> { <b>get</b>; <b>private set</b>; } = <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt;(<b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;());
+ 
+        <b>internal void</b> <a id="1d33b07765cb3293" href="../../R/1d33b07765cb3293.html" target="n" data-glyph="74,1" class="i method">SetExportedFormatFiles</a>(<span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt; <span id="r136 rd" class="r136 r">files</span>)
+        {
+            <a href="#9255531221898da3" class="i property">ExportedFormatFiles</a> = <span class="r136 r">files</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The list of types files imported by this module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt; <a id="8e94a27c925a8382" href="../../R/8e94a27c925a8382.html" target="n" data-glyph="102,1" class="i property">ExportedTypeFiles</a> { <b>get</b>; <b>private set</b>; } = <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt;(<b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;());
+ 
+        <b>internal void</b> <a id="87f1728ba7490f93" href="../../R/87f1728ba7490f93.html" target="n" data-glyph="74,1" class="i method">SetExportedTypeFiles</a>(<span class="i">ReadOnlyCollection</span>&lt;<b>string</b>&gt; <span id="r137 rd" class="r137 r">files</span>)
+        {
+            <a href="#8e94a27c925a8382" class="i property">ExportedTypeFiles</a> = <span class="r137 r">files</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Implements deep copy of a PSModuleInfo instance.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A new PSModuleInfo instance.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <a id="305a7717f767719a" href="../../R/305a7717f767719a.html" target="n" data-glyph="72,1" class="i method">Clone</a>()
+        {
+            <a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r138 rd" class="r138 r">clone</span> = (<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>)<a href="#4885a82159eebf7b" class="k">this</a>.<span class="i">MemberwiseClone</span>();
+ 
+            <span class="r138 r">clone</span>.<a href="#e824efbb2b2810da" class="i field">_fileList</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;(<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#381d211036760344" class="i property">FileList</a>);
+            <span class="r138 r">clone</span>.<a href="#da3ffc0c0673c284" class="i field">_moduleList</a> = <b>new</b> <span class="i">Collection</span>&lt;<b>object</b>&gt;(<a href="#da3ffc0c0673c284" class="i field">_moduleList</a>);
+ 
+            <b>foreach</b> (<b>var</b> <span id="r139 rd" class="r139 r">n</span> <b>in</b> <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#f1459faf08e930a8" class="i property">NestedModules</a>)
+            {
+                <span class="r138 r">clone</span>.<span class="i">AddNestedModule</span>(<span class="r139 r">n</span>);
+            }
+ 
+            <span class="r138 r">clone</span>.<a href="#80055e2ea0962d4e" class="i field">_readonlyNestedModules</a> = <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;(<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#f1459faf08e930a8" class="i property">NestedModules</a>);
+            <span class="r138 r">clone</span>.<a href="#777f3b19223ea76c" class="i field">_readonlyRequiredModules</a> = <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;(<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#dc1c7049a4d6e347" class="i property">RequiredModules</a>);
+            <span class="r138 r">clone</span>.<a href="#1e0032fc20a66de2" class="i field">_readonlyRequiredModulesSpecification</a> = <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt;(<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#5328c12b254f3516" class="i property">RequiredModulesSpecification</a>);
+            <span class="r138 r">clone</span>.<a href="#6278a9aee8847846" class="i field">_requiredAssemblies</a> = <b>new</b> <span class="i">Collection</span>&lt;<b>string</b>&gt;(<a href="#6278a9aee8847846" class="i field">_requiredAssemblies</a>);
+            <span class="r138 r">clone</span>.<a href="#4b368dec251d9f24" class="i field">_requiredModulesSpecification</a> = <b>new</b> <span class="i">List</span>&lt;<a href="ModuleSpecification.cs.html#1fd961b021940b6a" class="t t">ModuleSpecification</a>&gt;();
+            <span class="r138 r">clone</span>.<a href="#b15cf986aa1b6a0d" class="i field">_requiredModules</a> = <b>new</b> <span class="i">List</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;();
+ 
+            <b>foreach</b> (<b>var</b> <span id="r140 rd" class="r140 r">r</span> <b>in</b> <a href="#b15cf986aa1b6a0d" class="i field">_requiredModules</a>)
+            {
+                <span class="r138 r">clone</span>.<span class="i">AddRequiredModule</span>(<span class="r140 r">r</span>);
+            }
+ 
+            <b>foreach</b> (<b>var</b> <span id="r141 rd" class="r141 r">r</span> <b>in</b> <a href="#4b368dec251d9f24" class="i field">_requiredModulesSpecification</a>)
+            {
+                <span class="r138 r">clone</span>.<span class="i">AddRequiredModuleSpecification</span>(<span class="r141 r">r</span>);
+            }
+ 
+            <span class="r138 r">clone</span>.<a href="#933fd5fe195e45e9" class="i field">_scripts</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;(<a href="#4885a82159eebf7b" class="k">this</a>.<a href="#43c076cc90190d20" class="i property">Scripts</a>);
+ 
+            <span class="r138 r">clone</span>.<a href="#a04dda42fbcbc013" class="i property">SessionState</a> = <a href="#4885a82159eebf7b" class="k">this</a>.<a href="#a04dda42fbcbc013" class="i property">SessionState</a>;
+ 
+            <b>return</b> <span class="r138 r">clone</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Enables or disables the appdomain module path cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public static bool</b> <a id="42c3363f19a38c16" href="../../R/42c3363f19a38c16.html" target="n" data-glyph="102,1" class="i property">UseAppDomainLevelModuleCache</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clear out the appdomain-level module path cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="093c0c37ec27e9b5" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">ClearAppDomainLevelModulePathCache</a>()
+        {
+            <a href="#73f9c0c3c6209fe0" class="i field">s_appdomainModulePathCache</a>.<span class="i">Clear</span>();
+        }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A method available in debug mode providing access to the module path cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public static object</b> <a id="17aceeaac72b5b85" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetAppDomainLevelModuleCache</a>()
+        {
+            <b>return</b> <a href="#73f9c0c3c6209fe0" class="i field">s_appdomainModulePathCache</a>;
+        }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Look up a module in the appdomain wide module path cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r142 r">moduleName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Module name to look up.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The path to the matched module.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="732dea82247c43fc" href="../../R/732dea82247c43fc.html" target="n" data-glyph="74,1" class="i method">ResolveUsingAppDomainLevelModuleCache</a>(<b>string</b> <span id="r142 rd" class="r142 r">moduleName</span>)
+        {
+            <b>string</b> <span id="r143 rd" class="r143 r">path</span>;
+            <b>if</b> (<a href="#73f9c0c3c6209fe0" class="i field">s_appdomainModulePathCache</a>.<span class="i">TryGetValue</span>(<span class="r142 r">moduleName</span>, <b>out</b> <span class="r143 r">path</span>))
+            {
+                <b>return</b> <span class="r143 r">path</span>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <b>string</b>.<span class="i">Empty</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add an entry to the appdomain level module path cache. By default, if there already is an entry</span>
+        <span class="c">///</span><span class="c"> it won&#39;t be replace. If force is specified, then it will be updated. \</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r144 r">moduleName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r145 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r146 r">force</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="c8058e60791a1848" href="../../R/c8058e60791a1848.html" target="n" data-glyph="74,1" class="i method">AddToAppDomainLevelModuleCache</a>(<b>string</b> <span id="r144 rd" class="r144 r">moduleName</span>, <b>string</b> <span id="r145 rd" class="r145 r">path</span>, <b>bool</b> <span id="r146 rd" class="r146 r">force</span>)
+        {
+            <b>if</b> (<span class="r146 r">force</span>)
+            {
+                <a href="#73f9c0c3c6209fe0" class="i field">s_appdomainModulePathCache</a>.<span class="i">AddOrUpdate</span>(<span class="r144 r">moduleName</span>, <span class="r145 r">path</span>, (<span id="r147 rd" class="r147 r">modulename</span>, <span id="r148 rd" class="r148 r">oldPath</span>) =&gt; <span class="r145 r">path</span>);
+            }
+            <b>else</b>
+            {
+                <a href="#73f9c0c3c6209fe0" class="i field">s_appdomainModulePathCache</a>.<span class="i">TryAdd</span>(<span class="r144 r">moduleName</span>, <span class="r145 r">path</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there is an entry for the named module in the appdomain level module path cache, remove it.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r149 r">moduleName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name of the module to remove from the cache.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if the module was remove.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="b8a6b6d87ecc6b04" href="../../R/b8a6b6d87ecc6b04.html" target="n" data-glyph="74,1" class="i method">RemoveFromAppDomainLevelCache</a>(<b>string</b> <span id="r149 rd" class="r149 r">moduleName</span>)
+        {
+            <b>string</b> <span id="r150 rd" class="r150 r">outString</span>;
+            <b>return</b> <a href="#73f9c0c3c6209fe0" class="i field">s_appdomainModulePathCache</a>.<span class="i">TryRemove</span>(<span class="r149 r">moduleName</span>, <b>out</b> <span class="r150 r">outString</span>);
+        }
+ 
+        <b>private static readonly</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>.<span class="i">ConcurrentDictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <a id="73f9c0c3c6209fe0" href="../../R/73f9c0c3c6209fe0.html" target="n" data-glyph="46,1" class="i field">s_appdomainModulePathCache</a> =
+            <b>new</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>.<span class="i">ConcurrentDictionary</span>&lt;<b>string</b>, <b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Indicates the type of a module.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public enum</b> <a id="c7db608d3be6a241" href="../../R/c7db608d3be6a241.html" target="n" data-glyph="18,0" class="t t"><span id="6412d1c7766fdc38">ModuleType</span></a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates that this is a script module (a powershell file with a .PSM1 extension)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="15536cea81510839" href="../../R/15536cea81510839.html" target="n" data-glyph="24,1" class="i field">Script</a> = 0,
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates that this is compiled .dll containing cmdlet definitions.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="1c66a8819a72670d" href="../../R/1c66a8819a72670d.html" target="n" data-glyph="24,1" class="i field">Binary</a> = 1,
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates that this module entry was derived from a module manifest and</span>
+        <span class="c">///</span><span class="c"> may have child modules.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="0f2bfb43459788ea" href="../../R/0f2bfb43459788ea.html" target="n" data-glyph="24,1" class="i field">Manifest</a>,
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates that this is cmdlets-over-objects module (a powershell file with a .CDXML extension)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="0650c401bbd5c177" href="../../R/0650c401bbd5c177.html" target="n" data-glyph="24,1" class="i field">Cim</a>,
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines the possible access modes for a module...</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public enum</b> <a id="7988bbf518356b24" href="../../R/7988bbf518356b24.html" target="n" data-glyph="18,0" class="t t"><span id="0a86c1f1ebfe03d7">ModuleAccessMode</span></a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The default access mode for the module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="7962ff912008860f" href="../../R/7962ff912008860f.html" target="n" data-glyph="24,1" class="i field">ReadWrite</a> = 0,
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The module is readonly and can only be removed with -force.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="04669c62d7f9dd7c" href="../../R/04669c62d7f9dd7c.html" target="n" data-glyph="24,1" class="i field">ReadOnly</a> = 1,
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The module cannot be removed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="7cf5d9ea4767ce97" href="../../R/7cf5d9ea4767ce97.html" target="n" data-glyph="24,1" class="i field">Constant</a> = 2
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> An EqualityComparer to compare 2 PSModuleInfo instances. 2 PSModuleInfos are</span>
+    <span class="c">///</span><span class="c"> considered equal if their Name,Guid and Version are equal.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="6ea15f3927f5f061" href="../../R/../../0000000000.html" target="n" data-glyph="2,0" class="t t"><span id="4b9f50594ba5e7fa">PSModuleInfoComparer</span></a> : <span class="i">IEqualityComparer</span>&lt;<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt;
+    {
+        <b>public bool</b> <a id="ca49b9ac8c6b9c92" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Equals</a>(<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r151 rd" class="r151 r">x</span>, <a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r152 rd" class="r152 r">y</span>)
+        {
+            <span class="c">// Check whether the compared objects reference the same data.</span>
+            <b>if</b> (<b>object</b>.<span class="i">ReferenceEquals</span>(<span class="r151 r">x</span>, <span class="r152 r">y</span>)) <b>return</b> <b>true</b>;
+ 
+            <span class="c">// Check whether any of the compared objects is null.</span>
+            <b>if</b> (<span class="r151 r">x</span> <b>is null</b> || <span class="r152 r">y</span> <b>is null</b>)
+                <b>return</b> <b>false</b>;
+ 
+            <b>bool</b> <span id="r153 rd" class="r153 r">result</span> = <b>string</b>.<span class="i">Equals</span>(<span class="r151 r">x</span>.<a href="#19beded88c944eb9" class="i property">Name</a>, <span class="r152 r">y</span>.<a href="#19beded88c944eb9" class="i property">Name</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) &amp;&amp;
+                (<span class="r151 r">x</span>.<a href="#474060a313707f03" class="i property">Guid</a> == <span class="r152 r">y</span>.<a href="#474060a313707f03" class="i property">Guid</a>) &amp;&amp; (<span class="r151 r">x</span>.<a href="#bb592ab5243224bb" class="i property">Version</a> == <span class="r152 r">y</span>.<a href="#bb592ab5243224bb" class="i property">Version</a>);
+ 
+            <b>return</b> <span class="r153 r">result</span>;
+        }
+ 
+        <b>public int</b> <a id="0ff3049c999ec285" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetHashCode</a>(<a href="#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r154 rd" class="r154 r">obj</span>)
+        {
+            <b>unchecked</b> <span class="c">// Overflow is fine, just wrap</span>
+            {
+                <b>int</b> <span id="r155 rd" class="r155 r">result</span> = 0;
+ 
+                <b>if</b> (<span class="r154 r">obj</span> != <b>null</b>)
+                {
+                    <span class="c">// picking two different prime numbers to avoid collisions</span>
+                    <span class="r155 r">result</span> = 23;
+                    <b>if</b> (<span class="r154 r">obj</span>.<a href="#19beded88c944eb9" class="i property">Name</a> != <b>null</b>)
+                    {
+                        <span class="r155 r">result</span> = <span class="r155 r">result</span> * 17 + <span class="r154 r">obj</span>.<a href="#19beded88c944eb9" class="i property">Name</a>.<span class="i">GetHashCode</span>();
+                    }
+ 
+                    <b>if</b> (<span class="r154 r">obj</span>.<a href="#474060a313707f03" class="i property">Guid</a> != <span class="i">Guid</span>.<span class="i">Empty</span>)
+                    {
+                        <span class="r155 r">result</span> = <span class="r155 r">result</span> * 17 + <span class="r154 r">obj</span>.<a href="#474060a313707f03" class="i property">Guid</a>.<span class="i">GetHashCode</span>();
+                    }
+ 
+                    <b>if</b> (<span class="r154 r">obj</span>.<a href="#bb592ab5243224bb" class="i property">Version</a> != <b>null</b>)
+                    {
+                        <span class="r155 r">result</span> = <span class="r155 r">result</span> * 17 + <span class="r154 r">obj</span>.<a href="#bb592ab5243224bb" class="i property">Version</a>.<span class="i">GetHashCode</span>();
+                    }
+                }
+ 
+                <b>return</b> <span class="r155 r">result</span>;
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

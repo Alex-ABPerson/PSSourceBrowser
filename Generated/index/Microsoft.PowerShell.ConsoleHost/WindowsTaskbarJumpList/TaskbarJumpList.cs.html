@@ -1,0 +1,156 @@
+﻿<!DOCTYPE html>
+<html><head><title>TaskbarJumpList.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(147);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost/WindowsTaskbarJumpList/TaskbarJumpList.cs" target="_top">WindowsTaskbarJumpList\TaskbarJumpList.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost" target="_top">src\Microsoft.PowerShell.ConsoleHost\Microsoft.PowerShell.ConsoleHost.csproj</a> (Microsoft.PowerShell.ConsoleHost)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using static</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<a href="ComInterfaces.cs.html#81a2eca523525a1d" class="t t">ComInterfaces</a>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <b>internal static class</b> <a id="6627107ae0784c47" href="../R/6627107ae0784c47.html" target="n" data-glyph="2,0" class="t t">TaskbarJumpList</a>
+    {
+        <span class="c">// Creating a JumpList entry takes around 55ms when the PowerShell process is interactive and</span>
+        <span class="c">// owns the current window (otherwise it does a fast exit anyway). Since there is no &#39;GET&#39; like API,</span>
+        <span class="c">// we always have to execute this call because we do not know if it has been created yet.</span>
+        <span class="c">// The JumpList does persist as long as the filepath of the executable does not change but there</span>
+        <span class="c">// could be disruptions to it like e.g. the bi-annual Windows update, we decided to</span>
+        <span class="c">// not over-optimize this and always create the JumpList as a non-blocking background STA thread instead.</span>
+        <b>internal static void</b> <a id="05518c1fe475d15d" href="../R/05518c1fe475d15d.html" target="n" data-glyph="74,1" class="i method">CreateRunAsAdministratorJumpList</a>()
+        {
+            <span class="c">// The STA apartment state is not supported on NanoServer and Windows IoT.</span>
+            <span class="c">// Plus, there is not need to create jump list in those environment anyways.</span>
+            <b>if</b> (!<a href="/System.Management.Automation/A.html#693813241122eb45" class="t t">Platform</a>.<a href="/System.Management.Automation/A.html#527d8835d493a8d0" class="i property">IsWindowsDesktop</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Some COM APIs are implicitly STA only, therefore the executing thread must run in STA.</span>
+            <b>var</b> <span id="r0 rd" class="r0 r">thread</span> = <b>new</b> <span class="i">Thread</span>(() =&gt;
+            {
+                <b>try</b>
+                {
+                    <a href="#6627107ae0784c47" class="t t">TaskbarJumpList</a>.<span class="i">CreateElevatedEntry</span>(<span class="i">ConsoleHostStrings</span>.<span class="i">RunAsAdministrator</span>);
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r1 rd" class="r1 r">exception</span>)
+                {
+                    <span class="c">// Due to COM threading complexity there might still be sporadic failures but they can be</span>
+                    <span class="c">// ignored as creating the JumpList is not critical and persists after its first creation.</span>
+                    <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">Creating &#39;Run as Administrator&#39; JumpList failed. </span>{<span class="r1 r">exception</span>}<span class="s">&quot;</span>);
+                }
+            });
+ 
+            <b>try</b>
+            {
+                <span class="r0 r">thread</span>.<span class="i">SetApartmentState</span>(<span class="i">ApartmentState</span>.<span class="i">STA</span>);
+                <span class="r0 r">thread</span>.<span class="i">Start</span>();
+            }
+            <b>catch</b> (<span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">ThreadStartException</span>)
+            {
+                <span class="c">// STA may not be supported on some platforms</span>
+            }
+        }
+ 
+        <b>private static void</b> <a id="300bd3108be266bb" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CreateElevatedEntry</a>(<b>string</b> <span id="r2 rd" class="r2 r">title</span>)
+        {
+            <span class="c">// Check startupInfo first to know if the current shell is interactive and owns a window before proceeding</span>
+            <span class="c">// This check is fast (less than 1ms) and allows for quick-exit</span>
+            <a href="ComInterfaces.cs.html#9757e983906fe1e1" class="i method">GetStartupInfo</a>(<b>out</b> <a href="ComInterfaces.cs.html#40706561d0500409" class="t t">StartUpInfo</a> <span id="r3 rd" class="r3 r">startupInfo</span>);
+            <b>const uint</b> <span id="r4 rd" class="r4 r">STARTF_USESHOWWINDOW</span> = 0x00000001;
+            <b>const ushort</b> <span id="r5 rd" class="r5 r">SW_HIDE</span> = 0;
+            <b>if</b> (((<span class="r3 r">startupInfo</span>.<a href="ComInterfaces.cs.html#29f1c8cddc070a69" class="i field">dwFlags</a> &amp; <span class="r4 r">STARTF_USESHOWWINDOW</span>) == 1) &amp;&amp; (<span class="r3 r">startupInfo</span>.<a href="ComInterfaces.cs.html#682a9afdc3dcc2f3" class="i field">wShowWindow</a> != <span class="r5 r">SW_HIDE</span>))
+            {
+                <b>string</b> <span id="r6 rd" class="r6 r">cmdPath</span> = <span class="i">Assembly</span>.<span class="i">GetEntryAssembly</span>().<span class="i">Location</span>.<span class="i">Replace</span>(<span class="s">&quot;.dll&quot;</span>, <span class="s">&quot;.exe&quot;</span>);
+ 
+                <span class="c">// Check for maximum available slots in JumpList and start creating the custom Destination List</span>
+                <b>var</b> <span id="r7 rd" class="r7 r">CLSID_DestinationList</span> = <b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/77f10cf0-3db5-4966-b520-b7c54fd35ed6.html" target="n" class="s">@&quot;77f10cf0-3db5-4966-b520-b7c54fd35ed6&quot;</a>);
+                <b>const uint</b> <span id="r8 rd" class="r8 r">CLSCTX_INPROC_SERVER</span> = 1;
+                <b>var</b> <span id="r9 rd" class="r9 r">IID_IUnknown</span> = <b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/00000000-0000-0000-c000-000000000046.html" target="n" class="s">&quot;00000000-0000-0000-C000-000000000046&quot;</a>);
+                <a href="HResult.cs.html#5e329cb6b155ddbb" class="k">var</a> <span id="r10 rd" class="r10 r">hResult</span> = <a href="ComInterfaces.cs.html#ae9035659663ec63" class="i method">CoCreateInstance</a>(<b>ref</b> <span class="r7 r">CLSID_DestinationList</span>, <b>null</b>, <span class="r8 r">CLSCTX_INPROC_SERVER</span>, <b>ref</b> <span class="r9 r">IID_IUnknown</span>, <b>out object</b> <span id="r11 rd" class="r11 r">pCustDestListobj</span>);
+                <b>if</b> (<span class="r10 r">hResult</span> &lt; 0)
+                {
+                    <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">Creating ICustomDestinationList failed with HResult &#39;</span>{<span class="r10 r">hResult</span>}<span class="s">&#39;.</span><span class="s">&quot;</span>);
+                    <b>return</b>;
+                }
+ 
+                <a href="ComInterfaces.cs.html#837ff45700b5a933" class="k">var</a> <span id="r12 rd" class="r12 r">pCustDestList</span> = (<a href="ComInterfaces.cs.html#837ff45700b5a933" class="t t">ICustomDestinationList</a>)<span class="r11 r">pCustDestListobj</span>;
+                <span class="r10 r">hResult</span> = <span class="r12 r">pCustDestList</span>.<span class="i">BeginList</span>(<b>out uint</b> <span id="r13 rd" class="r13 r">uMaxSlots</span>, <b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/92ca9dcd-5622-4bba-a805-5e9f541bd8c9.html" target="n" class="s">@&quot;92CA9DCD-5622-4BBA-A805-5E9F541BD8C9&quot;</a>), <b>out object</b> <span id="r14 rd" class="r14 r">pRemovedItems</span>);
+                <b>if</b> (<span class="r10 r">hResult</span> &lt; 0)
+                {
+                    <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">BeginList on ICustomDestinationList failed with HResult &#39;</span>{<span class="r10 r">hResult</span>}<span class="s">&#39;.</span><span class="s">&quot;</span>);
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (<span class="r13 r">uMaxSlots</span> &gt;= 1)
+                {
+                    <span class="c">// Create JumpListLink</span>
+                    <a href="ComInterfaces.cs.html#d859045f132e6cb5" class="k">var</a> <span id="r15 rd" class="r15 r">nativeShellLink</span> = (<a href="ComInterfaces.cs.html#d859045f132e6cb5" class="t t">IShellLinkW</a>)<b>new</b> <span class="t">CShellLink</span>();
+                    <a href="ComInterfaces.cs.html#60a1b9aaa2592bb9" class="k">var</a> <span id="r16 rd" class="r16 r">nativePropertyStore</span> = (<a href="ComInterfaces.cs.html#60a1b9aaa2592bb9" class="t t">IPropertyStore</a>)<span class="r15 r">nativeShellLink</span>;
+                    <span class="r15 r">nativeShellLink</span>.<a href="ComInterfaces.cs.html#cbeeef88b03ccfe7" class="i method">SetPath</a>(<span class="r6 r">cmdPath</span>);
+                    <span class="r15 r">nativeShellLink</span>.<a href="ComInterfaces.cs.html#66c48834bbb79405" class="i method">SetShowCmd</a>(0);
+                    <a href="ComInterfaces.cs.html#e682b9eea12cda65" class="k">var</a> <span id="r17 rd" class="r17 r">shellLinkDataList</span> = (<a href="ComInterfaces.cs.html#e682b9eea12cda65" class="t t">IShellLinkDataListW</a>)<span class="r15 r">nativeShellLink</span>;
+                    <span class="r17 r">shellLinkDataList</span>.<a href="ComInterfaces.cs.html#e1a3f8b13c91fd3b" class="i method">GetFlags</a>(<b>out uint</b> <span id="r18 rd" class="r18 r">flags</span>);
+                    <span class="r18 r">flags</span> |= 0x00800000; <span class="c">// SLDF_ALLOW_LINK_TO_LINK</span>
+                    <span class="r18 r">flags</span> |= 0x00002000; <span class="c">// SLDF_RUNAS_USER</span>
+                    <span class="r17 r">shellLinkDataList</span>.<a href="ComInterfaces.cs.html#85dd0ff7535157e1" class="i method">SetFlags</a>(<span class="r18 r">flags</span>);
+                    <a href="PropertyKey.cs.html#4570c4f88f585f6f" class="k">var</a> <span id="r19 rd" class="r19 r">PKEY_TITLE</span> = <b>new</b> <a href="PropertyKey.cs.html#89a4844bf70172ce" class="t constructor">PropertyKey</a>(<b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/f29f85e0-4ff9-1068-ab91-08002b27b3d9.html" target="n" class="s">&quot;{F29F85E0-4FF9-1068-AB91-08002B27B3D9}&quot;</a>), 2);
+                    <span class="r10 r">hResult</span> = <span class="r16 r">nativePropertyStore</span>.<a href="ComInterfaces.cs.html#9a3e6eea2abd5ddb" class="i method">SetValue</a>(<b>in</b> <span class="r19 r">PKEY_TITLE</span>, <b>new</b> <a href="PropVariant.cs.html#1adaa8a0f5d067cd" class="t constructor">PropVariant</a>(<span class="r2 r">title</span>));
+                    <b>if</b> (<span class="r10 r">hResult</span> &lt; 0)
+                    {
+                        <span class="r12 r">pCustDestList</span>.<a href="ComInterfaces.cs.html#aee76b84a7e319d9" class="i method">AbortList</a>();
+                        <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">SetValue on IPropertyStore with title &#39;</span>{<span class="r2 r">title</span>}<span class="s">&#39; failed with HResult &#39;</span>{<span class="r10 r">hResult</span>}<span class="s">&#39;.</span><span class="s">&quot;</span>);
+                        <b>return</b>;
+                    }
+ 
+                    <span class="r10 r">hResult</span> = <span class="r16 r">nativePropertyStore</span>.<a href="ComInterfaces.cs.html#54e045d181eb80c1" class="i method">Commit</a>();
+                    <b>if</b> (<span class="r10 r">hResult</span> &lt; 0)
+                    {
+                        <span class="r12 r">pCustDestList</span>.<a href="ComInterfaces.cs.html#aee76b84a7e319d9" class="i method">AbortList</a>();
+                        <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">Commit on IPropertyStore failed with HResult &#39;</span>{<span class="r10 r">hResult</span>}<span class="s">&#39;.</span><span class="s">&quot;</span>);
+                        <b>return</b>;
+                    }
+ 
+                    <span class="c">// Create collection and add JumpListLink</span>
+                    <b>var</b> <span id="r20 rd" class="r20 r">CLSID_EnumerableObjectCollection</span> = <b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/2d3468c1-36a7-43b6-ac24-d3f02fd9607a.html" target="n" class="s">@&quot;2d3468c1-36a7-43b6-ac24-d3f02fd9607a&quot;</a>);
+                    <b>const uint</b> <span id="r21 rd" class="r21 r">CLSCTX_INPROC_HANDLER</span> = 2;
+                    <b>const uint</b> <span id="r22 rd" class="r22 r">CLSCTX_INPROC</span> = <span class="r8 r">CLSCTX_INPROC_SERVER</span> | <span class="r21 r">CLSCTX_INPROC_HANDLER</span>;
+                    <b>var</b> <span id="r23 rd" class="r23 r">ComSvrInterface_GUID</span> = <b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/555e2d2b-ee00-47aa-ab2b-39f953f6b339.html" target="n" class="s">@&quot;555E2D2B-EE00-47AA-AB2B-39F953F6B339&quot;</a>);
+                    <span class="r10 r">hResult</span> = <a href="ComInterfaces.cs.html#ae9035659663ec63" class="i method">CoCreateInstance</a>(<b>ref</b> <span class="r20 r">CLSID_EnumerableObjectCollection</span>, <b>null</b>, <span class="r22 r">CLSCTX_INPROC</span>, <b>ref</b> <span class="r9 r">IID_IUnknown</span>, <b>out object</b> <span id="r24 rd" class="r24 r">instance</span>);
+                    <b>if</b> (<span class="r10 r">hResult</span> &lt; 0)
+                    {
+                        <span class="r12 r">pCustDestList</span>.<a href="ComInterfaces.cs.html#aee76b84a7e319d9" class="i method">AbortList</a>();
+                        <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">Creating IObjectCollection failed with HResult &#39;</span>{<span class="r10 r">hResult</span>}<span class="s">&#39;.</span><span class="s">&quot;</span>);
+                        <b>return</b>;
+                    }
+ 
+                    <a href="ComInterfaces.cs.html#47bb13bc8950eb4b" class="k">var</a> <span id="r25 rd" class="r25 r">pShortCutCollection</span> = (<a href="ComInterfaces.cs.html#47bb13bc8950eb4b" class="t t">IObjectCollection</a>)<span class="r24 r">instance</span>;
+                    <span class="r25 r">pShortCutCollection</span>.<a href="ComInterfaces.cs.html#7d3a376f087d34d5" class="i method">AddObject</a>((<a href="ComInterfaces.cs.html#d859045f132e6cb5" class="t t">IShellLinkW</a>)<span class="r16 r">nativePropertyStore</span>);
+ 
+                    <span class="c">// Add collection to custom destination list and commit the result</span>
+                    <span class="r10 r">hResult</span> = <span class="r12 r">pCustDestList</span>.<a href="ComInterfaces.cs.html#b663bbdabf21b248" class="i method">AddUserTasks</a>((<a href="ComInterfaces.cs.html#83f3646e2c1d40f0" class="t t">IObjectArray</a>)<span class="r25 r">pShortCutCollection</span>);
+                    <b>if</b> (<span class="r10 r">hResult</span> &lt; 0)
+                    {
+                        <span class="r12 r">pCustDestList</span>.<a href="ComInterfaces.cs.html#aee76b84a7e319d9" class="i method">AbortList</a>();
+                        <span class="i">Debug</span>.<span class="i">Fail</span>(<span class="s">$&quot;</span><span class="s">AddUserTasks on ICustomDestinationList failed with HResult &#39;</span>{<span class="r10 r">hResult</span>}<span class="s">&#39;.</span><span class="s">&quot;</span>);
+                        <b>return</b>;
+                    }
+ 
+                    <span class="r12 r">pCustDestList</span>.<a href="ComInterfaces.cs.html#624f09bca366180c" class="i method">CommitList</a>();
+                }
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

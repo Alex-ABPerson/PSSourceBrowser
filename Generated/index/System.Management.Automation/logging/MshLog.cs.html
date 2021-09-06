@@ -1,0 +1,1134 @@
+﻿<!DOCTYPE html>
+<html><head><title>MshLog.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(1125);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/logging/MshLog.cs" target="_top">logging\MshLog.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Monad Logging in general is a two layer architecture. At the upper layer are the</span>
+    <span class="c">///</span><span class="c"> Msh Log Engine and Logging Api. At the lower layer is the Provider Interface</span>
+    <span class="c">///</span><span class="c"> and Log Providers. This architecture is adopted to achieve independency between</span>
+    <span class="c">///</span><span class="c"> Monad logging and logging details of different logging technology.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This file implements the upper layer of the Monad Logging architecture.</span>
+    <span class="c">///</span><span class="c"> Lower layer of Msh Log architecture is implemented in LogProvider.cs file.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Logging Api is made up of following five sets</span>
+    <span class="c">///</span><span class="c">   1. Engine Health Event</span>
+    <span class="c">///</span><span class="c">   2. Engine Lifecycle Event</span>
+    <span class="c">///</span><span class="c">   3. Command Lifecycle Event</span>
+    <span class="c">///</span><span class="c">   4. Provider Lifecycle Event</span>
+    <span class="c">///</span><span class="c">   5. Settings Event</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Msh Log Engine provides features in following areas,</span>
+    <span class="c">///</span><span class="c">   1. Loading and managing logging providers. Based on some &quot;Provider Catalog&quot;, engine will try to</span>
+    <span class="c">///</span><span class="c">      load providers. First provider that is successfully loaded will be used for low level logging.</span>
+    <span class="c">///</span><span class="c">      If no providers can be loaded, a dummy provider will be used, which will essentially do nothing.</span>
+    <span class="c">///</span><span class="c">   2. Implementation of logging api functions. These api functions is implemented by calling corresponding</span>
+    <span class="c">///</span><span class="c">      functions in provider interface.</span>
+    <span class="c">///</span><span class="c">   3. Sequence Id Generation. Unique id are generated in this class. These id&#39;s will be attached to events.</span>
+    <span class="c">///</span><span class="c">   4. Monad engine state management. Engine state is stored in ExecutionContext class but managed here.</span>
+    <span class="c">///</span><span class="c">      Later on, this feature may be moved to engine itself (where it should belongs to) when sophisticated</span>
+    <span class="c">///</span><span class="c">      engine state model is established.</span>
+    <span class="c">///</span><span class="c">   5. Logging policy support. Events are logged or not logged based on logging policy settings (which is stored</span>
+    <span class="c">///</span><span class="c">      in session state of the engine.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> MshLog class is defined as a static class. This essentially make the logging api to be a static api.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> We want to provide sufficient synchronization for static functions calls.</span>
+    <span class="c">///</span><span class="c"> This is not needed for now because of following two reasons,</span>
+    <span class="c">///</span><span class="c">     a. Currently, only one monad engine can be running in one process. So logically only one</span>
+    <span class="c">///</span><span class="c">        event will be log at a time.</span>
+    <span class="c">///</span><span class="c">     b. Even in the case of multiple events are logged, underlining logging media should</span>
+    <span class="c">///</span><span class="c">        provide synchronization.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal static class</b> <a id="c21af6f8f06e5873" href="../R/c21af6f8f06e5873.html" target="n" data-glyph="2,0" class="t t">MshLog</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Initialization
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A static dictionary to keep track of log providers for different shellId&#39;s.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> The value of this dictionary is never empty. A value of type DummyProvider means</span>
+        <span class="c">///</span><span class="c"> no logging.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static readonly</b> <span class="i">ConcurrentDictionary</span>&lt;<b>string</b>, <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt;&gt; <a id="7d6ecdc7681353a6" href="../R/7d6ecdc7681353a6.html" target="n" data-glyph="46,1" class="i field">s_logProviders</a> =
+            <b>new</b> <span class="i">ConcurrentDictionary</span>&lt;<b>string</b>, <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt;&gt;();
+ 
+        <b>private const string</b> <a id="44c87c28a35d3d6e" href="../R/../../0000000000.html" target="n" data-glyph="10,1" class="i field">_crimsonLogProviderAssemblyName</a> = <span class="s">&quot;MshCrimsonLog&quot;</span>;
+        <b>private const string</b> <a id="8dccb4415c5f48ba" href="../R/../../0000000000.html" target="n" data-glyph="10,1" class="i field">_crimsonLogProviderTypeName</a> = <span class="s">&quot;System.Management.Automation.Logging.CrimsonLogProvider&quot;</span>;
+ 
+        <b>private static readonly</b> <span class="i">Collection</span>&lt;<b>string</b>&gt; <a id="0eea818d10c947ab" href="../R/0eea818d10c947ab.html" target="n" data-glyph="46,1" class="i field">s_ignoredCommands</a> = <b>new</b> <span class="i">Collection</span>&lt;<b>string</b>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Static constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>static</b> <a id="42d8177aad27e425" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="t method">MshLog</a>()
+        {
+            <a href="#0eea818d10c947ab" class="i field">s_ignoredCommands</a>.<span class="i">Add</span>(<span class="s">&quot;Out-Lineoutput&quot;</span>);
+            <a href="#0eea818d10c947ab" class="i field">s_ignoredCommands</a>.<span class="i">Add</span>(<span class="s">&quot;Format-Default&quot;</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Currently initialization is done in following sequence</span>
+        <span class="c">///</span><span class="c">    a. Try to load CrimsonLogProvider (in the case of Longhorn)</span>
+        <span class="c">///</span><span class="c">    b. If a fails, use the DummyLogProvider instead. (in low-level OS)</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> In the longer turn, we may need to use a &quot;Provider Catalog&quot; for</span>
+        <span class="c">///</span><span class="c"> log provider loading.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">shellId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">IEnumerable</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; <a id="f4879d08f09e2acf" href="../R/f4879d08f09e2acf.html" target="n" data-glyph="76,1" class="i method">GetLogProvider</a>(<b>string</b> <span id="r0 rd" class="r0 r">shellId</span>)
+        {
+            <b>return</b> <a href="#7d6ecdc7681353a6" class="i field">s_logProviders</a>.<span class="i">GetOrAdd</span>(<span class="r0 r">shellId</span>, <span class="i">CreateLogProvider</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get Log Provider based on Execution Context.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">IEnumerable</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; <a id="a8f17851f5050df6" href="../R/a8f17851f5050df6.html" target="n" data-glyph="76,1" class="i method">GetLogProvider</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r1 rd" class="r1 r">executionContext</span>)
+        {
+            <b>if</b> (<span class="r1 r">executionContext</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r1 r">executionContext</span>));
+            }
+ 
+            <b>string</b> <span id="r2 rd" class="r2 r">shellId</span> = <span class="r1 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#347758c52bbd3a07" class="i property">ShellID</a>;
+ 
+            <b>return</b> <a href="#f4879d08f09e2acf" class="i method">GetLogProvider</a>(<span class="r2 r">shellId</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get Log Provider based on Log Context.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">logContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">IEnumerable</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; <a id="1e9977b7c8117dd6" href="../R/1e9977b7c8117dd6.html" target="n" data-glyph="76,1" class="i method">GetLogProvider</a>(<a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r3 rd" class="r3 r">logContext</span>)
+        {
+            <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Debug</span>.<span class="i">Assert</span>(<span class="r3 r">logContext</span> != <b>null</b>);
+            <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Debug</span>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r3 r">logContext</span>.<a href="LogContext.cs.html#0f65985a72cd1d99" class="i property">ShellId</a>));
+ 
+            <b>return</b> <a href="#f4879d08f09e2acf" class="i method">GetLogProvider</a>(<span class="r3 r">logContext</span>.<a href="LogContext.cs.html#0f65985a72cd1d99" class="i property">ShellId</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a log provider based on a shell Id.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">shellId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; <a id="965ad00fa651715c" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CreateLogProvider</a>(<b>string</b> <span id="r4 rd" class="r4 r">shellId</span>)
+        {
+            <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; <span id="r5 rd" class="r5 r">providers</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt;();
+            <span class="c">// Porting note: Linux does not support ETW</span>
+ 
+            <b>try</b>
+            {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CORECLR</span>    <span class="c">// TODO:CORECLR EventLogLogProvider not handled yet</span>
+<span class="e">                LogProvider eventLogLogProvider = new EventLogLogProvider(shellId);
+                providers.Add(eventLogLogProvider);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">                LogProvider sysLogProvider = new PSSysLogProvider();
+                providers.Add(sysLogProvider);
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+                <a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r6 rd" class="r6 r">etwLogProvider</span> = <b>new</b> <span class="t">PSEtwLogProvider</span>();
+                <span class="r5 r">providers</span>.<span class="i">Add</span>(<span class="r6 r">etwLogProvider</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+                <b>return</b> <span class="r5 r">providers</span>;
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span>)
+            {
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span>)
+            {
+            }
+            <b>catch</b> (<span class="i">SecurityException</span>)
+            {
+                <span class="c">// This exception will happen if we try to create an event source</span>
+                <span class="c">// (corresponding to the current running minishell)</span>
+                <span class="c">// when running as non-admin user. In that case, we will default</span>
+                <span class="c">// to dummy log.</span>
+            }
+ 
+            <span class="r5 r">providers</span>.<span class="i">Add</span>(<b>new</b> <a href="LogProvider.cs.html#fc674c4beacc0258" class="t constructor">DummyLogProvider</a>());
+            <b>return</b> <span class="r5 r">providers</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This will set the current log provider to be dummy log.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">shellId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="0e6afc44d394eb14" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">SetDummyLog</a>(<b>string</b> <span id="r7 rd" class="r7 r">shellId</span>)
+        {
+            <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; <span id="r8 rd" class="r8 r">providers</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a>&gt; { <b>new</b> <a href="LogProvider.cs.html#fc674c4beacc0258" class="t constructor">DummyLogProvider</a>() };
+            <a href="#7d6ecdc7681353a6" class="i field">s_logProviders</a>.<span class="i">AddOrUpdate</span>(<span class="r7 r">shellId</span>, <span class="r8 r">providers</span>, (<span id="r9 rd" class="r9 r">key</span>, <span id="r10 rd" class="r10 r">value</span>) =&gt; <span class="r8 r">providers</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Engine Health Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogEngineHealthEvent: Log an engine health event. If engine state is changed, a engine</span>
+        <span class="c">///</span><span class="c"> lifecycle event will be logged also.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is the basic form of EngineHealthEvent logging api, in which all parameters are provided.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Variant form of this function is defined below, which will make parameters additionalInfo</span>
+        <span class="c">///</span><span class="c"> and newEngineState optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context for the engine that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">eventId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">EventId for the event to be logged.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Exception associated with this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Severity of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">additionalInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Additional information for this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">newEngineState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New engine state.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="08d0b473ac35f6fa" href="../R/08d0b473ac35f6fa.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r11 rd" class="r11 r">executionContext</span>,
+                                                <b>int</b> <span id="r12 rd" class="r12 r">eventId</span>,
+                                                <span class="i">Exception</span> <span id="r13 rd" class="r13 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r14 rd" class="r14 r">severity</span>,
+                                                <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <span id="r15 rd" class="r15 r">additionalInfo</span>,
+                                                <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <span id="r16 rd" class="r16 r">newEngineState</span>)
+        {
+            <b>if</b> (<span class="r11 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r11 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r13 r">exception</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r13 r">exception</span>));
+                <b>return</b>;
+            }
+ 
+            <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r17 rd" class="r17 r">invocationInfo</span> = <b>null</b>;
+            <a href="../engine/ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a> <span id="r18 rd" class="r18 r">icer</span> = <span class="r13 r">exception</span> <b>as</b> <a href="../engine/ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a>;
+            <b>if</b> (<span class="r18 r">icer</span> != <b>null</b> &amp;&amp; <span class="r18 r">icer</span>.<a href="../engine/ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a> != <b>null</b>)
+                <span class="r17 r">invocationInfo</span> = <span class="r18 r">icer</span>.<a href="../engine/ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a>.<a href="../engine/ErrorPackage.cs.html#fd1ac7b3462d4426" class="i property">InvocationInfo</a>;
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r19 rd" class="r19 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r11 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#562b69c6c58902c2" class="i method">NeedToLogEngineHealthEvent</a>(<span class="r19 r">provider</span>, <span class="r11 r">executionContext</span>))
+                {
+                    <span class="r19 r">provider</span>.<a href="LogProvider.cs.html#48671db57e9d84d2" class="i method">LogEngineHealthEvent</a>(<a href="#da362393b67166eb" class="i method">GetLogContext</a>(<span class="r11 r">executionContext</span>, <span class="r17 r">invocationInfo</span>, <span class="r14 r">severity</span>), <span class="r12 r">eventId</span>, <span class="r13 r">exception</span>, <span class="r15 r">additionalInfo</span>);
+                }
+            }
+ 
+            <b>if</b> (<span class="r16 r">newEngineState</span> != <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a>.<a href="../engine/ExecutionContext.cs.html#908496dce30a5213" class="i field">None</a>)
+            {
+                <a href="#65556cede304d88a" class="i method">LogEngineLifecycleEvent</a>(<span class="r11 r">executionContext</span>, <span class="r16 r">newEngineState</span>, <span class="r17 r">invocationInfo</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a variation of LogEngineHealthEvent api to make additionalInfo and newEngineState</span>
+        <span class="c">///</span><span class="c"> optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">eventId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="fae9c9c125cac563" href="../R/fae9c9c125cac563.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r20 rd" class="r20 r">executionContext</span>,
+                                                <b>int</b> <span id="r21 rd" class="r21 r">eventId</span>,
+                                                <span class="i">Exception</span> <span id="r22 rd" class="r22 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r23 rd" class="r23 r">severity</span>)
+        {
+            <a href="#6881ef18800f684b" class="i method">LogEngineHealthEvent</a>(<span class="r20 r">executionContext</span>, <span class="r21 r">eventId</span>, <span class="r22 r">exception</span>, <span class="r23 r">severity</span>, <b>null</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a variation of LogEngineHealthEvent api to make eventid, additionalInfo and newEngineState</span>
+        <span class="c">///</span><span class="c"> optional.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> A default event id for engine health event will be used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="cf4ccf9adee95fcf" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r24 rd" class="r24 r">executionContext</span>,
+                                                <span class="i">Exception</span> <span id="r25 rd" class="r25 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r26 rd" class="r26 r">severity</span>)
+        {
+            <a href="#6881ef18800f684b" class="i method">LogEngineHealthEvent</a>(<span class="r24 r">executionContext</span>, 100, <span class="r25 r">exception</span>, <span class="r26 r">severity</span>, <b>null</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a variation of LogEngineHealthEvent api to make newEngineState</span>
+        <span class="c">///</span><span class="c"> optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">eventId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">additionalInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="6881ef18800f684b" href="../R/6881ef18800f684b.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r27 rd" class="r27 r">executionContext</span>,
+                                                <b>int</b> <span id="r28 rd" class="r28 r">eventId</span>,
+                                                <span class="i">Exception</span> <span id="r29 rd" class="r29 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r30 rd" class="r30 r">severity</span>,
+                                                <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <span id="r31 rd" class="r31 r">additionalInfo</span>)
+        {
+            <a href="#08d0b473ac35f6fa" class="i method">LogEngineHealthEvent</a>(<span class="r27 r">executionContext</span>, <span class="r28 r">eventId</span>, <span class="r29 r">exception</span>, <span class="r30 r">severity</span>, <span class="r31 r">additionalInfo</span>, <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a>.<a href="../engine/ExecutionContext.cs.html#908496dce30a5213" class="i field">None</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a variation of LogEngineHealthEvent api to make additionalInfo</span>
+        <span class="c">///</span><span class="c"> optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">eventId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">newEngineState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="44259cf93b1cc4a1" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r32 rd" class="r32 r">executionContext</span>,
+                                                <b>int</b> <span id="r33 rd" class="r33 r">eventId</span>,
+                                                <span class="i">Exception</span> <span id="r34 rd" class="r34 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r35 rd" class="r35 r">severity</span>,
+                                                <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <span id="r36 rd" class="r36 r">newEngineState</span>)
+        {
+            <a href="#08d0b473ac35f6fa" class="i method">LogEngineHealthEvent</a>(<span class="r32 r">executionContext</span>, <span class="r33 r">eventId</span>, <span class="r34 r">exception</span>, <span class="r35 r">severity</span>, <b>null</b>, <span class="r36 r">newEngineState</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogEngineHealthEvent: This is an API for logging engine health event while execution context</span>
+        <span class="c">///</span><span class="c"> is not available. In this case, caller of this API will directly construct LogContext</span>
+        <span class="c">///</span><span class="c"> instance.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This API is currently used only by runspace before engine start.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">logContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">LogContext to be.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">eventId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">EventId for the event to be logged.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Exception associated with this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">additionalInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Additional information for this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="bc345590f2f039d5" href="../R/bc345590f2f039d5.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r37 rd" class="r37 r">logContext</span>,
+                                                <b>int</b> <span id="r38 rd" class="r38 r">eventId</span>,
+                                                <span class="i">Exception</span> <span id="r39 rd" class="r39 r">exception</span>,
+                                                <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <span id="r40 rd" class="r40 r">additionalInfo</span>
+                                                )
+        {
+            <b>if</b> (<span class="r37 r">logContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r37 r">logContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r39 r">exception</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r39 r">exception</span>));
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Here execution context doesn&#39;t exist, we will have to log this event regardless.</span>
+            <span class="c">// Don&#39;t check NeedToLogEngineHealthEvent here.</span>
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r41 rd" class="r41 r">provider</span> <b>in</b> <a href="#1e9977b7c8117dd6" class="i method">GetLogProvider</a>(<span class="r37 r">logContext</span>))
+            {
+                <span class="r41 r">provider</span>.<a href="LogProvider.cs.html#48671db57e9d84d2" class="i method">LogEngineHealthEvent</a>(<span class="r37 r">logContext</span>, <span class="r38 r">eventId</span>, <span class="r39 r">exception</span>, <span class="r40 r">additionalInfo</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Engine Lifecycle Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogEngineLifecycleEvent: Log an engine lifecycle event.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is the basic form of EngineLifecycleEvent logging api, in which all parameters are provided.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Variant form of this function is defined below, which will make parameter additionalInfo</span>
+        <span class="c">///</span><span class="c"> optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context for current engine instance.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">engineState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New engine state.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">InvocationInfo for current command that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="65556cede304d88a" href="../R/65556cede304d88a.html" target="n" data-glyph="74,1" class="i method">LogEngineLifecycleEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r42 rd" class="r42 r">executionContext</span>,
+                                                <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <span id="r43 rd" class="r43 r">engineState</span>,
+                                                <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r44 rd" class="r44 r">invocationInfo</span>)
+        {
+            <b>if</b> (<span class="r42 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r42 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <span id="r45 rd" class="r45 r">previousState</span> = <a href="#b97280f6795ec4fa" class="i method">GetEngineState</a>(<span class="r42 r">executionContext</span>);
+            <b>if</b> (<span class="r43 r">engineState</span> == <span class="r45 r">previousState</span>)
+                <b>return</b>;
+ 
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r46 rd" class="r46 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r42 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#83c9fc6d551e22a5" class="i method">NeedToLogEngineLifecycleEvent</a>(<span class="r46 r">provider</span>, <span class="r42 r">executionContext</span>))
+                {
+                    <span class="r46 r">provider</span>.<a href="LogProvider.cs.html#afa26ba16f873a48" class="i method">LogEngineLifecycleEvent</a>(<a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r42 r">executionContext</span>, <span class="r44 r">invocationInfo</span>), <span class="r43 r">engineState</span>, <span class="r45 r">previousState</span>);
+                }
+            }
+ 
+            <a href="#389eff251e686e60" class="i method">SetEngineState</a>(<span class="r42 r">executionContext</span>, <span class="r43 r">engineState</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a variation of basic LogEngineLifeCycleEvent api which makes invocationInfo</span>
+        <span class="c">///</span><span class="c"> optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">engineState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="453469cf11b39ac9" href="../R/453469cf11b39ac9.html" target="n" data-glyph="74,1" class="i method">LogEngineLifecycleEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r47 rd" class="r47 r">executionContext</span>,
+                                                <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <span id="r48 rd" class="r48 r">engineState</span>)
+        {
+            <a href="#65556cede304d88a" class="i method">LogEngineLifecycleEvent</a>(<span class="r47 r">executionContext</span>, <span class="r48 r">engineState</span>, <b>null</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Command Health Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogProviderHealthEvent: Log a command health event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context for the engine that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r50 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Exception associated with this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r51 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Severity of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="1b469b122e173e0c" href="../R/1b469b122e173e0c.html" target="n" data-glyph="74,1" class="i method">LogCommandHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r49 rd" class="r49 r">executionContext</span>,
+                                                <span class="i">Exception</span> <span id="r50 rd" class="r50 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r51 rd" class="r51 r">severity</span>
+                                                )
+        {
+            <b>if</b> (<span class="r49 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r49 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r50 r">exception</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r50 r">exception</span>));
+                <b>return</b>;
+            }
+ 
+            <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r52 rd" class="r52 r">invocationInfo</span> = <b>null</b>;
+            <a href="../engine/ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a> <span id="r53 rd" class="r53 r">icer</span> = <span class="r50 r">exception</span> <b>as</b> <a href="../engine/ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a>;
+            <b>if</b> (<span class="r53 r">icer</span> != <b>null</b> &amp;&amp; <span class="r53 r">icer</span>.<a href="../engine/ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a> != <b>null</b>)
+                <span class="r52 r">invocationInfo</span> = <span class="r53 r">icer</span>.<a href="../engine/ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a>.<a href="../engine/ErrorPackage.cs.html#fd1ac7b3462d4426" class="i property">InvocationInfo</a>;
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r54 rd" class="r54 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r49 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#b0b8e8a62af46faf" class="i method">NeedToLogCommandHealthEvent</a>(<span class="r54 r">provider</span>, <span class="r49 r">executionContext</span>))
+                {
+                    <span class="r54 r">provider</span>.<a href="LogProvider.cs.html#031c373b2eb92e87" class="i method">LogCommandHealthEvent</a>(<a href="#da362393b67166eb" class="i method">GetLogContext</a>(<span class="r49 r">executionContext</span>, <span class="r52 r">invocationInfo</span>, <span class="r51 r">severity</span>), <span class="r50 r">exception</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Command Lifecycle Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogCommandLifecycleEvent: Log a command lifecycle event.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is the only form of CommandLifecycleEvent logging api.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution Context for the current running engine.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r56 r">commandState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New command state.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Invocation data for current command that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="bc5fdac5be99b643" href="../R/bc5fdac5be99b643.html" target="n" data-glyph="74,1" class="i method">LogCommandLifecycleEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r55 rd" class="r55 r">executionContext</span>,
+                                                <a href="#0592db37e4bdfd35" class="t t">CommandState</a> <span id="r56 rd" class="r56 r">commandState</span>,
+                                                <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r57 rd" class="r57 r">invocationInfo</span>)
+        {
+            <b>if</b> (<span class="r55 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r55 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r57 r">invocationInfo</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r57 r">invocationInfo</span>));
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<a href="#0eea818d10c947ab" class="i field">s_ignoredCommands</a>.<span class="i">Contains</span>(<span class="r57 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>.<a href="../engine/CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>))
+            {
+                <b>return</b>;
+            }
+ 
+            <a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r58 rd" class="r58 r">logContext</span> = <b>null</b>;
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r59 rd" class="r59 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r55 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#4b3fcd7829dd4dda" class="i method">NeedToLogCommandLifecycleEvent</a>(<span class="r59 r">provider</span>, <span class="r55 r">executionContext</span>))
+                {
+                    <span class="r59 r">provider</span>.<span class="i">LogCommandLifecycleEvent</span>(
+                        () =&gt; <span class="r58 r">logContext</span> ??= <a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r55 r">executionContext</span>, <span class="r57 r">invocationInfo</span>),
+                        <span class="r56 r">commandState</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogCommandLifecycleEvent: Log a command lifecycle event.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is a form of CommandLifecycleEvent which takes a commandName instead</span>
+        <span class="c">///</span><span class="c"> of invocationInfo. It is likely that invocationInfo is not available if</span>
+        <span class="c">///</span><span class="c"> the command failed security check.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution Context for the current running engine.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">commandState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New command state.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">commandName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Current command that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="d7f27139228fb2bb" href="../R/d7f27139228fb2bb.html" target="n" data-glyph="74,1" class="i method">LogCommandLifecycleEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r60 rd" class="r60 r">executionContext</span>,
+                                                <a href="#0592db37e4bdfd35" class="t t">CommandState</a> <span id="r61 rd" class="r61 r">commandState</span>,
+                                                <b>string</b> <span id="r62 rd" class="r62 r">commandName</span>)
+        {
+            <b>if</b> (<span class="r60 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r60 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r63 rd" class="r63 r">logContext</span> = <b>null</b>;
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r64 rd" class="r64 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r60 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#4b3fcd7829dd4dda" class="i method">NeedToLogCommandLifecycleEvent</a>(<span class="r64 r">provider</span>, <span class="r60 r">executionContext</span>))
+                {
+                    <span class="r64 r">provider</span>.<span class="i">LogCommandLifecycleEvent</span>(
+                        () =&gt;
+                        {
+                            <b>if</b> (<span class="r63 r">logContext</span> == <b>null</b>)
+                            {
+                                <span class="r63 r">logContext</span> = <a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r60 r">executionContext</span>, <b>null</b>);
+                                <span class="r63 r">logContext</span>.<a href="LogContext.cs.html#41b94a560150af5c" class="i property">CommandName</a> = <span class="r62 r">commandName</span>;
+                            }
+ 
+                            <b>return</b> <span class="r63 r">logContext</span>;
+                        }, <span class="r61 r">commandState</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Pipeline Execution Detail Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogPipelineExecutionDetailEvent: Log a pipeline execution detail event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution Context for the current running engine.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r66 r">detail</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Detail to be logged for this pipeline execution detail.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Invocation data for current command that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="b39a599902bc101b" href="../R/b39a599902bc101b.html" target="n" data-glyph="74,1" class="i method">LogPipelineExecutionDetailEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r65 rd" class="r65 r">executionContext</span>,
+                                                            <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r66 rd" class="r66 r">detail</span>,
+                                                            <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r67 rd" class="r67 r">invocationInfo</span>)
+ 
+        {
+            <b>if</b> (<span class="r65 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r65 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r68 rd" class="r68 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r65 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#b9039514d7c96d77" class="i method">NeedToLogPipelineExecutionDetailEvent</a>(<span class="r68 r">provider</span>, <span class="r65 r">executionContext</span>))
+                {
+                    <span class="r68 r">provider</span>.<a href="LogProvider.cs.html#ac0afc62d70321b3" class="i method">LogPipelineExecutionDetailEvent</a>(<a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r65 r">executionContext</span>, <span class="r67 r">invocationInfo</span>), <span class="r66 r">detail</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogPipelineExecutionDetailEvent: Log a pipeline execution detail event.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is a form of PipelineExecutionDetailEvent which takes a scriptName and commandLine</span>
+        <span class="c">///</span><span class="c"> instead of invocationInfo. This will save the need to fill in the commandName for</span>
+        <span class="c">///</span><span class="c"> this event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution Context for the current running engine.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">detail</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Detail to be logged for this pipeline execution detail.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r71 r">scriptName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Script that is currently running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r72 r">commandLine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command line that is currently running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="49a094493f01338c" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">LogPipelineExecutionDetailEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r69 rd" class="r69 r">executionContext</span>,
+                                                            <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r70 rd" class="r70 r">detail</span>,
+                                                            <b>string</b> <span id="r71 rd" class="r71 r">scriptName</span>,
+                                                            <b>string</b> <span id="r72 rd" class="r72 r">commandLine</span>)
+        {
+            <b>if</b> (<span class="r69 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r69 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r73 rd" class="r73 r">logContext</span> = <a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r69 r">executionContext</span>, <b>null</b>);
+            <span class="r73 r">logContext</span>.<a href="LogContext.cs.html#ce0bdcf6a1a8564a" class="i property">CommandLine</a> = <span class="r72 r">commandLine</span>;
+            <span class="r73 r">logContext</span>.<a href="LogContext.cs.html#10a9debda716beb5" class="i property">ScriptName</a> = <span class="r71 r">scriptName</span>;
+ 
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r74 rd" class="r74 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r69 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#b9039514d7c96d77" class="i method">NeedToLogPipelineExecutionDetailEvent</a>(<span class="r74 r">provider</span>, <span class="r69 r">executionContext</span>))
+                {
+                    <span class="r74 r">provider</span>.<a href="LogProvider.cs.html#ac0afc62d70321b3" class="i method">LogPipelineExecutionDetailEvent</a>(<span class="r73 r">logContext</span>, <span class="r70 r">detail</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Provider Health Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogProviderHealthEvent: Log a Provider health event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r75 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context for the engine that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r76 r">providerName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of the provider.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r77 r">exception</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Exception associated with this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r78 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Severity of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="565c5a5f3608944d" href="../R/565c5a5f3608944d.html" target="n" data-glyph="74,1" class="i method">LogProviderHealthEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r75 rd" class="r75 r">executionContext</span>,
+                                                <b>string</b> <span id="r76 rd" class="r76 r">providerName</span>,
+                                                <span class="i">Exception</span> <span id="r77 rd" class="r77 r">exception</span>,
+                                                <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r78 rd" class="r78 r">severity</span>
+                                                )
+        {
+            <b>if</b> (<span class="r75 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r75 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r77 r">exception</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r77 r">exception</span>));
+                <b>return</b>;
+            }
+ 
+            <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r79 rd" class="r79 r">invocationInfo</span> = <b>null</b>;
+            <a href="../engine/ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a> <span id="r80 rd" class="r80 r">icer</span> = <span class="r77 r">exception</span> <b>as</b> <a href="../engine/ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a>;
+            <b>if</b> (<span class="r80 r">icer</span> != <b>null</b> &amp;&amp; <span class="r80 r">icer</span>.<a href="../engine/ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a> != <b>null</b>)
+                <span class="r79 r">invocationInfo</span> = <span class="r80 r">icer</span>.<a href="../engine/ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a>.<a href="../engine/ErrorPackage.cs.html#fd1ac7b3462d4426" class="i property">InvocationInfo</a>;
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r81 rd" class="r81 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r75 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#c96d9f6c4b037d01" class="i method">NeedToLogProviderHealthEvent</a>(<span class="r81 r">provider</span>, <span class="r75 r">executionContext</span>))
+                {
+                    <span class="r81 r">provider</span>.<a href="LogProvider.cs.html#d62918924fb60da6" class="i method">LogProviderHealthEvent</a>(<a href="#da362393b67166eb" class="i method">GetLogContext</a>(<span class="r75 r">executionContext</span>, <span class="r79 r">invocationInfo</span>, <span class="r78 r">severity</span>), <span class="r76 r">providerName</span>, <span class="r77 r">exception</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Provider Lifecycle Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogProviderLifecycleEvent: Log a provider lifecycle event.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is the only form of ProviderLifecycleEvent logging api.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r82 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution Context for current engine that is running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r83 r">providerName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Provider name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r84 r">providerState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New provider state.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="302502e120276213" href="../R/302502e120276213.html" target="n" data-glyph="74,1" class="i method">LogProviderLifecycleEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r82 rd" class="r82 r">executionContext</span>,
+                                                     <b>string</b> <span id="r83 rd" class="r83 r">providerName</span>,
+                                                     <a href="#74ca7b7b1cc6cf5c" class="t t">ProviderState</a> <span id="r84 rd" class="r84 r">providerState</span>)
+        {
+            <b>if</b> (<span class="r82 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r82 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r85 rd" class="r85 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r82 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#1ed10b156d54484b" class="i method">NeedToLogProviderLifecycleEvent</a>(<span class="r85 r">provider</span>, <span class="r82 r">executionContext</span>))
+                {
+                    <span class="r85 r">provider</span>.<a href="LogProvider.cs.html#e01f775b46945ecb" class="i method">LogProviderLifecycleEvent</a>(<a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r82 r">executionContext</span>, <b>null</b>), <span class="r83 r">providerName</span>, <span class="r84 r">providerState</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Settings Event Logging Api
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> LogSettingsEvent: Log a settings event</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is the basic form of LoggingSettingsEvent API. Variation of this function defined</span>
+        <span class="c">///</span><span class="c"> below will make parameter invocationInfo optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r86 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context for current running engine.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r87 r">variableName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Variable name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r88 r">newValue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New value for the variable.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r89 r">previousValue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Previous value for the variable.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Invocation data for the command that is currently running.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="d9bbe724291c30b0" href="../R/d9bbe724291c30b0.html" target="n" data-glyph="74,1" class="i method">LogSettingsEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r86 rd" class="r86 r">executionContext</span>,
+                                            <b>string</b> <span id="r87 rd" class="r87 r">variableName</span>,
+                                            <b>string</b> <span id="r88 rd" class="r88 r">newValue</span>,
+                                            <b>string</b> <span id="r89 rd" class="r89 r">previousValue</span>,
+                                            <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r90 rd" class="r90 r">invocationInfo</span>)
+        {
+            <b>if</b> (<span class="r86 r">executionContext</span> == <b>null</b>)
+            {
+                <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r86 r">executionContext</span>));
+                <b>return</b>;
+            }
+ 
+            <b>foreach</b> (<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r91 rd" class="r91 r">provider</span> <b>in</b> <a href="#a8f17851f5050df6" class="i method">GetLogProvider</a>(<span class="r86 r">executionContext</span>))
+            {
+                <b>if</b> (<a href="#74e566e2be0caf6b" class="i method">NeedToLogSettingsEvent</a>(<span class="r91 r">provider</span>, <span class="r86 r">executionContext</span>))
+                {
+                    <span class="r91 r">provider</span>.<a href="LogProvider.cs.html#de5e924311dc0832" class="i method">LogSettingsEvent</a>(<a href="#e623159020fe0d18" class="i method">GetLogContext</a>(<span class="r86 r">executionContext</span>, <span class="r90 r">invocationInfo</span>), <span class="r87 r">variableName</span>, <span class="r88 r">newValue</span>, <span class="r89 r">previousValue</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a variation of basic LogSettingsEvent to make &quot;invocationInfo&quot; optional.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r92 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">variableName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r94 r">newValue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r95 r">previousValue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="78b284312ce8c87c" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">LogSettingsEvent</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r92 rd" class="r92 r">executionContext</span>,
+                                            <b>string</b> <span id="r93 rd" class="r93 r">variableName</span>,
+                                            <b>string</b> <span id="r94 rd" class="r94 r">newValue</span>,
+                                            <b>string</b> <span id="r95 rd" class="r95 r">previousValue</span>)
+        {
+            <a href="#d9bbe724291c30b0" class="i method">LogSettingsEvent</a>(<span class="r92 r">executionContext</span>, <span class="r93 r">variableName</span>, <span class="r94 r">newValue</span>, <span class="r95 r">previousValue</span>, <b>null</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Helper Functions
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get current engine state for the engine instance corresponding to executionContext</span>
+        <span class="c">///</span><span class="c"> passed in.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Engine state is stored in ExecutionContext.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r96 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <a id="b97280f6795ec4fa" href="../R/b97280f6795ec4fa.html" target="n" data-glyph="76,1" class="i method">GetEngineState</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r96 rd" class="r96 r">executionContext</span>)
+        {
+            <b>return</b> <span class="r96 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a1c978754a850732" class="i property">EngineState</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set current engine state for the engine instance corresponding to executionContext</span>
+        <span class="c">///</span><span class="c"> passed in.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Engine state is stored in ExecutionContext.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r97 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r98 r">engineState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="389eff251e686e60" href="../R/389eff251e686e60.html" target="n" data-glyph="76,1" class="i method">SetEngineState</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r97 rd" class="r97 r">executionContext</span>, <a href="../engine/ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a> <span id="r98 rd" class="r98 r">engineState</span>)
+        {
+            <span class="r97 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a1c978754a850732" class="i property">EngineState</a> = <span class="r98 r">engineState</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Generate LogContext structure based on executionContext and invocationInfo passed in.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> LogContext structure is used in log provider interface.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r99 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r100 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <a id="e623159020fe0d18" href="../R/e623159020fe0d18.html" target="n" data-glyph="74,1" class="i method">GetLogContext</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r99 rd" class="r99 r">executionContext</span>, <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r100 rd" class="r100 r">invocationInfo</span>)
+        {
+            <b>return</b> <a href="#da362393b67166eb" class="i method">GetLogContext</a>(<span class="r99 r">executionContext</span>, <span class="r100 r">invocationInfo</span>, <a href="#2b721dd17d857439" class="t t">Severity</a>.<a href="#3debb3e9be6c73ea" class="i field">Informational</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Generate LogContext structure based on executionContext and invocationInfo passed in.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> LogContext structure is used in log provider interface.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r101 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r102 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r103 r">severity</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <a id="da362393b67166eb" href="../R/da362393b67166eb.html" target="n" data-glyph="76,1" class="i method">GetLogContext</a>(<a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r101 rd" class="r101 r">executionContext</span>, <a href="../engine/InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r102 rd" class="r102 r">invocationInfo</span>, <a href="#2b721dd17d857439" class="t t">Severity</a> <span id="r103 rd" class="r103 r">severity</span>)
+        {
+            <b>if</b> (<span class="r101 r">executionContext</span> == <b>null</b>)
+                <b>return</b> <b>null</b>;
+ 
+            <a href="LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r104 rd" class="r104 r">logContext</span> = <b>new</b> <span class="t">LogContext</span>();
+ 
+            <b>string</b> <span id="r105 rd" class="r105 r">shellId</span> = <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#347758c52bbd3a07" class="i property">ShellID</a>;
+ 
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#82732b322a8efcd9" class="i property">ExecutionContext</a> = <span class="r101 r">executionContext</span>;
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#0f65985a72cd1d99" class="i property">ShellId</a> = <span class="r105 r">shellId</span>;
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#e18f98e55631e066" class="i property">Severity</a> = <span class="r103 r">severity</span>.<span class="i">ToString</span>();
+ 
+            <b>if</b> (<span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#24a4a46de18d1004" class="i property">EngineHostInterface</a> != <b>null</b>)
+            {
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#a0b26881fab992c8" class="i property">HostName</a> = <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#24a4a46de18d1004" class="i property">EngineHostInterface</a>.<a href="../engine/hostifaces/InternalHost.cs.html#20e8052a252e9b6d" class="i property">Name</a>;
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#faea148d187de067" class="i property">HostVersion</a> = <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#24a4a46de18d1004" class="i property">EngineHostInterface</a>.<a href="../engine/hostifaces/InternalHost.cs.html#207f67c40acf5ce7" class="i property">Version</a>.<span class="i">ToString</span>();
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#c4dee1569d48dd83" class="i property">HostId</a> = (<b>string</b>)<span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#24a4a46de18d1004" class="i property">EngineHostInterface</a>.<a href="../engine/hostifaces/InternalHost.cs.html#a941ed378638f83b" class="i property">InstanceId</a>.<span class="i">ToString</span>();
+            }
+ 
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#65534d4343d66f64" class="i property">HostApplication</a> = <b>string</b>.<span class="i">Join</span>(<span class="s">&quot; &quot;</span>, <span class="i">Environment</span>.<span class="i">GetCommandLineArgs</span>());
+ 
+            <b>if</b> (<span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a> != <b>null</b>)
+            {
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#f5ca1bf21529eaa4" class="i property">EngineVersion</a> = <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>.<a href="../engine/hostifaces/Connection.cs.html#96542f97313e77ed" class="i property">Version</a>.<span class="i">ToString</span>();
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#caa7190ab228e749" class="i property">RunspaceId</a> = <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>.<a href="../engine/hostifaces/Connection.cs.html#af7b715fe8b1bee2" class="i property">InstanceId</a>.<span class="i">ToString</span>();
+ 
+                <a href="../engine/hostifaces/Pipeline.cs.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r106 rd" class="r106 r">currentPipeline</span> = ((<a href="../engine/hostifaces/ConnectionBase.cs.html#b5efaa6cd9653c05" class="t t">RunspaceBase</a>)<span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>).<a href="../engine/hostifaces/ConnectionBase.cs.html#2039b1cbfe257822" class="i method">GetCurrentlyRunningPipeline</a>();
+                <b>if</b> (<span class="r106 r">currentPipeline</span> != <b>null</b>)
+                {
+                    <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#38597e5c0cbfb08d" class="i property">PipelineId</a> = <span class="r106 r">currentPipeline</span>.<a href="../engine/hostifaces/Pipeline.cs.html#f221ca76d844add1" class="i property">InstanceId</a>.<span class="i">ToString</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>);
+                }
+            }
+ 
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#25e9b2c3638b1bb2" class="i property">SequenceNumber</a> = <a href="#d226906c452cd6ab" class="i property">NextSequenceNumber</a>;
+ 
+            <b>try</b>
+            {
+                <b>if</b> (<span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#b357c2346f3833f2" class="i property">LogContextCache</a>.<a href="#7592ac0f278819d4" class="i property">User</a> == <b>null</b>)
+                {
+                    <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#adb5cfabdb4a4d54" class="i property">User</a> = <span class="i">Environment</span>.<span class="i">UserDomainName</span> + <span class="s">&quot;\\&quot;</span> + <span class="i">Environment</span>.<span class="i">UserName</span>;
+                    <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#b357c2346f3833f2" class="i property">LogContextCache</a>.<a href="#7592ac0f278819d4" class="i property">User</a> = <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#adb5cfabdb4a4d54" class="i property">User</a>;
+                }
+                <b>else</b>
+                {
+                    <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#adb5cfabdb4a4d54" class="i property">User</a> = <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#b357c2346f3833f2" class="i property">LogContextCache</a>.<a href="#7592ac0f278819d4" class="i property">User</a>;
+                }
+            }
+            <b>catch</b> (<span class="i">InvalidOperationException</span>)
+            {
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#adb5cfabdb4a4d54" class="i property">User</a> = <span class="i">Logging</span>.<span class="i">UnknownUserName</span>;
+            }
+ 
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<a href="../engine/remoting/fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a> <span id="r107 rd" class="r107 r">psSenderInfo</span> =
+                    <span class="r101 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../engine/SessionStatePublic.cs.html#0198da5eba13cb75" class="i property">PSVariable</a>.<a href="../engine/VariableInterfaces.cs.html#20b9dd22f81d2a1c" class="i method">GetValue</a>(<span class="s">&quot;PSSenderInfo&quot;</span>) <b>as</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<a href="../engine/remoting/fanin/PSPrincipal.cs.html#eeedcf9113508cb9" class="t t">PSSenderInfo</a>;
+            <b>if</b> (<span class="r107 r">psSenderInfo</span> != <b>null</b>)
+            {
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#807fa9e7689cb5e5" class="i property">ConnectedUser</a> = <span class="r107 r">psSenderInfo</span>.<a href="../engine/remoting/fanin/PSPrincipal.cs.html#ac3b737833cbe3e1" class="i property">UserInfo</a>.<a href="../engine/remoting/fanin/PSPrincipal.cs.html#be3c94a41767a974" class="i property">Identity</a>.<a href="../engine/remoting/fanin/PSPrincipal.cs.html#5ec5296e7ff7b744" class="i property">Name</a>;
+            }
+ 
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#6d1a27c5634317f9" class="i property">Time</a> = <span class="i">DateTime</span>.<span class="i">Now</span>.<span class="i">ToString</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>);
+ 
+            <b>if</b> (<span class="r102 r">invocationInfo</span> == <b>null</b>)
+                <b>return</b> <span class="r104 r">logContext</span>;
+ 
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#10a9debda716beb5" class="i property">ScriptName</a> = <span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#ffa710af0f908256" class="i property">ScriptName</a>;
+            <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#ce0bdcf6a1a8564a" class="i property">CommandLine</a> = <span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#d8a2387de19e4425" class="i property">Line</a>;
+ 
+            <b>if</b> (<span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a> != <b>null</b>)
+            {
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#41b94a560150af5c" class="i property">CommandName</a> = <span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>.<a href="../engine/CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>;
+                <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#7361ff6b004fa599" class="i property">CommandType</a> = <span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>.<a href="../engine/CommandInfo.cs.html#1aa74ca244a39308" class="i property">CommandType</a>.<span class="i">ToString</span>();
+ 
+                <b>switch</b> (<span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>.<a href="../engine/CommandInfo.cs.html#1aa74ca244a39308" class="i property">CommandType</a>)
+                {
+                    <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#f4fc4c6de9082bc5" class="i field">Application</a>:
+                        <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#71189afeeea31fee" class="i property">CommandPath</a> = ((<a href="../engine/ApplicationInfo.cs.html#3fe5acebae74c595" class="t t">ApplicationInfo</a>)<span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>).<a href="../engine/ApplicationInfo.cs.html#fc56d6471804cff1" class="i property">Path</a>;
+                        <b>break</b>;
+                    <b>case</b> <a href="../engine/CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../engine/CommandInfo.cs.html#5baa5da2219b134a" class="i field">ExternalScript</a>:
+                        <span class="r104 r">logContext</span>.<a href="LogContext.cs.html#71189afeeea31fee" class="i property">CommandPath</a> = ((<a href="../engine/ExternalScriptInfo.cs.html#7806ac40f903221c" class="t t">ExternalScriptInfo</a>)<span class="r102 r">invocationInfo</span>.<a href="../engine/InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>).<a href="../engine/ExternalScriptInfo.cs.html#ba1a326ad41ce463" class="i property">Path</a>;
+                        <b>break</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r104 r">logContext</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Logging Policy
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogEngineHealthEvent: check whether logging engine health event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log engine event is controled by session variable &quot;LogEngineHealthEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is true (?).</span>
+        <span class="c">///</span><span class="c"> Reading a session variable from execution context for</span>
+        <span class="c">///</span><span class="c"> every single logging call may be expensive. We may need to use a different</span>
+        <span class="c">///</span><span class="c"> approach for this:</span>
+        <span class="c">///</span><span class="c">     a. ExecutionContext will cache the value for variable &quot;LogEngineHealthEvent&quot;</span>
+        <span class="c">///</span><span class="c">     b. If this variable is changed, a notification function will change the cached</span>
+        <span class="c">///</span><span class="c">        value in engine correspondently.</span>
+        <span class="c">///</span><span class="c"> This applies to other logging preference variable also.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r108 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r109 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="562b69c6c58902c2" href="../R/562b69c6c58902c2.html" target="n" data-glyph="76,1" class="i method">NeedToLogEngineHealthEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r108 rd" class="r108 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r109 rd" class="r109 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r108 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r109 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#f9dd744600bda4fe" class="i field">LogEngineHealthEventVarPath</a>, <b>true</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogEngineLifecycleEvent: check whether logging engine lifecycle event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log engine lifecycle event is controled by session variable &quot;LogEngineLifecycleEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is false (?).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r110 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r111 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="83c9fc6d551e22a5" href="../R/83c9fc6d551e22a5.html" target="n" data-glyph="76,1" class="i method">NeedToLogEngineLifecycleEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r110 rd" class="r110 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r111 rd" class="r111 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r110 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r111 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#a9f7543f43bcbfe3" class="i field">LogEngineLifecycleEventVarPath</a>, <b>true</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogCommandHealthEvent: check whether logging command health event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log command health event is controled by session variable &quot;LogCommandHealthEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is false (?).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r112 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r113 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="b0b8e8a62af46faf" href="../R/b0b8e8a62af46faf.html" target="n" data-glyph="76,1" class="i method">NeedToLogCommandHealthEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r112 rd" class="r112 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r113 rd" class="r113 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r112 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r113 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#6aaab86fa4cb8e6c" class="i field">LogCommandHealthEventVarPath</a>, <b>false</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogCommandLifecycleEvent: check whether logging command event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log command lifecycle event is controled by session variable &quot;LogCommandLifecycleEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is false (?).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r114 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r115 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="4b3fcd7829dd4dda" href="../R/4b3fcd7829dd4dda.html" target="n" data-glyph="76,1" class="i method">NeedToLogCommandLifecycleEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r114 rd" class="r114 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r115 rd" class="r115 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r114 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r115 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#aa69c2d3b41acb66" class="i field">LogCommandLifecycleEventVarPath</a>, <b>false</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogPipelineExecutionDetailEvent: check whether logging pipeline execution detail event is necessary.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Whether to log command lifecycle event is controled by PSSnapin set up.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Should we use session variable &quot;LogPipelineExecutionEvent&quot; to control this also?</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Currently we return true always since pipeline processor already check for whether to log</span>
+        <span class="c">///</span><span class="c"> logic from PSSnapin already. This may need to be changed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r116 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r117 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="b9039514d7c96d77" href="../R/b9039514d7c96d77.html" target="n" data-glyph="76,1" class="i method">NeedToLogPipelineExecutionDetailEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r116 rd" class="r116 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r117 rd" class="r117 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r116 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+            <span class="c">// return LanguagePrimitives.IsTrue(executionContext.GetVariable(&quot;LogPipelineExecutionDetailEvent&quot;, false));</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogProviderHealthEvent: check whether logging Provider health event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log Provider health event is controled by session variable &quot;LogProviderHealthEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is true.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r118 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r119 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="c96d9f6c4b037d01" href="../R/c96d9f6c4b037d01.html" target="n" data-glyph="76,1" class="i method">NeedToLogProviderHealthEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r118 rd" class="r118 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r119 rd" class="r119 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r118 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r119 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#d72385f83e49e499" class="i field">LogProviderHealthEventVarPath</a>, <b>true</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogProviderLifecycleEvent: check whether logging Provider lifecycle event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log Provider lifecycle event is controled by session variable &quot;LogProviderLifecycleEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is true.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r120 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r121 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="1ed10b156d54484b" href="../R/1ed10b156d54484b.html" target="n" data-glyph="76,1" class="i method">NeedToLogProviderLifecycleEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r120 rd" class="r120 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r121 rd" class="r121 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r120 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r121 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#ed2b7778a71a9418" class="i field">LogProviderLifecycleEventVarPath</a>, <b>true</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> NeedToLogSettingsEvent: check whether logging settings event is necessary.</span>
+        <span class="c">///</span><span class="c">     Whether to log settings event is controled by session variable &quot;LogSettingsEvent&quot;</span>
+        <span class="c">///</span><span class="c">     The default value for this is false (?).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r122 r">logProvider</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r123 r">executionContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="74e566e2be0caf6b" href="../R/74e566e2be0caf6b.html" target="n" data-glyph="76,1" class="i method">NeedToLogSettingsEvent</a>(<a href="LogProvider.cs.html#df258f328c0cd8e4" class="t t">LogProvider</a> <span id="r122 rd" class="r122 r">logProvider</span>, <a href="../engine/ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r123 rd" class="r123 r">executionContext</span>)
+        {
+            <b>if</b> (!<span class="r122 r">logProvider</span>.<a href="LogProvider.cs.html#60d794c83c675b2e" class="i method">UseLoggingVariables</a>())
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#7b42a860769a8de5" class="i method">IsTrue</a>(<span class="r123 r">executionContext</span>.<a href="../engine/ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="../engine/SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../engine/SpecialVariables.cs.html#442fd9d1ad5d7320" class="i field">LogSettingsEventVarPath</a>, <b>true</b>));
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Sequence Id Generator
+ 
+        <b>private static int</b> <a id="85a652274f8860c5" href="../R/85a652274f8860c5.html" target="n" data-glyph="46,1" class="i field">s_nextSequenceNumber</a> = 0;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Generate next sequence id to be attached to current event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <b>private static string</b> <a id="d226906c452cd6ab" href="../R/d226906c452cd6ab.html" target="n" data-glyph="106,1" class="i property">NextSequenceNumber</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <span class="i">Convert</span>.<span class="i">ToString</span>(<span class="i">Interlocked</span>.<span class="i">Increment</span>(<b>ref</b> <a href="#85a652274f8860c5" class="i field">s_nextSequenceNumber</a>), <span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> EventId Constants
+ 
+        <span class="c">// General health issues.</span>
+        <b>internal const int</b> <a id="ca19053a90412a99" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_GENERAL_HEALTH_ISSUE</a> = 100;
+ 
+        <span class="c">// Dependency. resource not available</span>
+        <b>internal const int</b> <a id="23884ab0066caf5d" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_RESOURCE_NOT_AVAILABLE</a> = 101;
+        <span class="c">// Connectivity. network connection failure</span>
+        <b>internal const int</b> <a id="bbe9055629f67b70" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_NETWORK_CONNECTIVITY_ISSUE</a> = 102;
+        <span class="c">// Settings. fail to set some configuration settings</span>
+        <b>internal const int</b> <a id="584342f4380a5ed3" href="../R/584342f4380a5ed3.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_CONFIGURATION_FAILURE</a> = 103;
+        <span class="c">// Performance. system is experiencing some performance issues</span>
+        <b>internal const int</b> <a id="3a84dbb461cda655" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_PERFORMANCE_ISSUE</a> = 104;
+        <span class="c">// Security: system is experiencing some security issues</span>
+        <b>internal const int</b> <a id="0a7d4137dd3c9108" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_SECURITY_ISSUE</a> = 105;
+        <span class="c">// Workload. system is overloaded.</span>
+        <b>internal const int</b> <a id="53988cfe490ddcbb" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_SYSTEM_OVERLOADED</a> = 106;
+ 
+        <span class="c">// Beta 1 only -- Unexpected Exception</span>
+        <b>internal const int</b> <a id="2dd0b4bb983b885e" href="../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">EVENT_ID_UNEXPECTED_EXCEPTION</a> = 195;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> EventId Constants
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Log context cache.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="df31752f5cd4168f" href="../R/df31752f5cd4168f.html" target="n" data-glyph="2,0" class="t t"><span id="1c3043dc73e6af26">LogContextCache</span></a>
+    {
+        <b>internal string</b> <a id="7592ac0f278819d4" href="../R/7592ac0f278819d4.html" target="n" data-glyph="104,1" class="i property">User</a> { <b>get</b>; <b>set</b>; } = <b>null</b>;
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> Command State and Provider State
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Severity of the event.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal enum</b> <a id="2b721dd17d857439" href="../R/2b721dd17d857439.html" target="n" data-glyph="20,0" class="t t"><span id="1928ca859e18b0cb">Severity</span></a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Undefined severity.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="088b6375154c7706" href="../R/../../0000000000.html" target="n" data-glyph="24,1" class="i field">None</a>,
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Critical event causing engine not to work.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="0896d5482143a6cd" href="../R/../../0000000000.html" target="n" data-glyph="24,1" class="i field">Critical</a>,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Error causing engine partially work.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="12c708c17f37c7eb" href="../R/12c708c17f37c7eb.html" target="n" data-glyph="24,1" class="i field">Error</a>,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Problem that may not cause an immediate problem.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="1440d51070db4217" href="../R/1440d51070db4217.html" target="n" data-glyph="24,1" class="i field">Warning</a>,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Informational.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="3debb3e9be6c73ea" href="../R/3debb3e9be6c73ea.html" target="n" data-glyph="24,1" class="i field">Informational</a>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Enum for command states.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal enum</b> <a id="0592db37e4bdfd35" href="../R/0592db37e4bdfd35.html" target="n" data-glyph="20,0" class="t t"><span id="e004921bbcb39926">CommandState</span></a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="f70754d0b08fffd5" href="../R/f70754d0b08fffd5.html" target="n" data-glyph="24,1" class="i field">Started</a> = 0,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="c1941585e07efa28" href="../R/c1941585e07efa28.html" target="n" data-glyph="24,1" class="i field">Stopped</a> = 1,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="2189559e615ae527" href="../R/2189559e615ae527.html" target="n" data-glyph="24,1" class="i field">Terminated</a> = 2
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Enum for provider states.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal enum</b> <a id="74ca7b7b1cc6cf5c" href="../R/74ca7b7b1cc6cf5c.html" target="n" data-glyph="20,0" class="t t"><span id="1c9b3924423dca69">ProviderState</span></a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="378814869092522e" href="../R/378814869092522e.html" target="n" data-glyph="24,1" class="i field">Started</a> = 0,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="511f412afcce2e6a" href="../R/511f412afcce2e6a.html" target="n" data-glyph="24,1" class="i field">Stopped</a> = 1,
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+}
+</pre></td></tr></table></div></body></html>

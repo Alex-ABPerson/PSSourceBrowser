@@ -1,0 +1,881 @@
+﻿<!DOCTYPE html>
+<html><head><title>CommandProcessor.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(872);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/CommandProcessor.cs" target="_top">engine\CommandProcessor.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Class definition of CommandProcessor - This class provides interface to create</span>
+    <span class="c">///</span><span class="c"> and execute commands written in CLS compliant languages.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="35bfa3d4fe5f92fc" href="../R/35bfa3d4fe5f92fc.html" target="n" data-glyph="2,0" class="t t">CommandProcessor</a> : <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+ 
+        <b>static</b> <a id="4144070af2f24752" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="t method">CommandProcessor</a>()
+        {
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a> = <b>new</b> <span class="i">ConcurrentDictionary</span>&lt;<span class="i">Type</span>, <span class="i">Func</span>&lt;<a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt;&gt;();
+ 
+            <span class="c">// Avoid jitting constructors some of the more commonly used cmdlets in SMA.dll - not meant to be</span>
+            <span class="c">// exhaustive b/c many cmdlets aren&#39;t called at all, so we&#39;d never even need an entry in the cache.</span>
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="InternalCommands.cs.html#e797f6e277ea7817" class="t t">ForEachObjectCommand</a>), () =&gt; <b>new</b> <span class="t">ForEachObjectCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="InternalCommands.cs.html#dc8bedd211b63a54" class="t t">WhereObjectCommand</a>), () =&gt; <b>new</b> <span class="t">WhereObjectCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="Modules/ImportModuleCommand.cs.html#4a6e75cbbfb65b34" class="t t">ImportModuleCommand</a>), () =&gt; <b>new</b> <a href="Modules/ImportModuleCommand.cs.html#7162b8a462c04760" class="t constructor">ImportModuleCommand</a>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="Modules/GetModuleCommand.cs.html#6f6537067f4dfc41" class="t t">GetModuleCommand</a>), () =&gt; <b>new</b> <span class="t">GetModuleCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="../help/HelpCommands.cs.html#eb5836f612b480de" class="t t">GetHelpCommand</a>), () =&gt; <b>new</b> <a href="../help/HelpCommands.cs.html#b07c5baae368885b" class="t constructor">GetHelpCommand</a>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="remoting/commands/InvokeCommandCommand.cs.html#681287c2a35349b5" class="t t">InvokeCommandCommand</a>), () =&gt; <b>new</b> <span class="t">InvokeCommandCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="GetCommandCommand.cs.html#ff1a9d86cf34497b" class="t t">GetCommandCommand</a>), () =&gt; <b>new</b> <span class="t">GetCommandCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="../FormatAndOutput/out-console/OutConsole.cs.html#c9bb0040912f3314" class="t t">OutDefaultCommand</a>), () =&gt; <b>new</b> <a href="../FormatAndOutput/out-console/OutConsole.cs.html#b12efb565c03cc15" class="t constructor">OutDefaultCommand</a>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="../FormatAndOutput/out-console/OutConsole.cs.html#a58d644f31719ae4" class="t t">OutHostCommand</a>), () =&gt; <b>new</b> <a href="../FormatAndOutput/out-console/OutConsole.cs.html#8bab8c110e042569" class="t constructor">OutHostCommand</a>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="../FormatAndOutput/out-console/OutConsole.cs.html#f5982690ed7e6594" class="t t">OutNullCommand</a>), () =&gt; <b>new</b> <span class="t">OutNullCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="InternalCommands.cs.html#f1d8cd0463c7e7e9" class="t t">SetStrictModeCommand</a>), () =&gt; <b>new</b> <span class="t">SetStrictModeCommand</span>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="../FormatAndOutput/format-default/format-default.cs.html#ca2f64f1f70e29ba" class="t t">FormatDefaultCommand</a>), () =&gt; <b>new</b> <a href="../FormatAndOutput/format-default/format-default.cs.html#5c3269efedad47c6" class="t constructor">FormatDefaultCommand</a>());
+            <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<b>typeof</b>(<a href="../FormatAndOutput/out-textInterface/OutTextInterface.cs.html#ce8aef1b36e49159" class="t t">OutLineOutputCommand</a>), () =&gt; <b>new</b> <a href="../FormatAndOutput/out-textInterface/OutTextInterface.cs.html#b2cf9ca74cc93735" class="t constructor">OutLineOutputCommand</a>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes the new instance of CommandProcessor class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">cmdletInfo</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The information about the cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell engine execution context for this command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/CommandDiscoveryExceptions.cs.html#d61739861b769224" class="t t">CommandNotFoundException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there was a failure creating an instance of the cmdlet type.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="64adc694daeabdd8" href="../R/64adc694daeabdd8.html" target="n" data-glyph="74,1" class="t constructor">CommandProcessor</a>(<a href="CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r0 rd" class="r0 r">cmdletInfo</span>, <a href="ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r1 rd" class="r1 r">context</span>) : <a href="CommandProcessorBase.cs.html#64e9365f7027b222" class="k">base</a>(<span class="r0 r">cmdletInfo</span>)
+        {
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a> = <span class="r1 r">context</span>;
+            <a href="#549fd06ad6c3b566" class="i method">Init</a>(<span class="r0 r">cmdletInfo</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the constructor for script as cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">scriptCommandInfo</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The information about the cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell engine execution context for this command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">useLocalScope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">sessionState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">fromScriptFile</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">True when the script to be executed came from a file (as opposed to a function, or interactive input).</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="6dbda84e1bbd31ad" href="../R/6dbda84e1bbd31ad.html" target="n" data-glyph="74,1" class="t constructor">CommandProcessor</a>(<a href="CommandInfo.cs.html#2ae2bf5bb21a5a53" class="t t">IScriptCommandInfo</a> <span id="r2 rd" class="r2 r">scriptCommandInfo</span>, <a href="ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r3 rd" class="r3 r">context</span>, <b>bool</b> <span id="r4 rd" class="r4 r">useLocalScope</span>, <b>bool</b> <span id="r6 rd" class="r6 r">fromScriptFile</span>, <a href="../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <span id="r5 rd" class="r5 r">sessionState</span>)
+            : <a href="CommandProcessorBase.cs.html#64e9365f7027b222" class="k">base</a>(<span class="r2 r">scriptCommandInfo</span> <b>as</b> <a href="CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a>)
+        {
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a> = <span class="r3 r">context</span>;
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#914bf3a87736a651" class="i field">_useLocalScope</a> = <span class="r4 r">useLocalScope</span>;
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#0043954ffd6af0aa" class="i field">_fromScriptFile</a> = <span class="r6 r">fromScriptFile</span>;
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#1f3fb39371c48d78" class="i property">CommandSessionState</a> = <span class="r5 r">sessionState</span>;
+            <a href="#28683ed2b7e1dbda" class="i method">Init</a>(<span class="r2 r">scriptCommandInfo</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> internal members
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns a CmdletParameterBinderController for the specified command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The cmdlet to bind parameters to.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A new instance of a CmdletParameterBinderController.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> if </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">command</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is not a Cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="ParameterBinderController.cs.html#9e4e49a03a43c579" class="t t">ParameterBinderController</a> <a id="1f924d44d5abdc41" href="../R/1f924d44d5abdc41.html" target="n" data-glyph="74,1" class="i method">NewParameterBinderController</a>(<a href="CommandBase.cs.html#26cb3aadccaa58ac" class="t t">InternalCommand</a> <span id="r7 rd" class="r7 r">command</span>)
+        {
+            <b>if</b> (!(<span class="r7 r">command</span> <b>is</b> <a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r8 rd" class="r8 r">cmdlet</span>))
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r7 r">command</span>));
+            }
+ 
+            <a href="ParameterBinderBase.cs.html#6a035e6bf95bfc67" class="t t">ParameterBinderBase</a> <span id="r9 rd" class="r9 r">parameterBinder</span>;
+            <a href="CommandInfo.cs.html#2ae2bf5bb21a5a53" class="t t">IScriptCommandInfo</a> <span id="r10 rd" class="r10 r">scriptCommandInfo</span> = <a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a> <b>as</b> <a href="CommandInfo.cs.html#2ae2bf5bb21a5a53" class="t t">IScriptCommandInfo</a>;
+            <b>if</b> (<span class="r10 r">scriptCommandInfo</span> != <b>null</b>)
+            {
+                <span class="r9 r">parameterBinder</span> = <b>new</b> <a href="scriptparameterbinder.cs.html#1e1ee5062c80a66a" class="t constructor">ScriptParameterBinder</a>(<span class="r10 r">scriptCommandInfo</span>.<a href="CommandInfo.cs.html#753af6705016f48b" class="i property">ScriptBlock</a>, <span class="r8 r">cmdlet</span>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>, <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>, <span class="r8 r">cmdlet</span>, <a href="CommandProcessorBase.cs.html#fefd69f2b6b9e222" class="i property">CommandScope</a>);
+            }
+            <b>else</b>
+            {
+                <span class="r9 r">parameterBinder</span> = <b>new</b> <a href="ReflectionParameterBinder.cs.html#25ab0d6398f98951" class="t constructor">ReflectionParameterBinder</a>(<span class="r8 r">cmdlet</span>, <span class="r8 r">cmdlet</span>);
+            }
+ 
+            <a href="#ef6eb36d041583ce" class="i field">_cmdletParameterBinderController</a> = <b>new</b> <a href="CmdletParameterBinderController.cs.html#29ae2c3d066956e2" class="t constructor">CmdletParameterBinderController</a>(<span class="r8 r">cmdlet</span>, <a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#6816941cf484edda" class="i property">CommandMetadata</a>, <span class="r9 r">parameterBinder</span>);
+ 
+            <b>return</b> <a href="#ef6eb36d041583ce" class="i field">_cmdletParameterBinderController</a>;
+        }
+ 
+        <b>internal</b> <a href="CmdletParameterBinderController.cs.html#beea52684e39dd34" class="t t">CmdletParameterBinderController</a> <a id="d32374f55ae81926" href="../R/d32374f55ae81926.html" target="n" data-glyph="104,1" class="i property">CmdletParameterBinderController</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#ef6eb36d041583ce" class="i field">_cmdletParameterBinderController</a> == <b>null</b>)
+                {
+                    <a href="#1f924d44d5abdc41" class="i method">NewParameterBinderController</a>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>);
+                }
+ 
+                <b>return</b> <a href="#ef6eb36d041583ce" class="i field">_cmdletParameterBinderController</a>;
+            }
+        }
+ 
+        <b>private</b> <a href="CmdletParameterBinderController.cs.html#beea52684e39dd34" class="t t">CmdletParameterBinderController</a> <a id="ef6eb36d041583ce" href="../R/ef6eb36d041583ce.html" target="n" data-glyph="46,1" class="i field">_cmdletParameterBinderController</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the ObsoleteAttribute of the current command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override</b> <span class="i">ObsoleteAttribute</span> <a id="31a953267328760e" href="../R/31a953267328760e.html" target="n" data-glyph="104,1" class="i property">ObsoleteAttribute</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#e39c83e2f3fcf6ea" class="i field">_obsoleteAttribute</a>; }
+        }
+ 
+        <b>private</b> <span class="i">ObsoleteAttribute</span> <a id="e39c83e2f3fcf6ea" href="../R/e39c83e2f3fcf6ea.html" target="n" data-glyph="46,1" class="i field">_obsoleteAttribute</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Binds the specified command-line parameters to the target.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true if encode succeeds otherwise false.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If any parameters fail to bind,</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If any mandatory parameters are missing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/MetadataExceptions.cs.html#3bf974090c4e60a1" class="t t">MetadataException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there is an error generating the metadata for dynamic parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="7f228c5d6b72292e" href="../R/7f228c5d6b72292e.html" target="n" data-glyph="74,1" class="i method">BindCommandLineParameters</a>()
+        {
+            <b>using</b> (<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#898174c9e014e567" class="i method">AllowThisCommandToWrite</a>(<b>false</b>))
+            {
+                <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a> != <b>null</b>,
+                    <span class="s">&quot;A parameter binder controller should always be available&quot;</span>);
+ 
+                <span class="c">// Always set the hash table on MyInvocation so it&#39;s available for both interpreted cmdlets</span>
+                <span class="c">// as well as compiled ones.</span>
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="ParameterBinderController.cs.html#0b62798bea43a39e" class="i property">CommandLineParameters</a>.<a href="ParameterBinderBase.cs.html#ab97e37b119045b9" class="i method">UpdateInvocationInfo</a>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#6bbbff769b24d3a5" class="i property">UnboundArguments</a> = <b>new</b> <span class="i">Collections</span>.<span class="i">Generic</span>.<span class="i">List</span>&lt;<b>object</b>&gt;();
+ 
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#5e8500fa0310cb5c" class="i method">BindCommandLineParameters</a>(<a href="CommandProcessorBase.cs.html#5bfa2b362a5e8358" class="i field">arguments</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Prepares the command. Encodes the command-line parameters</span>
+        <span class="c">///</span><span class="c"> JonN     2003-04-02 Split from Execute()</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If any parameters fail to bind,</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If any mandatory parameters are missing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/MetadataExceptions.cs.html#3bf974090c4e60a1" class="t t">MetadataException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there is an error generating the metadata for dynamic parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="50bdc3378158f32f" href="../R/50bdc3378158f32f.html" target="n" data-glyph="74,1" class="i method">Prepare</a>(<span class="i">IDictionary</span> <span id="r11 rd" class="r11 r">psDefaultParameterValues</span>)
+        {
+            <span class="c">// Note that Prepare() and DoBegin() should NOT be combined.</span>
+            <span class="c">// Reason: Encoding of commandline parameters happen as part of</span>
+            <span class="c">// Prepare(). If they are combined, the first command&#39;s</span>
+            <span class="c">// DoBegin() will be called before the next command&#39;s Prepare().</span>
+            <span class="c">// Since BeginProcessing() can write objects to the downstream</span>
+            <span class="c">// commandlet, it will end up calling DoExecute() (from Pipe.Add())</span>
+            <span class="c">// before Prepare.</span>
+ 
+            <span class="c">// Steps involved:</span>
+            <span class="c">// (1) Backup the default parameter values</span>
+            <span class="c">// (2) Handle input objects - add them to the input pipe.</span>
+            <span class="c">// (3) Bind the parameters to properties (encoding)</span>
+            <span class="c">// (4) Execute the command method using DoExecute() (repeatedly)</span>
+ 
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#28236370865e2a7b" class="i property">DefaultParameterValues</a> = <span class="r11 r">psDefaultParameterValues</span>;
+ 
+            <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<span class="i">Assert</span>(
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> != <b>null</b>,
+                <span class="s">&quot;CommandProcessor did not initialize Command\n&quot;</span> + <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>);
+ 
+            <a href="SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>? <span id="r12 rd" class="r12 r">oldLanguageMode</span> = <b>null</b>;
+            <b>bool</b>? <span id="r13 rd" class="r13 r">oldLangModeTransitionStatus</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <a href="CommandInfo.cs.html#2ae2bf5bb21a5a53" class="k">var</a> <span id="r14 rd" class="r14 r">scriptCmdletInfo</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a> <b>as</b> <a href="CommandInfo.cs.html#2ae2bf5bb21a5a53" class="t t">IScriptCommandInfo</a>;
+                <b>if</b> (<span class="r14 r">scriptCmdletInfo</span> != <b>null</b> &amp;&amp;
+                    <span class="r14 r">scriptCmdletInfo</span>.<a href="CommandInfo.cs.html#753af6705016f48b" class="i property">ScriptBlock</a>.<a href="lang/scriptblock.cs.html#5e76a9fb0d1a7f12" class="i property">LanguageMode</a>.<span class="i">HasValue</span> &amp;&amp;
+                    <span class="r14 r">scriptCmdletInfo</span>.<a href="CommandInfo.cs.html#753af6705016f48b" class="i property">ScriptBlock</a>.<a href="lang/scriptblock.cs.html#5e76a9fb0d1a7f12" class="i property">LanguageMode</a> != <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a>)
+                {
+                    <span class="c">// Set the language mode before parameter binding if it&#39;s necessary for a script cmdlet, so that the language</span>
+                    <span class="c">// mode is appropriately applied for evaluating parameter defaults and argument type conversion.</span>
+                    <span class="r12 r">oldLanguageMode</span> = <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a>;
+                    <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a> = <span class="r14 r">scriptCmdletInfo</span>.<a href="CommandInfo.cs.html#753af6705016f48b" class="i property">ScriptBlock</a>.<a href="lang/scriptblock.cs.html#5e76a9fb0d1a7f12" class="i property">LanguageMode</a>.<span class="i">Value</span>;
+ 
+                    <span class="c">// If it&#39;s from ConstrainedLanguage to FullLanguage, indicate the transition before parameter binding takes place.</span>
+                    <b>if</b> (<span class="r12 r">oldLanguageMode</span> == <a href="SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>.<a href="SessionStatePublic.cs.html#9f1205fe78117fc2" class="i field">ConstrainedLanguage</a> &amp;&amp; <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a> == <a href="SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>.<a href="SessionStatePublic.cs.html#eec721eb8c02f156" class="i field">FullLanguage</a>)
+                    {
+                        <span class="r13 r">oldLangModeTransitionStatus</span> = <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#800d673aaa498da6" class="i property">LanguageModeTransitionInParameterBinding</a>;
+                        <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#800d673aaa498da6" class="i property">LanguageModeTransitionInParameterBinding</a> = <b>true</b>;
+                    }
+                }
+ 
+                <a href="#7f228c5d6b72292e" class="i method">BindCommandLineParameters</a>();
+            }
+            <b>finally</b>
+            {
+                <b>if</b> (<span class="r12 r">oldLanguageMode</span>.<span class="i">HasValue</span>)
+                {
+                    <span class="c">// Revert to the original language mode after doing the parameter binding</span>
+                    <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a> = <span class="r12 r">oldLanguageMode</span>.<span class="i">Value</span>;
+                }
+ 
+                <b>if</b> (<span class="r13 r">oldLangModeTransitionStatus</span>.<span class="i">HasValue</span>)
+                {
+                    <span class="c">// Revert the transition state to old value after doing the parameter binding</span>
+                    <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#800d673aaa498da6" class="i property">LanguageModeTransitionInParameterBinding</a> = <span class="r13 r">oldLangModeTransitionStatus</span>.<span class="i">Value</span>;
+                }
+            }
+        }
+ 
+        <b>protected override void</b> <a id="7c87928f828b4179" href="../R/7c87928f828b4179.html" target="n" data-glyph="75,1" class="i method">OnSetCurrentScope</a>()
+        {
+            <span class="c">// When dotting a script cmdlet, push the locals of automatic variables to</span>
+            <span class="c">// the &#39;DottedScopes&#39; of the current scope.</span>
+            <a href="runtime/CompiledScriptBlock.cs.html#20151031a0be3c24" class="t t">PSScriptCmdlet</a> <span id="r15 rd" class="r15 r">scriptCmdlet</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> <b>as</b> <a href="runtime/CompiledScriptBlock.cs.html#20151031a0be3c24" class="t t">PSScriptCmdlet</a>;
+            <b>if</b> (<span class="r15 r">scriptCmdlet</span> != <b>null</b> &amp;&amp; !<a href="CommandProcessorBase.cs.html#d3edce8b26f160da" class="i property">UseLocalScope</a>)
+            {
+                <span class="r15 r">scriptCmdlet</span>.<a href="runtime/CompiledScriptBlock.cs.html#7982039716d37469" class="i method">PushDottedScope</a>(<a href="CommandProcessorBase.cs.html#1f3fb39371c48d78" class="i property">CommandSessionState</a>.<a href="SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>);
+            }
+        }
+ 
+        <b>protected override void</b> <a id="e1c6c42f2abfa862" href="../R/e1c6c42f2abfa862.html" target="n" data-glyph="75,1" class="i method">OnRestorePreviousScope</a>()
+        {
+            <span class="c">// When dotting a script cmdlet, pop the locals of automatic variables from</span>
+            <span class="c">// the &#39;DottedScopes&#39; of the current scope.</span>
+            <a href="runtime/CompiledScriptBlock.cs.html#20151031a0be3c24" class="t t">PSScriptCmdlet</a> <span id="r16 rd" class="r16 r">scriptCmdlet</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> <b>as</b> <a href="runtime/CompiledScriptBlock.cs.html#20151031a0be3c24" class="t t">PSScriptCmdlet</a>;
+            <b>if</b> (<span class="r16 r">scriptCmdlet</span> != <b>null</b> &amp;&amp; !<a href="CommandProcessorBase.cs.html#d3edce8b26f160da" class="i property">UseLocalScope</a>)
+            {
+                <span class="r16 r">scriptCmdlet</span>.<a href="runtime/CompiledScriptBlock.cs.html#af0f5bc8bc0963a9" class="i method">PopDottedScope</a>(<a href="CommandProcessorBase.cs.html#1f3fb39371c48d78" class="i property">CommandSessionState</a>.<a href="SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Execute BeginProcessing part of command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="f778a02670053160" href="../R/f778a02670053160.html" target="n" data-glyph="74,1" class="i method">DoBegin</a>()
+        {
+            <b>if</b> (!<a href="CommandProcessorBase.cs.html#7b0f1c2306037414" class="i field">RanBeginAlready</a> &amp;&amp; <a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a> != <b>null</b>)
+            {
+                <b>using</b> (<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#898174c9e014e567" class="i method">AllowThisCommandToWrite</a>(<b>false</b>))
+                {
+                    <span class="c">// Write out warning messages for the bound obsolete parameters.</span>
+                    <span class="c">// The warning message are generated during parameter binding, but we delay writing</span>
+                    <span class="c">// them out until now so that the -WarningAction will be respected as expected.</span>
+                    <b>foreach</b> (<a href="hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a> <span id="r17 rd" class="r17 r">warningRecord</span> <b>in</b> <a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a>)
+                    {
+                        <a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#9cc8b7d137e9323d" class="i method">WriteWarning</a>(<span class="r17 r">warningRecord</span>);
+                    }
+                }
+ 
+                <span class="c">// Clear up the warning message list</span>
+                <a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a>.<span class="i">Clear</span>();
+            }
+ 
+            <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="k">base</a>.<a href="CommandProcessorBase.cs.html#888ccfe4b17ac047" class="i method">DoBegin</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This calls the command.  It assumes that Prepare() has already been called.</span>
+        <span class="c">///</span><span class="c"> JonN     2003-04-02 Split from Execute()</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> a terminating error occurred, or the pipeline was otherwise stopped</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="4a161c3ba21be41b" href="../R/4a161c3ba21be41b.html" target="n" data-glyph="74,1" class="i method">ProcessRecord</a>()
+        {
+            <span class="c">// Invoke the Command method with the request object</span>
+ 
+            <b>if</b> (!<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#7b0f1c2306037414" class="i field">RanBeginAlready</a>)
+            {
+                <a href="CommandProcessorBase.cs.html#7b0f1c2306037414" class="i field">RanBeginAlready</a> = <b>true</b>;
+                <b>try</b>
+                {
+                    <span class="c">// NOTICE-2004/06/08-JonN 959638</span>
+                    <b>using</b> (<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#898174c9e014e567" class="i method">AllowThisCommandToWrite</a>(<b>true</b>))
+                    {
+                        <b>if</b> (<a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#00e6fdde4b76eb15" class="i field">_debuggingMode</a> &gt; 0 &amp;&amp; <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> <b>is not</b> <a href="runtime/CompiledScriptBlock.cs.html#20151031a0be3c24" class="t t">PSScriptCmdlet</a>)
+                        {
+                            <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#3e56b2d709de0d80" class="i property">Debugger</a>.<a href="debugger/debugger.cs.html#ab0382a7b993ff7c" class="i method">CheckCommand</a>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+                        }
+ 
+                        <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f66e210571551e42" class="i method">DoBeginProcessing</a>();
+                    }
+                }
+                <span class="c">// 2004/03/18-JonN This is understood to be</span>
+                <span class="c">// an FXCOP violation, cleared by KCwalina.</span>
+                <b>catch</b> (<span class="i">Exception</span> <span id="r18 rd" class="r18 r">e</span>)  <span class="c">// Catch-all OK, 3rd party callout.</span>
+                {
+                    <span class="c">// This cmdlet threw an exception, so</span>
+                    <span class="c">// wrap it and bubble it up.</span>
+                    <b>throw</b> <a href="CommandProcessorBase.cs.html#2b54af4c46f46a60" class="i method">ManageInvocationException</a>(<span class="r18 r">e</span>);
+                }
+            }
+ 
+            <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#0696af7afce6ee9b" class="i property">PipelineIterationInfo</a> != <b>null</b>); <span class="c">// this should have been allocated when the pipeline was started</span>
+ 
+            <b>while</b> (<a href="#80d0dd2f8a77c20b" class="i method">Read</a>())
+            {
+                <a href="Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r19 rd" class="r19 r">oldErrorOutputPipe</span> = <a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>.<a href="ExecutionContext.cs.html#d0ed5d60dd57b004" class="i property">ShellFunctionErrorOutputPipe</a>;
+                <span class="i">Exception</span> <span id="r20 rd" class="r20 r">exceptionToThrow</span> = <b>null</b>;
+                <b>try</b>
+                {
+                    <span class="c">//</span>
+                    <span class="c">// On V1 the output pipe was redirected to the command&#39;s output pipe only when it</span>
+                    <span class="c">// was already redirected. This is the original comment explaining this behaviour:</span>
+                    <span class="c">//</span>
+                    <span class="c">//      NTRAID#Windows Out of Band Releases-926183-2005-12-15</span>
+                    <span class="c">//      MonadTestHarness has a bad dependency on an artifact of the current implementation</span>
+                    <span class="c">//      The following code only redirects the output pipe if it&#39;s already redirected</span>
+                    <span class="c">//      to preserve the artifact. The test suites need to be fixed and then this</span>
+                    <span class="c">//      the check can be removed and the assignment always done.</span>
+                    <span class="c">//</span>
+                    <span class="c">// However, this makes the hosting APIs behave differently than commands executed</span>
+                    <span class="c">// from the command-line host (for example, see bugs Win7:415915 and Win7:108670).</span>
+                    <span class="c">// The RedirectShellErrorOutputPipe flag is used by the V2 hosting API to force the</span>
+                    <span class="c">// redirection.</span>
+                    <span class="c">//</span>
+                    <b>if</b> (<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#26a87154c49eb3eb" class="i property">RedirectShellErrorOutputPipe</a> || <a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>.<a href="ExecutionContext.cs.html#d0ed5d60dd57b004" class="i property">ShellFunctionErrorOutputPipe</a> != <b>null</b>)
+                    {
+                        <a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>.<a href="ExecutionContext.cs.html#d0ed5d60dd57b004" class="i property">ShellFunctionErrorOutputPipe</a> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>;
+                    }
+ 
+                    <span class="c">// NOTICE-2004/06/08-JonN 959638</span>
+                    <b>using</b> (<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#898174c9e014e567" class="i method">AllowThisCommandToWrite</a>(<b>true</b>))
+                    {
+                        <b>if</b> (<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a> != <b>null</b> &amp;&amp;
+                            <a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a>.<span class="i">Count</span> &gt; 0)
+                        {
+                            <span class="c">// Write out warning messages for the pipeline-value-bound obsolete parameters.</span>
+                            <span class="c">// The warning message are generated during parameter binding, but we delay writing</span>
+                            <span class="c">// them out until now so that the -WarningAction will be respected as expected.</span>
+                            <b>foreach</b> (<a href="hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a> <span id="r21 rd" class="r21 r">warningRecord</span> <b>in</b> <a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a>)
+                            {
+                                <a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#9cc8b7d137e9323d" class="i method">WriteWarning</a>(<span class="r21 r">warningRecord</span>);
+                            }
+ 
+                            <span class="c">// Clear up the warning message list</span>
+                            <a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#f317c00dad07ba60" class="i property">ObsoleteParameterWarningList</a>.<span class="i">Clear</span>();
+                        }
+ 
+                        <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#0696af7afce6ee9b" class="i property">PipelineIterationInfo</a>[<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#b9401843293d51d4" class="i property">PipelinePosition</a>]++;
+ 
+                        <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#ffa997eb3105bfd6" class="i method">DoProcessRecord</a>();
+                    }
+                }
+                <b>catch</b> (<a href="../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a> <span id="r22 rd" class="r22 r">rte</span>)
+                {
+                    <span class="c">// Most exceptions get wrapped here, but an exception that originated from</span>
+                    <span class="c">// a throw statement should not get wrapped, so it is just rethrown.</span>
+                    <b>if</b> (<span class="r22 r">rte</span>.<a href="../utils/RuntimeException.cs.html#07e13566c1a5f36a" class="i property">WasThrownFromThrowStatement</a>)
+                    {
+                        <b>throw</b>;
+                    }
+ 
+                    <span class="r20 r">exceptionToThrow</span> = <span class="r22 r">rte</span>;
+                }
+                <b>catch</b> (<a href="lang/parserutils.cs.html#7aca1395e161031c" class="t t">LoopFlowException</a>)
+                {
+                    <span class="c">// Win8:84066 - Don&#39;t wrap LoopFlowException, we incorrectly raise a PipelineStoppedException</span>
+                    <span class="c">// which gets caught by a script try/catch if we wrap here.</span>
+                    <b>throw</b>;
+                }
+                <span class="c">// 2004/03/18-JonN This is understood to be</span>
+                <span class="c">// an FXCOP violation, cleared by KCwalina.</span>
+                <b>catch</b> (<span class="i">Exception</span> <span id="r23 rd" class="r23 r">e</span>) <span class="c">// Catch-all OK, 3rd party callout.</span>
+                {
+                    <span class="r20 r">exceptionToThrow</span> = <span class="r23 r">e</span>;
+                }
+                <b>finally</b>
+                {
+                    <a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>.<a href="ExecutionContext.cs.html#d0ed5d60dd57b004" class="i property">ShellFunctionErrorOutputPipe</a> = <span class="r19 r">oldErrorOutputPipe</span>;
+                }
+ 
+                <b>if</b> (<span class="r20 r">exceptionToThrow</span> != <b>null</b>)
+                {
+                    <span class="c">// This cmdlet threw an exception, so</span>
+                    <span class="c">// wrap it and bubble it up.</span>
+                    <b>throw</b> <a href="CommandProcessorBase.cs.html#2b54af4c46f46a60" class="i method">ManageInvocationException</a>(<span class="r20 r">exceptionToThrow</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> public_methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> helper_methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Tells whether it is the first call to Read.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="86a5f1844d127981" href="../R/86a5f1844d127981.html" target="n" data-glyph="46,1" class="i field">_firstCallToRead</a> = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Tells whether to bail out in the next call to Read.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="4a827c80cde35b1c" href="../R/4a827c80cde35b1c.html" target="n" data-glyph="46,1" class="i field">_bailInNextCall</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Populates the parameters specified from the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A bool indicating whether read succeeded.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If a parameter fails to bind.</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If a mandatory parameter is missing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline was already stopped.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">// 2003/10/07-JonN was public, now internal</span>
+        <b>internal sealed override bool</b> <a id="80d0dd2f8a77c20b" href="../R/80d0dd2f8a77c20b.html" target="n" data-glyph="74,1" class="i method">Read</a>()
+        {
+            <span class="c">// (1) If Read() is called for the first time and with pipe closed and</span>
+            <span class="c">//     no object in the input pipe and</span>
+            <span class="c">//     (typically for the first cmdlet in the pipe &amp; during programmatic</span>
+            <span class="c">//     execution of a command), Read() will succeed (return true) for</span>
+            <span class="c">//     only one time (so that the</span>
+            <span class="c">// (2) If Read() is called with some input objects in the pipeline, it</span>
+            <span class="c">//     processes the input</span>
+            <span class="c">//     object one at a time and adds parameters from the input object</span>
+            <span class="c">//     to the list of parameters. If</span>
+            <span class="c">//     added to the error pipe and Read() will continue to read the</span>
+            <span class="c">//     next object in the pipe.</span>
+            <span class="c">// (3) Read() will return false if there are no objects in the pipe</span>
+            <span class="c">//     for processing.</span>
+            <span class="c">// (4) Read() will return true if the parameters are encoded in the</span>
+            <span class="c">//     request - signals ready for execution.</span>
+            <span class="c">// (5) Read() will refresh the properties that are encoded via pipeline</span>
+            <span class="c">//     parameters in the next</span>
+            <span class="c">//     call to Read() [To their default values, so that the</span>
+            <span class="c">//     next execution of the command will</span>
+            <span class="c">//     not work on previously specified parameter].</span>
+            <span class="c">// If the flag &#39;bail in next call&#39; is true, then bail out returning false.</span>
+            <b>if</b> (<a href="#4a827c80cde35b1c" class="i field">_bailInNextCall</a>)
+                <b>return</b> <b>false</b>;
+ 
+            <span class="c">// ProcessRecord() will loop on Command.Read(), and continue calling</span>
+            <span class="c">// ProcessRecord() until the incoming pipe is empty.  We need to</span>
+            <span class="c">// stop this loop if a downstream cmdlet broke guidelines and</span>
+            <span class="c">// &quot;swallowed&quot; a PipelineStoppedException.</span>
+            <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#d885b032bcad9fea" class="i method">ThrowIfStopping</a>();
+ 
+            <span class="c">// Prepare the default value parameter list if this is the first call to Read</span>
+            <b>if</b> (<a href="#86a5f1844d127981" class="i field">_firstCallToRead</a>)
+            {
+                <a href="#86a5f1844d127981" class="i field">_firstCallToRead</a> = <b>false</b>;
+                <b>if</b> (!<a href="CommandProcessorBase.cs.html#93abe05c663b0330" class="i method">IsPipelineInputExpected</a>())
+                {
+                    <span class="c">// Cmdlet should operate only with command-line parameters</span>
+                    <span class="c">// Let the command Execute with the specified command line parameters</span>
+                    <span class="c">// And Read should return false in the next call.</span>
+                    <a href="#4a827c80cde35b1c" class="i field">_bailInNextCall</a> = <b>true</b>;
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <span class="c">// If this cmdlet has any members that could be bound</span>
+            <span class="c">// from the pipeline, do that now. In fact, we always try and</span>
+            <span class="c">// do it once anyway because this BindPipelineParameters() does</span>
+            <span class="c">// the final binding stage in before executing the cmdlet.</span>
+ 
+            <b>bool</b> <span id="r24 rd" class="r24 r">mandatoryParametersSpecified</span> = <b>false</b>;
+ 
+            <b>while</b> (!<span class="r24 r">mandatoryParametersSpecified</span>)
+            {
+                <span class="c">// Retrieve the object from the input pipeline</span>
+                <b>object</b> <span id="r25 rd" class="r25 r">inputObject</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#2a3306bd1f3917ef" class="i property">InputPipe</a>.<a href="Pipe.cs.html#364489802d14033a" class="i method">Retrieve</a>();
+ 
+                <b>if</b> (<span class="r25 r">inputObject</span> == <a href="AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>)
+                {
+                    <span class="c">// no object in the pipeline, stop reading</span>
+                    <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#394e3b79ee75331b" class="i property">CurrentPipelineObject</a> = <b>null</b>;
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <span class="c">// If we are reading input for the first command in the pipeline increment PipelineIterationInfo[0], which is the number of items read from the input</span>
+                <b>if</b> (<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#b9401843293d51d4" class="i property">PipelinePosition</a> == 1)
+                {
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#0696af7afce6ee9b" class="i property">PipelineIterationInfo</a>[0]++;
+                }
+ 
+                <b>try</b>
+                {
+                    <span class="c">// Process the input pipeline object</span>
+                    <b>if</b> (!<a href="#9d2e382afc6b4440" class="i method">ProcessInputPipelineObject</a>(<span class="r25 r">inputObject</span>))
+                    {
+                        <span class="c">// The input object was not bound to any parameters of the cmdlet.</span>
+                        <span class="c">// Write a non-terminating error and continue with the next input</span>
+                        <span class="c">// object.</span>
+                        <span class="i">WriteInputObjectError</span>(
+                            <span class="r25 r">inputObject</span>,
+                            <span class="i">ParameterBinderStrings</span>.<span class="i">InputObjectNotBound</span>,
+                            <span class="s">&quot;InputObjectNotBound&quot;</span>);
+                        <b>continue</b>;
+                    }
+                }
+                <b>catch</b> (<a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a> <span id="r26 rd" class="r26 r">bindingError</span>)
+                {
+                    <span class="c">// Set the target and write the error</span>
+                    <span class="r26 r">bindingError</span>.<a href="../utils/RuntimeException.cs.html#de1b3b901d918614" class="i property">ErrorRecord</a>.<a href="ErrorPackage.cs.html#e64056cb0422ee22" class="i method">SetTargetObject</a>(<span class="r25 r">inputObject</span>);
+ 
+                    <a href="ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r27 rd" class="r27 r">errorRecord</span> =
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <span class="r26 r">bindingError</span>.<a href="../utils/RuntimeException.cs.html#de1b3b901d918614" class="i property">ErrorRecord</a>,
+                            <span class="r26 r">bindingError</span>);
+ 
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#f530015bdc5f7e2d" class="i method">_WriteErrorSkipAllowCheck</a>(<span class="r27 r">errorRecord</span>);
+                    <b>continue</b>;
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="MergedCommandParameterMetadata.cs.html#700aeeb16077bb0a" class="t t">MergedCompiledCommandParameter</a>&gt; <span id="r28 rd" class="r28 r">missingMandatoryParameters</span>;
+ 
+                <b>using</b> (<a href="ParameterBinderBase.cs.html#6a035e6bf95bfc67" class="t t">ParameterBinderBase</a>.<a href="ParameterBinderBase.cs.html#53b6cf6cdd8c3311" class="i field">bindingTracer</a>.<a href="../utils/StructuredTraceSource.cs.html#ff5e86462c8f4f03" class="i method">TraceScope</a>(
+                    <span class="s">&quot;MANDATORY PARAMETER CHECK on cmdlet [{0}]&quot;</span>,
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>))
+                {
+                    <span class="c">// Check for unbound mandatory parameters but don&#39;t prompt</span>
+                    <span class="r24 r">mandatoryParametersSpecified</span> =
+                        <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#a40c0c0f4107e736" class="i method">HandleUnboundMandatoryParameters</a>(<b>out</b> <span class="r28 r">missingMandatoryParameters</span>);
+                }
+ 
+                <b>if</b> (!<span class="r24 r">mandatoryParametersSpecified</span>)
+                {
+                    <b>string</b> <span id="r29 rd" class="r29 r">missingParameters</span> =
+                        <a href="CmdletParameterBinderController.cs.html#beea52684e39dd34" class="t t">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#1bc763b0b8bc7440" class="i method">BuildMissingParamsString</a>(<span class="r28 r">missingMandatoryParameters</span>);
+ 
+                    <span class="c">// Since the input object did not satisfy all mandatory parameters</span>
+                    <span class="c">// for the command, write an ErrorRecord to the error pipe with</span>
+                    <span class="c">// the target as the input object.</span>
+ 
+                    <span class="i">WriteInputObjectError</span>(
+                        <span class="r25 r">inputObject</span>,
+                        <span class="i">ParameterBinderStrings</span>.<span class="i">InputObjectMissingMandatory</span>,
+                        <span class="s">&quot;InputObjectMissingMandatory&quot;</span>,
+                        <span class="r29 r">missingParameters</span>);
+                }
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Writes an ErrorRecord to the commands error pipe because the specified</span>
+        <span class="c">///</span><span class="c"> input object was not bound to the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">inputObject</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline input object that was not bound.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">resourceString</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The error message.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">errorId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The resource ID of the error message is also used as error ID</span>
+        <span class="c">///</span><span class="c"> of the ErrorRecord.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Additional arguments to be formatted into the error message that represented in </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">resourceString</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="f11091c1e25792e5" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">WriteInputObjectError</a>(
+            <b>object</b> <span id="r30 rd" class="r30 r">inputObject</span>,
+            <b>string</b> <span id="r31 rd" class="r31 r">resourceString</span>,
+            <b>string</b> <span id="r32 rd" class="r32 r">errorId</span>,
+            <b>params object</b>[] <span id="r33 rd" class="r33 r">args</span>)
+        {
+            <span class="i">Type</span> <span id="r34 rd" class="r34 r">inputObjectType</span> = <span class="r30 r">inputObject</span>?.<span class="i">GetType</span>();
+ 
+            <a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a> <span id="r35 rd" class="r35 r">bindingException</span> = <b>new</b> <a href="../utils/ParameterBinderExceptions.cs.html#b78e8c90f62a1f6d" class="t constructor">ParameterBindingException</a>(
+                <a href="ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>,
+                <b>null</b>,
+                <b>null</b>,
+                <b>null</b>,
+                <span class="r34 r">inputObjectType</span>,
+                <span class="r31 r">resourceString</span>,
+                <span class="r32 r">errorId</span>,
+                <span class="r33 r">args</span>);
+ 
+            <a href="ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r36 rd" class="r36 r">errorRecord</span> =
+                <b>new</b> <span class="t">ErrorRecord</span>(
+                    <span class="r35 r">bindingException</span>,
+                    <span class="r32 r">errorId</span>,
+                    <a href="ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                    <span class="r30 r">inputObject</span>);
+ 
+            <span class="r36 r">errorRecord</span>.<a href="ErrorPackage.cs.html#14b8261653db7b03" class="i method">SetInvocationInfo</a>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+ 
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>.<a href="MshCommandRuntime.cs.html#f530015bdc5f7e2d" class="i method">_WriteErrorSkipAllowCheck</a>(<span class="r36 r">errorRecord</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reads an object from an input pipeline and attempts to bind the parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">inputObject</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline input object to be processed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> False the pipeline input object was not bound in any way to the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If a ShouldProcess parameter is specified but the cmdlet does not support</span>
+        <span class="c">///</span><span class="c"> ShouldProcess.</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If an error occurred trying to bind a parameter from the pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="9d2e382afc6b4440" href="../R/9d2e382afc6b4440.html" target="n" data-glyph="76,1" class="i method">ProcessInputPipelineObject</a>(<b>object</b> <span id="r37 rd" class="r37 r">inputObject</span>)
+        {
+            <a href="MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r38 rd" class="r38 r">inputToOperateOn</span> = <b>null</b>;
+ 
+            <span class="c">// Use ETS to retrieve properties from the input object</span>
+            <span class="c">// turn it into a shell object if it isn&#39;t one already...</span>
+            <span class="c">// we depend on PSObject.AsPSObject() being idempotent - if</span>
+            <span class="c">// it&#39;s already a shell object, don&#39;t encapsulate it again.</span>
+            <b>if</b> (<span class="r37 r">inputObject</span> != <b>null</b>)
+            {
+                <span class="r38 r">inputToOperateOn</span> = <a href="MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="MshObject.cs.html#e81a321a846beda7" class="i method">AsPSObject</a>(<span class="r37 r">inputObject</span>);
+            }
+ 
+            <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#394e3b79ee75331b" class="i property">CurrentPipelineObject</a> = <span class="r38 r">inputToOperateOn</span>;
+ 
+            <b>return</b> <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="#d32374f55ae81926" class="i property">CmdletParameterBinderController</a>.<a href="CmdletParameterBinderController.cs.html#4dbe34e5defca41f" class="i method">BindPipelineParameters</a>(<span class="r38 r">inputToOperateOn</span>);
+        }
+ 
+        <b>private static readonly</b> <span class="i">ConcurrentDictionary</span>&lt;<span class="i">Type</span>, <span class="i">Func</span>&lt;<a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt;&gt; <a id="e30e03f901ff79fd" href="../R/e30e03f901ff79fd.html" target="n" data-glyph="46,1" class="i field">s_constructInstanceCache</a>;
+ 
+        <b>private static</b> <a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <a id="e684e457c2cb4b1e" href="../R/e684e457c2cb4b1e.html" target="n" data-glyph="76,1" class="i method">ConstructInstance</a>(<span class="i">Type</span> <span id="r39 rd" class="r39 r">type</span>)
+        {
+            <span class="c">// Call the default constructor if type derives from Cmdlet.</span>
+            <span class="c">// Return null (and the caller will generate an appropriate error) if</span>
+            <span class="c">// type does not derive from Cmdlet.  We do it this way so the expensive type check</span>
+            <span class="c">// is performed just once per type.</span>
+ 
+            <b>return</b> <a href="#e30e03f901ff79fd" class="i field">s_constructInstanceCache</a>.<span class="i">GetOrAdd</span>(<span class="r39 r">type</span>,
+                <span id="r40 rd" class="r40 r">t</span> =&gt; <span class="i">Expression</span>.<span class="i">Lambda</span>&lt;<span class="i">Func</span>&lt;<a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt;&gt;(
+                     <b>typeof</b>(<a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>).<span class="i">IsAssignableFrom</span>(<span class="r40 r">t</span>)
+                        ? (<span class="i">Expression</span>)<span class="i">Expression</span>.<span class="i">New</span>(<span class="r40 r">t</span>)
+                        : <span class="i">Expression</span>.<span class="i">Constant</span>(<b>null</b>, <b>typeof</b>(<a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>))).<span class="i">Compile</span>())();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes the command&#39;s request object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">cmdletInformation</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The information about the cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#7b242746a433b370" class="t t">CmdletInvocationException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the constructor for the cmdlet threw an exception.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">MemberAccessException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The type referenced by </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">cmdletInformation</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> refered to an</span>
+        <span class="c">///</span><span class="c"> abstract type or them member was invoked via a late-binding mechanism.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">TypeLoadException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">cmdletInformation</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> refers to a type that is invalid.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="549fd06ad6c3b566" href="../R/549fd06ad6c3b566.html" target="n" data-glyph="76,1" class="i method">Init</a>(<a href="CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r41 rd" class="r41 r">cmdletInformation</span>)
+        {
+            <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r41 r">cmdletInformation</span> != <b>null</b>, <span class="s">&quot;Constructor should throw exception if LookupCommand returned null.&quot;</span>);
+ 
+            <a href="cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r42 rd" class="r42 r">newCmdlet</span> = <b>null</b>;
+            <span class="i">Exception</span> <span id="r43 rd" class="r43 r">initError</span> = <b>null</b>;
+            <b>string</b> <span id="r44 rd" class="r44 r">errorIdAndResourceId</span> = <b>null</b>;
+            <b>string</b> <span id="r45 rd" class="r45 r">resourceStr</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <span class="c">// Create the request object</span>
+                <span class="r42 r">newCmdlet</span> = <a href="#e684e457c2cb4b1e" class="i method">ConstructInstance</a>(<span class="r41 r">cmdletInformation</span>.<a href="CmdletInfo.cs.html#9ba4328ad01dd7c0" class="i property">ImplementingType</a>);
+                <b>if</b> (<span class="r42 r">newCmdlet</span> == <b>null</b>)
+                {
+                    <span class="c">// We could test the inheritance before constructing, but that&#39;s</span>
+                    <span class="c">// expensive.  Much cheaper to just check for null.</span>
+                    <span class="r43 r">initError</span> = <b>new</b> <span class="i">InvalidCastException</span>();
+                    <span class="r44 r">errorIdAndResourceId</span> = <span class="s">&quot;CmdletDoesNotDeriveFromCmdletType&quot;</span>;
+                    <span class="r45 r">resourceStr</span> = <span class="i">DiscoveryExceptions</span>.<span class="i">CmdletDoesNotDeriveFromCmdletType</span>;
+                }
+            }
+            <b>catch</b> (<span class="i">MemberAccessException</span> <span id="r46 rd" class="r46 r">memberAccessException</span>)
+            {
+                <span class="r43 r">initError</span> = <span class="r46 r">memberAccessException</span>;
+            }
+            <b>catch</b> (<span class="i">TypeLoadException</span> <span id="r47 rd" class="r47 r">typeLoadException</span>)
+            {
+                <span class="r43 r">initError</span> = <span class="r47 r">typeLoadException</span>;
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r48 rd" class="r48 r">e</span>) <span class="c">// Catch-all OK, 3rd party callout.</span>
+            {
+                <span class="c">// We don&#39;t have a Command or InvocationInfo at this point,</span>
+                <span class="c">// since the command failed to initialize.</span>
+                <a href="../utils/ExecutionExceptions.cs.html#7b242746a433b370" class="k">var</a> <span id="r49 rd" class="r49 r">commandException</span> = <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#b3316b9ed5e8a1c1" class="t constructor">CmdletInvocationException</a>(<span class="r48 r">e</span>, <b>null</b>);
+ 
+                <span class="c">// Log a command health event</span>
+                <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<span class="i">LogCommandHealthEvent</span>(
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>,
+                    <span class="r49 r">commandException</span>,
+                    <a href="../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a>.<a href="../logging/MshLog.cs.html#1440d51070db4217" class="i field">Warning</a>);
+ 
+                <b>throw</b> <span class="r49 r">commandException</span>;
+            }
+ 
+            <b>if</b> (<span class="r43 r">initError</span> != <b>null</b>)
+            {
+                <span class="c">// Log a command health event</span>
+                <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../logging/MshLog.cs.html#1b469b122e173e0c" class="i method">LogCommandHealthEvent</a>(
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>,
+                    <span class="r43 r">initError</span>,
+                    <a href="../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a>.<a href="../logging/MshLog.cs.html#1440d51070db4217" class="i field">Warning</a>);
+ 
+                <a href="../utils/CommandDiscoveryExceptions.cs.html#d61739861b769224" class="t t">CommandNotFoundException</a> <span id="r50 rd" class="r50 r">exception</span> =
+                    <b>new</b> <span class="t">CommandNotFoundException</span>(
+                        <span class="r41 r">cmdletInformation</span>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>,
+                        <span class="r43 r">initError</span>,
+                        <span class="r44 r">errorIdAndResourceId</span> ?? <span class="s">&quot;CmdletNotFoundException&quot;</span>,
+                        <span class="r45 r">resourceStr</span> ?? <span class="i">DiscoveryExceptions</span>.<span class="i">CmdletNotFoundException</span>,
+                        <span class="r43 r">initError</span>.<span class="i">Message</span>);
+                <b>throw</b> <span class="r50 r">exception</span>;
+            }
+ 
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> = <span class="r42 r">newCmdlet</span>;
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#fefd69f2b6b9e222" class="i property">CommandScope</a> = <a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>;
+ 
+            <a href="#13cd15207a7420cb" class="i method">InitCommon</a>();
+        }
+ 
+        <b>private void</b> <a id="28683ed2b7e1dbda" href="../R/28683ed2b7e1dbda.html" target="n" data-glyph="76,1" class="i method">Init</a>(<a href="CommandInfo.cs.html#2ae2bf5bb21a5a53" class="t t">IScriptCommandInfo</a> <span id="r51 rd" class="r51 r">scriptCommandInfo</span>)
+        {
+            <a href="runtime/CompiledScriptBlock.cs.html#20151031a0be3c24" class="k">var</a> <span id="r52 rd" class="r52 r">scriptCmdlet</span> = <b>new</b> <a href="runtime/CompiledScriptBlock.cs.html#bd083c0ce4190995" class="t constructor">PSScriptCmdlet</a>(<span class="r51 r">scriptCommandInfo</span>.<a href="CommandInfo.cs.html#753af6705016f48b" class="i property">ScriptBlock</a>, <a href="CommandProcessorBase.cs.html#d3edce8b26f160da" class="i property">UseLocalScope</a>, <a href="CommandProcessorBase.cs.html#abf3d4779190c608" class="i property">FromScriptFile</a>, <a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>);
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> = <span class="r52 r">scriptCmdlet</span>;
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#fefd69f2b6b9e222" class="i property">CommandScope</a> = <a href="CommandProcessorBase.cs.html#d3edce8b26f160da" class="i property">UseLocalScope</a>
+                                    ? <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#1f3fb39371c48d78" class="i property">CommandSessionState</a>.<a href="SessionStateScopeAPIs.cs.html#27e7de485699a643" class="i method">NewScope</a>(<a href="CommandProcessorBase.cs.html#0043954ffd6af0aa" class="i field">_fromScriptFile</a>)
+                                    : <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#1f3fb39371c48d78" class="i property">CommandSessionState</a>.<a href="SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>;
+ 
+            <b>if</b> (<a href="CommandProcessorBase.cs.html#d3edce8b26f160da" class="i property">UseLocalScope</a>)
+            {
+                <span class="c">// Set the &#39;LocalsTuple&#39; of the new scope to that of the scriptCmdlet</span>
+                <span class="r52 r">scriptCmdlet</span>.<a href="runtime/CompiledScriptBlock.cs.html#af9ddb8354e829ba" class="i method">SetLocalsTupleForNewScope</a>(<a href="CommandProcessorBase.cs.html#fefd69f2b6b9e222" class="i property">CommandScope</a>);
+            }
+ 
+            <a href="#13cd15207a7420cb" class="i method">InitCommon</a>();
+ 
+            <span class="c">// If the script has been dotted, throw an error if it&#39;s from a different language mode.</span>
+            <b>if</b> (!<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#d3edce8b26f160da" class="i property">UseLocalScope</a>)
+            {
+                <a href="CommandProcessorBase.cs.html#8219620967fc9f1a" class="i method">ValidateCompatibleLanguageMode</a>(<span class="r51 r">scriptCommandInfo</span>.<a href="CommandInfo.cs.html#753af6705016f48b" class="i property">ScriptBlock</a>, <a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>.<a href="ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a>, <a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+            }
+        }
+ 
+        <b>private void</b> <a id="13cd15207a7420cb" href="../R/13cd15207a7420cb.html" target="n" data-glyph="76,1" class="i method">InitCommon</a>()
+        {
+            <span class="c">// set the metadata</span>
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#1f4a1f38862b466a" class="i property">CommandInfo</a> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>;
+ 
+            <span class="c">// set the ObsoleteAttribute of the current command</span>
+            <a href="#e39c83e2f3fcf6ea" class="i field">_obsoleteAttribute</a> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#6816941cf484edda" class="i property">CommandMetadata</a>.<a href="CommandMetadata.cs.html#8743e273f4b3dfb6" class="i property">Obsolete</a>;
+ 
+            <span class="c">// set the execution context</span>
+            <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>;
+ 
+            <span class="c">// Now set up the command runtime for this command.</span>
+            <b>try</b>
+            {
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a> = <b>new</b> <a href="MshCommandRuntime.cs.html#135a26935c7af90a" class="t constructor">MshCommandRuntime</a>(<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>, <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>, <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>);
+                <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#71eb09c6dd471a86" class="i field">commandRuntime</a> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#c9b17347b060ac3f" class="i field">commandRuntime</a>;
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r53 rd" class="r53 r">e</span>) <span class="c">// Catch-all OK, 3rd party callout.</span>
+            {
+                <span class="c">// Log a command health event</span>
+ 
+                <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../logging/MshLog.cs.html#1b469b122e173e0c" class="i method">LogCommandHealthEvent</a>(
+                    <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#bb86759713ca670f" class="i field">_context</a>,
+                    <span class="r53 r">e</span>,
+                    <a href="../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a>.<a href="../logging/MshLog.cs.html#1440d51070db4217" class="i field">Warning</a>);
+ 
+                <b>throw</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Checks if user has requested help (for example passing &quot;-?&quot; parameter for a cmdlet)</span>
+        <span class="c">///</span><span class="c"> and if yes, then returns the help target to display.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r54 r">helpTarget</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Help target to request.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">helpCategory</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Help category to request.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">true</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> if user requested help; </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">false</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal override bool</b> <a id="51cd379ae1df553d" href="../R/51cd379ae1df553d.html" target="n" data-glyph="74,1" class="i method">IsHelpRequested</a>(<b>out string</b> <span id="r54 rd" class="r54 r">helpTarget</span>, <b>out</b> <a href="../help/HelpSystem.cs.html#5ad0a796ad0d8ceb" class="t t">HelpCategory</a> <span id="r55 rd" class="r55 r">helpCategory</span>)
+        {
+            <b>if</b> (<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#5bfa2b362a5e8358" class="i field">arguments</a> != <b>null</b>)
+            {
+                <b>foreach</b> (<a href="CommandParameter.cs.html#4e36e2c205cfc418" class="t t">CommandParameterInternal</a> <span id="r56 rd" class="r56 r">parameter</span> <b>in</b> <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#5bfa2b362a5e8358" class="i field">arguments</a>)
+                {
+                    <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r56 r">parameter</span> != <b>null</b>, <span class="s">&quot;CommandProcessor.arguments shouldn&#39;t have any null arguments&quot;</span>);
+                    <b>if</b> (<span class="r56 r">parameter</span>.<a href="CommandParameter.cs.html#ca8fb4c38d968983" class="i method">IsDashQuestion</a>())
+                    {
+                        <span class="r55 r">helpCategory</span> = <a href="../help/HelpSystem.cs.html#5ad0a796ad0d8ceb" class="t t">HelpCategory</a>.<a href="../help/HelpSystem.cs.html#5d0649f256dff321" class="i field">All</a>;
+                        <span class="c">// using InvocationName mainly to avoid bogus this.CommandInfo.Name</span>
+                        <span class="c">// (when CmdletInfo.Name is initialized from &quot;cmdlet&quot; declaration</span>
+                        <span class="c">//  of a scriptblock and when &quot;cmdlet&quot; declaration doesn&#39;t specify any name)</span>
+                        <b>if</b> ((<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> != <b>null</b>) &amp;&amp; (<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a> != <b>null</b>) &amp;&amp;
+                            (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#57f452abf157b50b" class="i property">InvocationName</a>)))
+                        {
+                            <span class="r54 r">helpTarget</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#57f452abf157b50b" class="i property">InvocationName</a>;
+                            <span class="c">// Win8: 391035 get-help does not work properly for aliased cmdlets</span>
+                            <span class="c">// For aliased cmdlets/functions,example Initialize-Volume -&gt; Format-Volume,</span>
+                            <span class="c">// MyInvocation.InvocationName is different from CommandInfo.Name</span>
+                            <span class="c">// - CommandInfo.Name points to Format-Volume</span>
+                            <span class="c">// - MyInvocation.InvocationName points to Initialize-Volume</span>
+                            <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="InvocationInfo.cs.html#57f452abf157b50b" class="i property">InvocationName</a>, <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                            {
+                                <span class="r55 r">helpCategory</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#4e5a909d9350b765" class="i property">HelpCategory</a>;
+                            }
+                        }
+                        <b>else</b>
+                        {
+                            <span class="r54 r">helpTarget</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>;
+                            <span class="r55 r">helpCategory</span> = <a href="#35bfa3d4fe5f92fc" class="k">this</a>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#4e5a909d9350b765" class="i property">HelpCategory</a>;
+                        }
+ 
+                        <b>return</b> <b>true</b>;
+                    }
+                }
+            }
+ 
+            <b>return</b> <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="k">base</a>.<a href="CommandProcessorBase.cs.html#67dd0c69e6a0187b" class="i method">IsHelpRequested</a>(<b>out</b> <span class="r54 r">helpTarget</span>, <b>out</b> <span class="r55 r">helpCategory</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> helper_methods
+    }
+}
+</pre></td></tr></table></div></body></html>

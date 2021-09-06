@@ -1,0 +1,815 @@
+﻿<!DOCTYPE html>
+<html><head><title>SafeValues.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(806);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/parser/SafeValues.cs" target="_top">engine\parser\SafeValues.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+ 
+<span class="c">/*
+ *
+ * This visitor makes a determination as to whether an operation is safe in a GetPowerShell API Context.
+ * It is modeled on the ConstantValueVisitor with changes which allow those
+ * operations which are deemed safe, rather than constant. The following are differences from
+ * ConstantValueVisitor:
+ *  o Because we are going to call for values in ScriptBlockToPowerShell, the
+ *    Get*ValueVisitor class is removed
+ *  o IsGetPowerShellSafeValueVisitor only needs to determine whether it is safe, we won&#39;t return
+ *    anything but that determination (vs actually returning a value in the out constantValue parameter
+ *    as is found in the ConstantValueVisitor).
+ *  o the internal bool members (Checking* members in ConstantValues) aren&#39;t needed as those checks are not germane
+ *  o VisitExpandableStringExpression may be safe under the proper circumstances
+ *  o VisitIndexExpression may be safe under the proper circumstances
+ *  o VisitStatementBlock is safe if its component statements are safe
+ *  o VisitBinaryExpression is not safe as it allows for a DOS attack
+ *  o VisitVariableExpression is generally safe, there are checks outside of this code for ensuring variables actually
+ *    have provided references. Those other checks ensure that the variable isn&#39;t something like $PID or $HOME, etc.,
+ *    otherwise it&#39;s a safe operation, such as reference to a variable such as $true, or passed parameters.
+ *  o VisitTypeExpression is not safe as it enables determining what types are available on the system which
+ *    can imply what software has been installed on the system.
+ *  o VisitMemberExpression is not safe as allows for the same attack as VisitTypeExpression
+ *  o VisitArrayExpression may be safe if its components are safe
+ *  o VisitArrayLiteral may be safe if its components are safe
+ *  o VisitHashtable may be safe if its components are safe
+ *  o VisitTernaryExpression may be safe if its components are safe
+ */</span>
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>
+{
+    <b>internal class</b> <a id="eb4d92e68685204f" href="../../R/eb4d92e68685204f.html" target="n" data-glyph="2,0" class="t t">IsSafeValueVisitor</a> : <a href="AstVisitor.cs.html#92b75e0afbdd3cf3" class="t t">ICustomAstVisitor2</a>
+    {
+        <b>public static bool</b> <a id="44da5261e2b875bc" href="../../R/44da5261e2b875bc.html" target="n" data-glyph="72,1" class="i method">IsAstSafe</a>(<a href="ast.cs.html#d47621d83efd14de" class="t t">Ast</a> <span id="r0 rd" class="r0 r">ast</span>, <a href="#802786d75c891d39" class="t t">GetSafeValueVisitor</a>.<a href="#525ae8157bd81dda" class="t t">SafeValueContext</a> <span id="r1 rd" class="r1 r">safeValueContext</span>)
+        {
+            <a href="#eb4d92e68685204f" class="t t">IsSafeValueVisitor</a> <span id="r2 rd" class="r2 r">visitor</span> = <b>new</b> <a href="#e52bfebc5f40d167" class="t constructor">IsSafeValueVisitor</a>(<span class="r1 r">safeValueContext</span>);
+            <b>return</b> <span class="r2 r">visitor</span>.<a href="#ce8bc3b491f831c6" class="i method">IsAstSafe</a>(<span class="r0 r">ast</span>);
+        }
+ 
+        <b>internal</b> <a id="e52bfebc5f40d167" href="../../R/e52bfebc5f40d167.html" target="n" data-glyph="74,1" class="t constructor">IsSafeValueVisitor</a>(<a href="#802786d75c891d39" class="t t">GetSafeValueVisitor</a>.<a href="#525ae8157bd81dda" class="t t">SafeValueContext</a> <span id="r3 rd" class="r3 r">safeValueContext</span>)
+        {
+            <a href="#fee11d07eb74cffc" class="i field">_safeValueContext</a> = <span class="r3 r">safeValueContext</span>;
+        }
+ 
+        <b>internal bool</b> <a id="ce8bc3b491f831c6" href="../../R/ce8bc3b491f831c6.html" target="n" data-glyph="74,1" class="i method">IsAstSafe</a>(<a href="ast.cs.html#d47621d83efd14de" class="t t">Ast</a> <span id="r4 rd" class="r4 r">ast</span>)
+        {
+            <b>if</b> ((<b>bool</b>)<span class="r4 r">ast</span>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>) &amp;&amp; <a href="#40948cf6e4840551" class="i field">_visitCount</a> &lt; <a href="#781255599f89513a" class="i field">MaxVisitCount</a>)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">// A readonly singleton with the default SafeValueContext.</span>
+        <b>internal static readonly</b> <a href="#eb4d92e68685204f" class="t t">IsSafeValueVisitor</a> <a id="d86c2fd26927c264" href="../../R/d86c2fd26927c264.html" target="n" data-glyph="44,1" class="i field">Default</a> = <b>new</b> <a href="#e52bfebc5f40d167" class="t constructor">IsSafeValueVisitor</a>(<a href="#802786d75c891d39" class="t t">GetSafeValueVisitor</a>.<a href="#525ae8157bd81dda" class="t t">SafeValueContext</a>.<a href="#9649c27dbb99fbab" class="i field">Default</a>);
+ 
+        <span class="c">// This is a check of the number of visits</span>
+        <b>private uint</b> <a id="40948cf6e4840551" href="../../R/40948cf6e4840551.html" target="n" data-glyph="46,1" class="i field">_visitCount</a> = 0;
+ 
+        <b>private const uint</b> <a id="781255599f89513a" href="../../R/781255599f89513a.html" target="n" data-glyph="10,1" class="i field">MaxVisitCount</a> = 5000;
+        <b>private const int</b> <a id="d3c24c86bf986766" href="../../R/d3c24c86bf986766.html" target="n" data-glyph="10,1" class="i field">MaxHashtableKeyCount</a> = 500;
+ 
+        <span class="c">// Used to determine if we are being called within a GetPowerShell() context,</span>
+        <span class="c">// which does some additional security verification outside of the scope of</span>
+        <span class="c">// what we can verify.</span>
+        <b>private readonly</b> <a href="#802786d75c891d39" class="t t">GetSafeValueVisitor</a>.<a href="#525ae8157bd81dda" class="t t">SafeValueContext</a> <a id="fee11d07eb74cffc" href="../../R/fee11d07eb74cffc.html" target="n" data-glyph="46,1" class="i field">_safeValueContext</a>;
+ 
+        <b>public object</b> <a id="4334e3cc7db4a3af" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitErrorStatement</a>(<a href="ast.cs.html#e02a155b7afded8b" class="t t">ErrorStatementAst</a> <span id="r5 rd" class="r5 r">errorStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="4e8b32e83de289ed" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitErrorExpression</a>(<a href="ast.cs.html#bdf2b3276843e0c2" class="t t">ErrorExpressionAst</a> <span id="r6 rd" class="r6 r">errorExpressionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="9b70886c31154ced" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitScriptBlock</a>(<a href="ast.cs.html#6f963589327835a4" class="t t">ScriptBlockAst</a> <span id="r7 rd" class="r7 r">scriptBlockAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="003029ccf279f8ba" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitParamBlock</a>(<a href="ast.cs.html#be95362bdc5e7d07" class="t t">ParamBlockAst</a> <span id="r8 rd" class="r8 r">paramBlockAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="310d4d1083f790e5" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitNamedBlock</a>(<a href="ast.cs.html#61c97c02c53bf32d" class="t t">NamedBlockAst</a> <span id="r9 rd" class="r9 r">namedBlockAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="a9c0fd82f638cf69" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTypeConstraint</a>(<a href="ast.cs.html#34b9d5dbbaca964d" class="t t">TypeConstraintAst</a> <span id="r10 rd" class="r10 r">typeConstraintAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="12102ad0b3166a69" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitAttribute</a>(<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a> <span id="r11 rd" class="r11 r">attributeAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="bd7889b04d2c6a1e" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitNamedAttributeArgument</a>(<a href="ast.cs.html#283d46191e6456a4" class="t t">NamedAttributeArgumentAst</a> <span id="r12 rd" class="r12 r">namedAttributeArgumentAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="c59faca94242ae09" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitParameter</a>(<a href="ast.cs.html#bf2a2797225b11b5" class="t t">ParameterAst</a> <span id="r13 rd" class="r13 r">parameterAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="d808ca9240384f5d" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitFunctionDefinition</a>(<a href="ast.cs.html#dd61b2a7b388405b" class="t t">FunctionDefinitionAst</a> <span id="r14 rd" class="r14 r">functionDefinitionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="14d22ef8224de1bd" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitIfStatement</a>(<a href="ast.cs.html#5371982d66a6137d" class="t t">IfStatementAst</a> <span id="r15 rd" class="r15 r">ifStmtAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="f63eb2bbecddd72b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTrap</a>(<a href="ast.cs.html#5cedc9c886fbe837" class="t t">TrapStatementAst</a> <span id="r16 rd" class="r16 r">trapStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="6849f3c3fda21e18" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitSwitchStatement</a>(<a href="ast.cs.html#4d96f6c979a5266e" class="t t">SwitchStatementAst</a> <span id="r17 rd" class="r17 r">switchStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="8bed27af461568a8" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDataStatement</a>(<a href="ast.cs.html#37c175482122764b" class="t t">DataStatementAst</a> <span id="r18 rd" class="r18 r">dataStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="568b42fcb3e4afd5" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitForEachStatement</a>(<a href="ast.cs.html#9ae6aa2909fef7b0" class="t t">ForEachStatementAst</a> <span id="r19 rd" class="r19 r">forEachStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="27b470f70fa47123" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDoWhileStatement</a>(<a href="ast.cs.html#b2d1fe560ff56deb" class="t t">DoWhileStatementAst</a> <span id="r20 rd" class="r20 r">doWhileStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="f2b8339f7d7b7a16" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitForStatement</a>(<a href="ast.cs.html#4ca51f16f7c100d4" class="t t">ForStatementAst</a> <span id="r21 rd" class="r21 r">forStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="7ce1911132a1e30d" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitWhileStatement</a>(<a href="ast.cs.html#4e9a52b62ed8b2b1" class="t t">WhileStatementAst</a> <span id="r22 rd" class="r22 r">whileStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="ff9c8d2d588bbf2b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCatchClause</a>(<a href="ast.cs.html#fafbccc59f688c0e" class="t t">CatchClauseAst</a> <span id="r23 rd" class="r23 r">catchClauseAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="87a19a8feb2c7c32" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTryStatement</a>(<a href="ast.cs.html#9827b5d12d62be7f" class="t t">TryStatementAst</a> <span id="r24 rd" class="r24 r">tryStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="582d9771f1e1f3b8" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBreakStatement</a>(<a href="ast.cs.html#410610c8cad1e99b" class="t t">BreakStatementAst</a> <span id="r25 rd" class="r25 r">breakStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="0c74f2c75e68562c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitContinueStatement</a>(<a href="ast.cs.html#f8a733d027117fbc" class="t t">ContinueStatementAst</a> <span id="r26 rd" class="r26 r">continueStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="1f2604ce3edc3d87" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitReturnStatement</a>(<a href="ast.cs.html#ba60713bd71ce457" class="t t">ReturnStatementAst</a> <span id="r27 rd" class="r27 r">returnStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="d846c3ce3de9c9a9" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitExitStatement</a>(<a href="ast.cs.html#c410ad4dd51f9687" class="t t">ExitStatementAst</a> <span id="r28 rd" class="r28 r">exitStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="ca99026f70a2c902" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitThrowStatement</a>(<a href="ast.cs.html#07e9c4f5bce4153b" class="t t">ThrowStatementAst</a> <span id="r29 rd" class="r29 r">throwStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="e9b0056c00121182" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDoUntilStatement</a>(<a href="ast.cs.html#d641b5faf306abeb" class="t t">DoUntilStatementAst</a> <span id="r30 rd" class="r30 r">doUntilStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="fce546c55772e699" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitAssignmentStatement</a>(<a href="ast.cs.html#da5f345864f42e06" class="t t">AssignmentStatementAst</a> <span id="r31 rd" class="r31 r">assignmentStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="c644d9bc4323b246" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCommand</a>(<a href="ast.cs.html#a310aaa1e0374ddd" class="t t">CommandAst</a> <span id="r32 rd" class="r32 r">commandAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="3332822c45e7bdf1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCommandExpression</a>(<a href="ast.cs.html#f4da818a29387c5d" class="t t">CommandExpressionAst</a> <span id="r33 rd" class="r33 r">commandExpressionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="da47b25f3f4dbe0d" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCommandParameter</a>(<a href="ast.cs.html#b97c3b8b32a8faec" class="t t">CommandParameterAst</a> <span id="r34 rd" class="r34 r">commandParameterAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="394de8d289765d1f" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitFileRedirection</a>(<a href="ast.cs.html#2288e8fa779a0d57" class="t t">FileRedirectionAst</a> <span id="r35 rd" class="r35 r">fileRedirectionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="829ce030021ed9bd" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitMergingRedirection</a>(<a href="ast.cs.html#57ad2a29a39e91e6" class="t t">MergingRedirectionAst</a> <span id="r36 rd" class="r36 r">mergingRedirectionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="9970902aa70f854c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitAttributedExpression</a>(<a href="ast.cs.html#434eb922ec6ac95b" class="t t">AttributedExpressionAst</a> <span id="r37 rd" class="r37 r">attributedExpressionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="10a4bcce644a3d94" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBlockStatement</a>(<a href="ast.cs.html#0a993ec4b360d318" class="t t">BlockStatementAst</a> <span id="r38 rd" class="r38 r">blockStatementAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="f05d1229ec3ea86f" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitInvokeMemberExpression</a>(<a href="ast.cs.html#be11dcb1e53f56b8" class="t t">InvokeMemberExpressionAst</a> <span id="r39 rd" class="r39 r">invokeMemberExpressionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="b44c40916a34e0e6" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTypeDefinition</a>(<a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <span id="r40 rd" class="r40 r">typeDefinitionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="972cd15da3aa914d" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitPropertyMember</a>(<a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a> <span id="r41 rd" class="r41 r">propertyMemberAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="1eae7b55849ef071" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitFunctionMember</a>(<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a> <span id="r42 rd" class="r42 r">functionMemberAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="046795bccce68ad3" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBaseCtorInvokeMemberExpression</a>(<a href="ast.cs.html#93dc2e4429de8e4e" class="t t">BaseCtorInvokeMemberExpressionAst</a> <span id="r43 rd" class="r43 r">baseCtorInvokeMemberExpressionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="e21d19294687ae91" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitUsingStatement</a>(<a href="ast.cs.html#a269e1753cbc4c90" class="t t">UsingStatementAst</a> <span id="r44 rd" class="r44 r">usingStatement</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="1f5136e688eaf74e" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitConfigurationDefinition</a>(<a href="ast.cs.html#d0b13bd03366725b" class="t t">ConfigurationDefinitionAst</a> <span id="r45 rd" class="r45 r">configurationDefinitionAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="2933ba291cf878a6" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDynamicKeywordStatement</a>(<a href="ast.cs.html#2c7580ec5eda8932" class="t t">DynamicKeywordStatementAst</a> <span id="r46 rd" class="r46 r">dynamicKeywordAst</span>) { <b>return</b> <b>false</b>; }
+ 
+        <b>public object</b> <a id="6eba7f057828290b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitIndexExpression</a>(<a href="ast.cs.html#4587e325068530ec" class="t t">IndexExpressionAst</a> <span id="r47 rd" class="r47 r">indexExpressionAst</span>)
+        {
+            <b>return</b> (<b>bool</b>)<span class="r47 r">indexExpressionAst</span>.<a href="ast.cs.html#2e5c6ad17318d78c" class="i property">Index</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>) &amp;&amp; (<b>bool</b>)<span class="r47 r">indexExpressionAst</span>.<a href="ast.cs.html#4340a50f115f7fdd" class="i property">Target</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="e3222000568fbaca" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitExpandableStringExpression</a>(<a href="ast.cs.html#dac25e1530bb8b85" class="t t">ExpandableStringExpressionAst</a> <span id="r48 rd" class="r48 r">expandableStringExpressionAst</span>)
+        {
+            <b>bool</b> <span id="r49 rd" class="r49 r">isSafe</span> = <b>true</b>;
+            <b>foreach</b> (<b>var</b> <span id="r50 rd" class="r50 r">nestedExpression</span> <b>in</b> <span class="r48 r">expandableStringExpressionAst</span>.<a href="ast.cs.html#7a52821c53f08528" class="i property">NestedExpressions</a>)
+            {
+                <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+                <b>if</b> (!(<b>bool</b>)<span class="r50 r">nestedExpression</span>.<span class="i">Accept</span>(<a href="#eb4d92e68685204f" class="k">this</a>))
+                {
+                    <span class="r49 r">isSafe</span> = <b>false</b>;
+                    <b>break</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r49 r">isSafe</span>;
+        }
+ 
+        <b>public object</b> <a id="630dd0482aa72373" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitStatementBlock</a>(<a href="ast.cs.html#268644c84b225866" class="t t">StatementBlockAst</a> <span id="r51 rd" class="r51 r">statementBlockAst</span>)
+        {
+            <b>bool</b> <span id="r52 rd" class="r52 r">isSafe</span> = <b>true</b>;
+            <b>foreach</b> (<b>var</b> <span id="r53 rd" class="r53 r">statement</span> <b>in</b> <span class="r51 r">statementBlockAst</span>.<a href="ast.cs.html#2d53956b12d128eb" class="i property">Statements</a>)
+            {
+                <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+                <b>if</b> (<span class="r53 r">statement</span> == <b>null</b>)
+                {
+                    <span class="r52 r">isSafe</span> = <b>false</b>;
+                    <b>break</b>;
+                }
+ 
+                <b>if</b> (!(<b>bool</b>)<span class="r53 r">statement</span>.<span class="i">Accept</span>(<a href="#eb4d92e68685204f" class="k">this</a>))
+                {
+                    <span class="r52 r">isSafe</span> = <b>false</b>;
+                    <b>break</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r52 r">isSafe</span>;
+        }
+ 
+        <b>public object</b> <a id="f6875e4d99f515c9" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitPipeline</a>(<a href="ast.cs.html#785915ec8547ce9f" class="t t">PipelineAst</a> <span id="r54 rd" class="r54 r">pipelineAst</span>)
+        {
+            <a href="ast.cs.html#78a833319fe635b4" class="k">var</a> <span id="r55 rd" class="r55 r">expr</span> = <span class="r54 r">pipelineAst</span>.<a href="ast.cs.html#df65de159259e5e0" class="i method">GetPureExpression</a>();
+            <b>return</b> <span class="r55 r">expr</span> != <b>null</b> &amp;&amp; (<b>bool</b>)<span class="r55 r">expr</span>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="67ab4f67a04553fa" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTernaryExpression</a>(<a href="ast.cs.html#75320d2e9ca587ab" class="t t">TernaryExpressionAst</a> <span id="r56 rd" class="r56 r">ternaryExpressionAst</span>)
+        {
+            <b>return</b> (<b>bool</b>)<span class="r56 r">ternaryExpressionAst</span>.<a href="ast.cs.html#8fe864cc3d568de7" class="i property">Condition</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>) &amp;&amp;
+                   (<b>bool</b>)<span class="r56 r">ternaryExpressionAst</span>.<a href="ast.cs.html#c679b2d23aba3af3" class="i property">IfTrue</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>) &amp;&amp;
+                   (<b>bool</b>)<span class="r56 r">ternaryExpressionAst</span>.<a href="ast.cs.html#6aa8ec2dcb9934c3" class="i property">IfFalse</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="23b726ee6f937b46" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBinaryExpression</a>(<a href="ast.cs.html#f3e3848ef2eae593" class="t t">BinaryExpressionAst</a> <span id="r57 rd" class="r57 r">binaryExpressionAst</span>)
+        {
+            <span class="c">// This can be used for a denial of service</span>
+            <span class="c">// Write-Output ((((((&quot;AAAAAAAAAAAAAAAAAAAAAA&quot;*2)*2)*2)*2)*2)*2)</span>
+            <span class="c">// Keep on going with that pattern, and we&#39;re generating gigabytes of strings.</span>
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>public object</b> <a id="e7a5c12c119cbf92" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitUnaryExpression</a>(<a href="ast.cs.html#ee62c8a99269d267" class="t t">UnaryExpressionAst</a> <span id="r58 rd" class="r58 r">unaryExpressionAst</span>)
+        {
+            <b>bool</b> <span id="r59 rd" class="r59 r">unaryExpressionIsSafe</span> = <span class="r58 r">unaryExpressionAst</span>.<a href="ast.cs.html#1ce84eccd8a75fa0" class="i property">TokenKind</a>.<a href="token.cs.html#84def6774d758bed" class="i method">HasTrait</a>(<a href="token.cs.html#fb1c35b7167e0165" class="t t">TokenFlags</a>.<a href="token.cs.html#6459fb3d57d2c29e" class="i field">CanConstantFold</a>) &amp;&amp;
+                !<span class="r58 r">unaryExpressionAst</span>.<a href="ast.cs.html#1ce84eccd8a75fa0" class="i property">TokenKind</a>.<a href="token.cs.html#84def6774d758bed" class="i method">HasTrait</a>(<a href="token.cs.html#fb1c35b7167e0165" class="t t">TokenFlags</a>.<a href="token.cs.html#d6998268e436d710" class="i field">DisallowedInRestrictedMode</a>) &amp;&amp;
+                (<b>bool</b>)<span class="r58 r">unaryExpressionAst</span>.<a href="ast.cs.html#ca72754d5d4d5410" class="i property">Child</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+            <b>if</b> (<span class="r59 r">unaryExpressionIsSafe</span>)
+            {
+                <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+            }
+ 
+            <b>return</b> <span class="r59 r">unaryExpressionIsSafe</span>;
+        }
+ 
+        <b>public object</b> <a id="45d6c06f8e4b555c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitConvertExpression</a>(<a href="ast.cs.html#49daf252fdb62723" class="t t">ConvertExpressionAst</a> <span id="r60 rd" class="r60 r">convertExpressionAst</span>)
+        {
+            <b>var</b> <span id="r61 rd" class="r61 r">type</span> = <span class="r60 r">convertExpressionAst</span>.<a href="ast.cs.html#ecb5959c230c5865" class="i property">Type</a>.<a href="ast.cs.html#eae1f2f74db44d11" class="i property">TypeName</a>.<a href="ast.cs.html#eba83ef9fd0feedd" class="i method">GetReflectionType</a>();
+            <b>if</b> (<span class="r61 r">type</span> == <b>null</b>)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>if</b> (!<span class="r61 r">type</span>.<span class="i">IsSafePrimitive</span>())
+            {
+                <span class="c">// Only do conversions to built-in types - other conversions might not</span>
+                <span class="c">// be safe to optimize.</span>
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+            <b>return</b> (<b>bool</b>)<span class="r60 r">convertExpressionAst</span>.<a href="ast.cs.html#b2353777e73e35be" class="i property">Child</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="568ab391b630be94" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitConstantExpression</a>(<a href="ast.cs.html#ebd8ad798cde7861" class="t t">ConstantExpressionAst</a> <span id="r62 rd" class="r62 r">constantExpressionAst</span>)
+        {
+            <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>public object</b> <a id="48e1959288e788e5" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitStringConstantExpression</a>(<a href="ast.cs.html#e18e1bad255cd022" class="t t">StringConstantExpressionAst</a> <span id="r63 rd" class="r63 r">stringConstantExpressionAst</span>)
+        {
+            <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>public object</b> <a id="afae2b9b444ae4d1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitSubExpression</a>(<a href="ast.cs.html#e6552a77ab32112a" class="t t">SubExpressionAst</a> <span id="r64 rd" class="r64 r">subExpressionAst</span>)
+        {
+            <b>return</b> <span class="r64 r">subExpressionAst</span>.<a href="ast.cs.html#ec0bda1def565114" class="i property">SubExpression</a>.<a href="ast.cs.html#320e0abd734f9b5f" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="219c799f943091e4" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitUsingExpression</a>(<a href="ast.cs.html#42d36b88817a807f" class="t t">UsingExpressionAst</a> <span id="r65 rd" class="r65 r">usingExpressionAst</span>)
+        {
+            <span class="c">// $using:true should be safe - it&#39;s silly to write that, but not harmful.</span>
+            <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+            <b>return</b> <span class="r65 r">usingExpressionAst</span>.<a href="ast.cs.html#eb8bbf44ea3ab101" class="i property">SubExpression</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="9d527e09ca6f07fc" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitVariableExpression</a>(<a href="ast.cs.html#248562b22b336dec" class="t t">VariableExpressionAst</a> <span id="r66 rd" class="r66 r">variableExpressionAst</span>)
+        {
+            <a href="#40948cf6e4840551" class="i field">_visitCount</a>++;
+ 
+            <b>if</b> (<a href="#fee11d07eb74cffc" class="i field">_safeValueContext</a> == <a href="#802786d75c891d39" class="t t">GetSafeValueVisitor</a>.<a href="#525ae8157bd81dda" class="t t">SafeValueContext</a>.<a href="#0f49225a942d4c35" class="i field">GetPowerShell</a>)
+            {
+                <span class="c">// GetPowerShell does its own validation of allowed variables in the</span>
+                <span class="c">// context of the entire script block, and then supplies this visitor</span>
+                <span class="c">// with the CommandExpressionAst directly. This</span>
+                <span class="c">// prevents us from evaluating variable safety in this visitor,</span>
+                <span class="c">// so we rely on GetPowerShell&#39;s implementation.</span>
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (<a href="#fee11d07eb74cffc" class="i field">_safeValueContext</a> == <a href="#802786d75c891d39" class="t t">GetSafeValueVisitor</a>.<a href="#525ae8157bd81dda" class="t t">SafeValueContext</a>.<a href="#d14a32df3b92df13" class="i field">ModuleAnalysis</a>)
+            {
+                <b>return</b> <span class="r66 r">variableExpressionAst</span>.<a href="ast.cs.html#1f31fa8ef6d4e586" class="i method">IsConstantVariable</a>() ||
+                       (<span class="r66 r">variableExpressionAst</span>.<a href="ast.cs.html#d094d170ef781837" class="i property">VariablePath</a>.<a href="../VariablePath.cs.html#eba0e3378f727eac" class="i property">IsUnqualified</a> &amp;&amp;
+                        <span class="r66 r">variableExpressionAst</span>.<a href="ast.cs.html#d094d170ef781837" class="i property">VariablePath</a>.<a href="../VariablePath.cs.html#4d193f060335d69e" class="i property">UnqualifiedPath</a>.<span class="i">Equals</span>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#3d4b8747790649ee" class="i field">PSScriptRoot</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>));
+            }
+ 
+            <b>bool</b> <span id="r67 rd" class="r67 r">unused</span> = <b>false</b>;
+            <b>return</b> <span class="r66 r">variableExpressionAst</span>.<a href="ast.cs.html#72f62de88f6f2378" class="i method">IsSafeVariableReference</a>(<b>null</b>, <b>ref</b> <span class="r67 r">unused</span>);
+        }
+ 
+        <b>public object</b> <a id="335b235c35718844" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTypeExpression</a>(<a href="ast.cs.html#bf258955590d49b7" class="t t">TypeExpressionAst</a> <span id="r68 rd" class="r68 r">typeExpressionAst</span>)
+        {
+            <span class="c">// Type expressions are not safe as they allow fingerprinting by providing</span>
+            <span class="c">// a set of types, you can inspect the types in the AppDomain implying which assemblies are in use</span>
+            <span class="c">// and their version</span>
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>public object</b> <a id="22b9b5d7be3577e1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitMemberExpression</a>(<a href="ast.cs.html#a3e8bc64452a67d0" class="t t">MemberExpressionAst</a> <span id="r69 rd" class="r69 r">memberExpressionAst</span>)
+        {
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>public object</b> <a id="1b9527ded3cf1733" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitArrayExpression</a>(<a href="ast.cs.html#6bb067a9fcfafabf" class="t t">ArrayExpressionAst</a> <span id="r70 rd" class="r70 r">arrayExpressionAst</span>)
+        {
+            <span class="c">// An Array expression *may* be safe, if its components are safe</span>
+            <b>return</b> <span class="r70 r">arrayExpressionAst</span>.<a href="ast.cs.html#ccfc39397cd3e8e5" class="i property">SubExpression</a>.<a href="ast.cs.html#320e0abd734f9b5f" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="5676983a63155193" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitArrayLiteral</a>(<a href="ast.cs.html#0e44bc9125134006" class="t t">ArrayLiteralAst</a> <span id="r71 rd" class="r71 r">arrayLiteralAst</span>)
+        {
+            <b>bool</b> <span id="r72 rd" class="r72 r">isSafe</span> = <span class="r71 r">arrayLiteralAst</span>.<a href="ast.cs.html#1b2cdef74794d8b9" class="i property">Elements</a>.<span class="i">All</span>(<span id="r73 rd" class="r73 r">e</span> =&gt; (<b>bool</b>)<span class="r73 r">e</span>.<span class="i">Accept</span>(<a href="#eb4d92e68685204f" class="k">this</a>));
+            <span class="c">// An array literal is safe</span>
+            <b>return</b> <span class="r72 r">isSafe</span>;
+        }
+ 
+        <b>public object</b> <a id="29beb754a4824cc2" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitHashtable</a>(<a href="ast.cs.html#fd6e450f68cfd52b" class="t t">HashtableAst</a> <span id="r74 rd" class="r74 r">hashtableAst</span>)
+        {
+            <b>if</b> (<span class="r74 r">hashtableAst</span>.<a href="ast.cs.html#87313f35bc2b66d9" class="i property">KeyValuePairs</a>.<span class="i">Count</span> &gt; <a href="#d3c24c86bf986766" class="i field">MaxHashtableKeyCount</a>)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <span class="r74 r">hashtableAst</span>.<a href="ast.cs.html#87313f35bc2b66d9" class="i property">KeyValuePairs</a>.<span class="i">All</span>(<span id="r75 rd" class="r75 r">pair</span> =&gt; (<b>bool</b>)<span class="r75 r">pair</span>.<span class="i">Item1</span>.<span class="i">Accept</span>(<a href="#eb4d92e68685204f" class="k">this</a>) &amp;&amp; (<b>bool</b>)<span class="r75 r">pair</span>.<span class="i">Item2</span>.<span class="i">Accept</span>(<a href="#eb4d92e68685204f" class="k">this</a>));
+        }
+ 
+        <b>public object</b> <a id="f65ff43fb16f6838" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitScriptBlockExpression</a>(<a href="ast.cs.html#5ec0737db546f4f5" class="t t">ScriptBlockExpressionAst</a> <span id="r76 rd" class="r76 r">scriptBlockExpressionAst</span>)
+        {
+            <span class="c">// Returning a ScriptBlock instance itself is OK, bad stuff only happens</span>
+            <span class="c">// when invoking one (which is blocked)</span>
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>public object</b> <a id="7547e34dda8b198c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitParenExpression</a>(<a href="ast.cs.html#a9797c05604b61e8" class="t t">ParenExpressionAst</a> <span id="r77 rd" class="r77 r">parenExpressionAst</span>)
+        {
+            <b>return</b> <span class="r77 r">parenExpressionAst</span>.<a href="ast.cs.html#021e323175cb804d" class="i property">Pipeline</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#eb4d92e68685204f" class="k">this</a>);
+        }
+    }
+ 
+    <span class="c">/*
+     * This implementation retrieves the safe value without directly calling the compiler
+     * except in the case of handling the unary operator
+     * ExecutionContext is provided to ensure we can resolve variables
+     */</span>
+    <b>internal sealed class</b> <a id="802786d75c891d39" href="../../R/802786d75c891d39.html" target="n" data-glyph="2,0" class="t t">GetSafeValueVisitor</a> : <a href="AstVisitor.cs.html#92b75e0afbdd3cf3" class="t t">ICustomAstVisitor2</a>
+    {
+        <b>internal enum</b> <a id="525ae8157bd81dda" href="../../R/525ae8157bd81dda.html" target="n" data-glyph="20,1" class="t t"><span id="87f3502e86cdd903">SafeValueContext</span></a>
+        {
+            <a id="9649c27dbb99fbab" href="../../R/9649c27dbb99fbab.html" target="n" data-glyph="24,2" class="i field">Default</a>,
+            <a id="0f49225a942d4c35" href="../../R/0f49225a942d4c35.html" target="n" data-glyph="24,2" class="i field">GetPowerShell</a>,
+            <a id="d14a32df3b92df13" href="../../R/d14a32df3b92df13.html" target="n" data-glyph="24,2" class="i field">ModuleAnalysis</a>,
+            <a id="f4f6230490f91602" href="../../R/f4f6230490f91602.html" target="n" data-glyph="24,2" class="i field">SkipHashtableSizeCheck</a>,
+        }
+ 
+        <span class="c">// future proofing</span>
+        <b>private</b> <a id="dcd9ce38cc831b0c" href="../../R/dcd9ce38cc831b0c.html" target="n" data-glyph="76,1" class="t constructor">GetSafeValueVisitor</a>() { }
+ 
+        <b>public static object</b> <a id="1a637852005dfb2f" href="../../R/1a637852005dfb2f.html" target="n" data-glyph="72,1" class="i method">GetSafeValue</a>(<a href="ast.cs.html#d47621d83efd14de" class="t t">Ast</a> <span id="r78 rd" class="r78 r">ast</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r79 rd" class="r79 r">context</span>, <a href="#525ae8157bd81dda" class="t t">SafeValueContext</a> <span id="r80 rd" class="r80 r">safeValueContext</span>)
+        {
+            <a href="#76a3866bfe00686a" class="i field">t_context</a> = <span class="r79 r">context</span>;
+ 
+            <b>if</b> (<span class="r80 r">safeValueContext</span> == <a href="#525ae8157bd81dda" class="t t">SafeValueContext</a>.<a href="#f4f6230490f91602" class="i field">SkipHashtableSizeCheck</a> || <a href="#eb4d92e68685204f" class="t t">IsSafeValueVisitor</a>.<a href="#44da5261e2b875bc" class="i method">IsAstSafe</a>(<span class="r78 r">ast</span>, <span class="r80 r">safeValueContext</span>))
+            {
+                <b>return</b> <span class="r78 r">ast</span>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<b>new</b> <a href="#dcd9ce38cc831b0c" class="t constructor">GetSafeValueVisitor</a>());
+            }
+ 
+            <b>if</b> (<span class="r80 r">safeValueContext</span> == <a href="#525ae8157bd81dda" class="t t">SafeValueContext</a>.<a href="#d14a32df3b92df13" class="i field">ModuleAnalysis</a>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r78 r">ast</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This field needs to be thread-static to make &#39;GetSafeValue&#39; thread safe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">ThreadStatic</span>]
+        <b>private static</b> <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <a id="76a3866bfe00686a" href="../../R/76a3866bfe00686a.html" target="n" data-glyph="46,1" class="i field">t_context</a>;
+ 
+        <b>public object</b> <a id="a27e17c6fd53a2b8" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitErrorStatement</a>(<a href="ast.cs.html#e02a155b7afded8b" class="t t">ErrorStatementAst</a> <span id="r81 rd" class="r81 r">errorStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r81 r">errorStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="214189ba16f6c38c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitErrorExpression</a>(<a href="ast.cs.html#bdf2b3276843e0c2" class="t t">ErrorExpressionAst</a> <span id="r82 rd" class="r82 r">errorExpressionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r82 r">errorExpressionAst</span>)); }
+ 
+        <b>public object</b> <a id="431ba0dbb4c3ab33" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitScriptBlock</a>(<a href="ast.cs.html#6f963589327835a4" class="t t">ScriptBlockAst</a> <span id="r83 rd" class="r83 r">scriptBlockAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r83 r">scriptBlockAst</span>)); }
+ 
+        <b>public object</b> <a id="4a53a81f58376ca1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitParamBlock</a>(<a href="ast.cs.html#be95362bdc5e7d07" class="t t">ParamBlockAst</a> <span id="r84 rd" class="r84 r">paramBlockAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r84 r">paramBlockAst</span>)); }
+ 
+        <b>public object</b> <a id="0764fd1ed9d26bfb" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitNamedBlock</a>(<a href="ast.cs.html#61c97c02c53bf32d" class="t t">NamedBlockAst</a> <span id="r85 rd" class="r85 r">namedBlockAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r85 r">namedBlockAst</span>)); }
+ 
+        <b>public object</b> <a id="aec7c276688a4866" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTypeConstraint</a>(<a href="ast.cs.html#34b9d5dbbaca964d" class="t t">TypeConstraintAst</a> <span id="r86 rd" class="r86 r">typeConstraintAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r86 r">typeConstraintAst</span>)); }
+ 
+        <b>public object</b> <a id="9956efa6feb3ff58" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitAttribute</a>(<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a> <span id="r87 rd" class="r87 r">attributeAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r87 r">attributeAst</span>)); }
+ 
+        <b>public object</b> <a id="cd0bd3762a330fee" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitNamedAttributeArgument</a>(<a href="ast.cs.html#283d46191e6456a4" class="t t">NamedAttributeArgumentAst</a> <span id="r88 rd" class="r88 r">namedAttributeArgumentAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r88 r">namedAttributeArgumentAst</span>)); }
+ 
+        <b>public object</b> <a id="dbaf931999b205ff" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitParameter</a>(<a href="ast.cs.html#bf2a2797225b11b5" class="t t">ParameterAst</a> <span id="r89 rd" class="r89 r">parameterAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r89 r">parameterAst</span>)); }
+ 
+        <b>public object</b> <a id="aa59d0ac5f1fa31b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitFunctionDefinition</a>(<a href="ast.cs.html#dd61b2a7b388405b" class="t t">FunctionDefinitionAst</a> <span id="r90 rd" class="r90 r">functionDefinitionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r90 r">functionDefinitionAst</span>)); }
+ 
+        <b>public object</b> <a id="2111043effc4bbc7" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitIfStatement</a>(<a href="ast.cs.html#5371982d66a6137d" class="t t">IfStatementAst</a> <span id="r91 rd" class="r91 r">ifStmtAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r91 r">ifStmtAst</span>)); }
+ 
+        <b>public object</b> <a id="cd584bdcda3dda60" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTrap</a>(<a href="ast.cs.html#5cedc9c886fbe837" class="t t">TrapStatementAst</a> <span id="r92 rd" class="r92 r">trapStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r92 r">trapStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="420e880c1c3936d9" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitSwitchStatement</a>(<a href="ast.cs.html#4d96f6c979a5266e" class="t t">SwitchStatementAst</a> <span id="r93 rd" class="r93 r">switchStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r93 r">switchStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="804e710beb184d2f" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDataStatement</a>(<a href="ast.cs.html#37c175482122764b" class="t t">DataStatementAst</a> <span id="r94 rd" class="r94 r">dataStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r94 r">dataStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="99b0426e28fa5a08" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitForEachStatement</a>(<a href="ast.cs.html#9ae6aa2909fef7b0" class="t t">ForEachStatementAst</a> <span id="r95 rd" class="r95 r">forEachStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r95 r">forEachStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="5d9b27335cb9b3cb" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDoWhileStatement</a>(<a href="ast.cs.html#b2d1fe560ff56deb" class="t t">DoWhileStatementAst</a> <span id="r96 rd" class="r96 r">doWhileStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r96 r">doWhileStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="6853f8c97f4c498b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitForStatement</a>(<a href="ast.cs.html#4ca51f16f7c100d4" class="t t">ForStatementAst</a> <span id="r97 rd" class="r97 r">forStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r97 r">forStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="87d22ae6fe17547e" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitWhileStatement</a>(<a href="ast.cs.html#4e9a52b62ed8b2b1" class="t t">WhileStatementAst</a> <span id="r98 rd" class="r98 r">whileStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r98 r">whileStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="cfbe8e9194a404cc" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCatchClause</a>(<a href="ast.cs.html#fafbccc59f688c0e" class="t t">CatchClauseAst</a> <span id="r99 rd" class="r99 r">catchClauseAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r99 r">catchClauseAst</span>)); }
+ 
+        <b>public object</b> <a id="1784c2db50fc2760" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTryStatement</a>(<a href="ast.cs.html#9827b5d12d62be7f" class="t t">TryStatementAst</a> <span id="r100 rd" class="r100 r">tryStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r100 r">tryStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="b61223ed381dcb41" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBreakStatement</a>(<a href="ast.cs.html#410610c8cad1e99b" class="t t">BreakStatementAst</a> <span id="r101 rd" class="r101 r">breakStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r101 r">breakStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="df64bc28d1570cee" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitContinueStatement</a>(<a href="ast.cs.html#f8a733d027117fbc" class="t t">ContinueStatementAst</a> <span id="r102 rd" class="r102 r">continueStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r102 r">continueStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="e8ad60c9da0d6cc2" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitReturnStatement</a>(<a href="ast.cs.html#ba60713bd71ce457" class="t t">ReturnStatementAst</a> <span id="r103 rd" class="r103 r">returnStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r103 r">returnStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="544df3a5c44f393d" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitExitStatement</a>(<a href="ast.cs.html#c410ad4dd51f9687" class="t t">ExitStatementAst</a> <span id="r104 rd" class="r104 r">exitStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r104 r">exitStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="f2c377e820042f13" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitThrowStatement</a>(<a href="ast.cs.html#07e9c4f5bce4153b" class="t t">ThrowStatementAst</a> <span id="r105 rd" class="r105 r">throwStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r105 r">throwStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="6f520659d448c670" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDoUntilStatement</a>(<a href="ast.cs.html#d641b5faf306abeb" class="t t">DoUntilStatementAst</a> <span id="r106 rd" class="r106 r">doUntilStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r106 r">doUntilStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="eef3c65c6a1de568" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitAssignmentStatement</a>(<a href="ast.cs.html#da5f345864f42e06" class="t t">AssignmentStatementAst</a> <span id="r107 rd" class="r107 r">assignmentStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r107 r">assignmentStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="e9e3581e30177b20" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCommand</a>(<a href="ast.cs.html#a310aaa1e0374ddd" class="t t">CommandAst</a> <span id="r108 rd" class="r108 r">commandAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r108 r">commandAst</span>)); }
+ 
+        <b>public object</b> <a id="dee71680d8990cda" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCommandExpression</a>(<a href="ast.cs.html#f4da818a29387c5d" class="t t">CommandExpressionAst</a> <span id="r109 rd" class="r109 r">commandExpressionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r109 r">commandExpressionAst</span>)); }
+ 
+        <b>public object</b> <a id="0d2656627d3aa006" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitCommandParameter</a>(<a href="ast.cs.html#b97c3b8b32a8faec" class="t t">CommandParameterAst</a> <span id="r110 rd" class="r110 r">commandParameterAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r110 r">commandParameterAst</span>)); }
+ 
+        <b>public object</b> <a id="8862a6719c4bfaf3" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitFileRedirection</a>(<a href="ast.cs.html#2288e8fa779a0d57" class="t t">FileRedirectionAst</a> <span id="r111 rd" class="r111 r">fileRedirectionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r111 r">fileRedirectionAst</span>)); }
+ 
+        <b>public object</b> <a id="281796844126105c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitMergingRedirection</a>(<a href="ast.cs.html#57ad2a29a39e91e6" class="t t">MergingRedirectionAst</a> <span id="r112 rd" class="r112 r">mergingRedirectionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r112 r">mergingRedirectionAst</span>)); }
+ 
+        <b>public object</b> <a id="5d71e357603de7a3" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitAttributedExpression</a>(<a href="ast.cs.html#434eb922ec6ac95b" class="t t">AttributedExpressionAst</a> <span id="r113 rd" class="r113 r">attributedExpressionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r113 r">attributedExpressionAst</span>)); }
+ 
+        <b>public object</b> <a id="162cd71f29a6eacd" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBlockStatement</a>(<a href="ast.cs.html#0a993ec4b360d318" class="t t">BlockStatementAst</a> <span id="r114 rd" class="r114 r">blockStatementAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r114 r">blockStatementAst</span>)); }
+ 
+        <b>public object</b> <a id="a5f7ac00919783aa" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitInvokeMemberExpression</a>(<a href="ast.cs.html#be11dcb1e53f56b8" class="t t">InvokeMemberExpressionAst</a> <span id="r115 rd" class="r115 r">invokeMemberExpressionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r115 r">invokeMemberExpressionAst</span>)); }
+ 
+        <b>public object</b> <a id="8f7c85f089be52c7" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTypeDefinition</a>(<a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <span id="r116 rd" class="r116 r">typeDefinitionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r116 r">typeDefinitionAst</span>)); }
+ 
+        <b>public object</b> <a id="d18de374801e6a6e" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitPropertyMember</a>(<a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a> <span id="r117 rd" class="r117 r">propertyMemberAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r117 r">propertyMemberAst</span>)); }
+ 
+        <b>public object</b> <a id="4b36c60d90a377ab" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitFunctionMember</a>(<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a> <span id="r118 rd" class="r118 r">functionMemberAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r118 r">functionMemberAst</span>)); }
+ 
+        <b>public object</b> <a id="008c847454a73679" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBaseCtorInvokeMemberExpression</a>(<a href="ast.cs.html#93dc2e4429de8e4e" class="t t">BaseCtorInvokeMemberExpressionAst</a> <span id="r119 rd" class="r119 r">baseCtorInvokeMemberExpressionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r119 r">baseCtorInvokeMemberExpressionAst</span>)); }
+ 
+        <b>public object</b> <a id="237b60a51c6f7429" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitUsingStatement</a>(<a href="ast.cs.html#a269e1753cbc4c90" class="t t">UsingStatementAst</a> <span id="r120 rd" class="r120 r">usingStatement</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r120 r">usingStatement</span>)); }
+ 
+        <b>public object</b> <a id="fdd2ddce7f052be1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitConfigurationDefinition</a>(<a href="ast.cs.html#d0b13bd03366725b" class="t t">ConfigurationDefinitionAst</a> <span id="r121 rd" class="r121 r">configurationDefinitionAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r121 r">configurationDefinitionAst</span>)); }
+ 
+        <b>public object</b> <a id="1f3932139cbeb7dd" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitDynamicKeywordStatement</a>(<a href="ast.cs.html#2c7580ec5eda8932" class="t t">DynamicKeywordStatementAst</a> <span id="r122 rd" class="r122 r">dynamicKeywordAst</span>) { <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r122 r">dynamicKeywordAst</span>)); }
+ 
+        <span class="c">//</span>
+        <span class="c">// This is similar to logic used deep in the engine for slicing something that can be sliced</span>
+        <span class="c">// It&#39;s recreated here because there isn&#39;t really a simple API which can be called for this case.</span>
+        <span class="c">// this can throw, but there really isn&#39;t useful information we can add, as the</span>
+        <span class="c">// offending expression will be presented in the case of any failure</span>
+        <span class="c">//</span>
+        <b>private static object</b> <a id="10e5454304fa55ed" href="../../R/10e5454304fa55ed.html" target="n" data-glyph="76,1" class="i method">GetSingleValueFromTarget</a>(<b>object</b> <span id="r123 rd" class="r123 r">target</span>, <b>object</b> <span id="r124 rd" class="r124 r">index</span>)
+        {
+            <b>var</b> <span id="r125 rd" class="r125 r">targetString</span> = <span class="r123 r">target</span> <b>as string</b>;
+            <b>if</b> (<span class="r125 r">targetString</span> != <b>null</b>)
+            {
+                <b>var</b> <span id="r126 rd" class="r126 r">offset</span> = (<b>int</b>)<span class="r124 r">index</span>;
+                <b>if</b> (<span class="i">Math</span>.<span class="i">Abs</span>(<span class="r126 r">offset</span>) &gt;= <span class="r125 r">targetString</span>.<span class="i">Length</span>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>return</b> <span class="r126 r">offset</span> &gt;= 0 ? <span class="r125 r">targetString</span>[<span class="r126 r">offset</span>] : <span class="r125 r">targetString</span>[<span class="r125 r">targetString</span>.<span class="i">Length</span> + <span class="r126 r">offset</span>];
+            }
+ 
+            <b>var</b> <span id="r127 rd" class="r127 r">targetArray</span> = <span class="r123 r">target</span> <b>as object</b>[];
+            <b>if</b> (<span class="r127 r">targetArray</span> != <b>null</b>)
+            {
+                <span class="c">// this can throw, that just gets percolated back</span>
+                <b>var</b> <span id="r128 rd" class="r128 r">offset</span> = (<b>int</b>)<span class="r124 r">index</span>;
+                <b>if</b> (<span class="i">Math</span>.<span class="i">Abs</span>(<span class="r128 r">offset</span>) &gt;= <span class="r127 r">targetArray</span>.<span class="i">Length</span>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>return</b> <span class="r128 r">offset</span> &gt;= 0 ? <span class="r127 r">targetArray</span>[<span class="r128 r">offset</span>] : <span class="r127 r">targetArray</span>[<span class="r127 r">targetArray</span>.<span class="i">Length</span> + <span class="r128 r">offset</span>];
+            }
+ 
+            <b>var</b> <span id="r129 rd" class="r129 r">targetHashtable</span> = <span class="r123 r">target</span> <b>as</b> <span class="i">Hashtable</span>;
+            <b>if</b> (<span class="r129 r">targetHashtable</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r129 r">targetHashtable</span>[<span class="r124 r">index</span>];
+            }
+            <span class="c">// The actual exception doesn&#39;t really matter because the caller in ScriptBlockToPowerShell</span>
+            <span class="c">// will present the user with the offending script segment</span>
+            <b>throw</b> <b>new</b> <span class="i">Exception</span>();
+        }
+ 
+        <b>private static object</b> <a id="febca2b8cf1904a0" href="../../R/febca2b8cf1904a0.html" target="n" data-glyph="76,1" class="i method">GetIndexedValueFromTarget</a>(<b>object</b> <span id="r130 rd" class="r130 r">target</span>, <b>object</b> <span id="r131 rd" class="r131 r">index</span>)
+        {
+            <b>var</b> <span id="r132 rd" class="r132 r">indexArray</span> = <span class="r131 r">index</span> <b>as object</b>[];
+            <b>return</b> <span class="r132 r">indexArray</span> != <b>null</b> ? ((<b>object</b>[])<span class="r132 r">indexArray</span>).<span class="i">Select</span>(<span id="r133 rd" class="r133 r">i</span> =&gt; <span class="i">GetSingleValueFromTarget</span>(<span class="r130 r">target</span>, <span class="r133 r">i</span>)).<span class="i">ToArray</span>() : <a href="#10e5454304fa55ed" class="i method">GetSingleValueFromTarget</a>(<span class="r130 r">target</span>, <span class="r131 r">index</span>);
+        }
+ 
+        <b>public object</b> <a id="81e682b8b1217fba" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitIndexExpression</a>(<a href="ast.cs.html#4587e325068530ec" class="t t">IndexExpressionAst</a> <span id="r134 rd" class="r134 r">indexExpressionAst</span>)
+        {
+            <span class="c">// Get the value of the index and value and call the compiler</span>
+            <b>var</b> <span id="r135 rd" class="r135 r">index</span> = <span class="r134 r">indexExpressionAst</span>.<a href="ast.cs.html#2e5c6ad17318d78c" class="i property">Index</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+            <b>var</b> <span id="r136 rd" class="r136 r">target</span> = <span class="r134 r">indexExpressionAst</span>.<a href="ast.cs.html#4340a50f115f7fdd" class="i property">Target</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+            <b>if</b> (<span class="r135 r">index</span> == <b>null</b> || <span class="r136 r">target</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r134 r">indexExpressionAst</span>));
+            }
+ 
+            <b>return</b> <a href="#febca2b8cf1904a0" class="i method">GetIndexedValueFromTarget</a>(<span class="r136 r">target</span>, <span class="r135 r">index</span>);
+        }
+ 
+        <b>public object</b> <a id="e23c89f56f74b33b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitExpandableStringExpression</a>(<a href="ast.cs.html#dac25e1530bb8b85" class="t t">ExpandableStringExpressionAst</a> <span id="r137 rd" class="r137 r">expandableStringExpressionAst</span>)
+        {
+            <b>object</b>[] <span id="r138 rd" class="r138 r">safeValues</span> = <b>new</b> <b>object</b>[<span class="r137 r">expandableStringExpressionAst</span>.<a href="ast.cs.html#7a52821c53f08528" class="i property">NestedExpressions</a>.<span class="i">Count</span>];
+            <span class="c">// retrieve OFS, and if it doesn&#39;t exist set it to space</span>
+            <b>string</b> <span id="r139 rd" class="r139 r">ofs</span> = <b>null</b>;
+            <b>if</b> (<a href="#76a3866bfe00686a" class="i field">t_context</a> != <b>null</b>)
+            {
+                <span class="r139 r">ofs</span> = <a href="#76a3866bfe00686a" class="i field">t_context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#0198da5eba13cb75" class="i property">PSVariable</a>.<a href="../VariableInterfaces.cs.html#20b9dd22f81d2a1c" class="i method">GetValue</a>(<span class="s">&quot;OFS&quot;</span>) <b>as string</b>;
+            }
+ 
+            <b>if</b> (<span class="r139 r">ofs</span> == <b>null</b>)
+            {
+                <span class="r139 r">ofs</span> = <span class="s">&quot; &quot;</span>;
+            }
+ 
+            <b>for</b> (<b>int</b> <span id="r140 rd" class="r140 r">offset</span> = 0; <span class="r140 r">offset</span> &lt; <span class="r138 r">safeValues</span>.<span class="i">Length</span>; <span class="r140 r">offset</span>++)
+            {
+                <b>var</b> <span id="r141 rd" class="r141 r">result</span> = <span class="r137 r">expandableStringExpressionAst</span>.<a href="ast.cs.html#7a52821c53f08528" class="i property">NestedExpressions</a>[<span class="r140 r">offset</span>].<span class="i">Accept</span>(<a href="#802786d75c891d39" class="k">this</a>);
+                <span class="c">// depending on the nested expression we may retrieve a variable, or even need to</span>
+                <span class="c">// execute a sub-expression. The result of which may be returned</span>
+                <span class="c">// as a scalar, array or nested array. If the unwrap of first array doesn&#39;t contain a nested</span>
+                <span class="c">// array we can then pass it to string.Join. If it *does* contain an array,</span>
+                <span class="c">// we need to unwrap the inner array and pass *that* to string.Join.</span>
+                <span class="c">//</span>
+                <span class="c">// This means we get the same answer with GetPowerShell() as in the command-line</span>
+                <span class="c">// { echo &quot;abc $true $(1) $(2,3) def&quot; }.Invoke() gives the same answer as</span>
+                <span class="c">// { echo &quot;abc $true $(1) $(2,3) def&quot; }.GetPowerShell().Invoke()</span>
+                <span class="c">// abc True 1 2 3 def</span>
+                <span class="c">// as does { echo &quot;abc $true $(1) $(@(1,2),@(3,4)) def&quot;</span>
+                <span class="c">// which is</span>
+                <span class="c">// abc True 1 System.Object[] System.Object[] def</span>
+                <span class="c">// fortunately, at this point, we&#39;re dealing with strings, so whatever the result</span>
+                <span class="c">// from the ToString method of the array (or scalar) elements, that&#39;s symmetrical with</span>
+                <span class="c">// a standard scriptblock invocation behavior</span>
+                <b>var</b> <span id="r142 rd" class="r142 r">resultArray</span> = <span class="r141 r">result</span> <b>as object</b>[];
+ 
+                <span class="c">// In this environment, we can&#39;t use $OFS as we might expect. Retrieving OFS</span>
+                <span class="c">// might possibly leak server side info which we don&#39;t want, so we&#39;ll</span>
+                <span class="c">// assign &#39; &#39; as our OFS for purposes of GetPowerShell</span>
+                <span class="c">// Also, this will not call any script implementations of ToString (ala types.clixml)</span>
+                <span class="c">// This *will* result in a different result in those cases. However, to execute some</span>
+                <span class="c">// arbitrary script at this stage would be opening ourselves up to an attack</span>
+                <b>if</b> (<span class="r142 r">resultArray</span> != <b>null</b>)
+                {
+                    <b>object</b>[] <span id="r143 rd" class="r143 r">subExpressionResult</span> = <b>new</b> <b>object</b>[<span class="r142 r">resultArray</span>.<span class="i">Length</span>];
+                    <b>for</b> (<b>int</b> <span id="r144 rd" class="r144 r">subExpressionOffset</span> = 0;
+                        <span class="r144 r">subExpressionOffset</span> &lt; <span class="r143 r">subExpressionResult</span>.<span class="i">Length</span>;
+                        <span class="r144 r">subExpressionOffset</span>++)
+                    {
+                        <span class="c">// check to see if there is an array in our array,</span>
+                        <b>object</b>[] <span id="r145 rd" class="r145 r">subResult</span> = <span class="r142 r">resultArray</span>[<span class="r144 r">subExpressionOffset</span>] <b>as object</b>[];
+                        <b>if</b> (<span class="r145 r">subResult</span> != <b>null</b>)
+                        {
+                            <span class="r143 r">subExpressionResult</span>[<span class="r144 r">subExpressionOffset</span>] = <b>string</b>.<span class="i">Join</span>(<span class="r139 r">ofs</span>, <span class="r145 r">subResult</span>);
+                        }
+                        <b>else</b> <span class="c">// it is a scalar, so we can just add it to our collections</span>
+                        {
+                            <span class="r143 r">subExpressionResult</span>[<span class="r144 r">subExpressionOffset</span>] = <span class="r142 r">resultArray</span>[<span class="r144 r">subExpressionOffset</span>];
+                        }
+                    }
+ 
+                    <span class="r138 r">safeValues</span>[<span class="r140 r">offset</span>] = <b>string</b>.<span class="i">Join</span>(<span class="r139 r">ofs</span>, <span class="r143 r">subExpressionResult</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r138 r">safeValues</span>[<span class="r140 r">offset</span>] = <span class="r141 r">result</span>;
+                }
+            }
+ 
+            <b>return</b> <a href="../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<a href="../../utils/StringUtil.cs.html#798b827f58e30321" class="i method">Format</a>(<span class="r137 r">expandableStringExpressionAst</span>.<a href="ast.cs.html#b2f43eb7778a1d9a" class="i property">FormatExpression</a>, <span class="r138 r">safeValues</span>);
+        }
+ 
+        <b>public object</b> <a id="3137f98c25e9b323" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitStatementBlock</a>(<a href="ast.cs.html#268644c84b225866" class="t t">StatementBlockAst</a> <span id="r146 rd" class="r146 r">statementBlockAst</span>)
+        {
+            <span class="i">ArrayList</span> <span id="r147 rd" class="r147 r">statementList</span> = <b>new</b> <span class="i">ArrayList</span>();
+            <b>foreach</b> (<b>var</b> <span id="r148 rd" class="r148 r">statement</span> <b>in</b> <span class="r146 r">statementBlockAst</span>.<a href="ast.cs.html#2d53956b12d128eb" class="i property">Statements</a>)
+            {
+                <b>if</b> (<span class="r148 r">statement</span> != <b>null</b>)
+                {
+                    <b>var</b> <span id="r149 rd" class="r149 r">obj</span> = <span class="r148 r">statement</span>.<span class="i">Accept</span>(<a href="#802786d75c891d39" class="k">this</a>);
+                    <b>var</b> <span id="r150 rd" class="r150 r">enumerator</span> = <a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<span class="i">GetEnumerator</span>(<span class="r149 r">obj</span>);
+                    <b>if</b> (<span class="r150 r">enumerator</span> != <b>null</b>)
+                    {
+                        <b>while</b> (<span class="r150 r">enumerator</span>.<span class="i">MoveNext</span>())
+                        {
+                            <span class="r147 r">statementList</span>.<span class="i">Add</span>(<span class="r150 r">enumerator</span>.<span class="i">Current</span>);
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r147 r">statementList</span>.<span class="i">Add</span>(<span class="r149 r">obj</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r146 r">statementBlockAst</span>));
+                }
+            }
+ 
+            <b>return</b> <span class="r147 r">statementList</span>.<span class="i">ToArray</span>();
+        }
+ 
+        <b>public object</b> <a id="3beef4ee20331512" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitPipeline</a>(<a href="ast.cs.html#785915ec8547ce9f" class="t t">PipelineAst</a> <span id="r151 rd" class="r151 r">pipelineAst</span>)
+        {
+            <a href="ast.cs.html#78a833319fe635b4" class="k">var</a> <span id="r152 rd" class="r152 r">expr</span> = <span class="r151 r">pipelineAst</span>.<a href="ast.cs.html#df65de159259e5e0" class="i method">GetPureExpression</a>();
+            <b>if</b> (<span class="r152 r">expr</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r152 r">expr</span>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+            }
+ 
+            <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r151 r">pipelineAst</span>));
+        }
+ 
+        <b>public object</b> <a id="9effc5ee944cbe73" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTernaryExpression</a>(<a href="ast.cs.html#75320d2e9ca587ab" class="t t">TernaryExpressionAst</a> <span id="r153 rd" class="r153 r">ternaryExpressionAst</span>)
+        {
+            <b>if</b> (<a href="#76a3866bfe00686a" class="i field">t_context</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r153 r">ternaryExpressionAst</span>));
+            }
+ 
+            <b>return</b> <a href="Compiler.cs.html#8bdfc042f41c96c5" class="t t">Compiler</a>.<a href="Compiler.cs.html#e64c031d9d5607aa" class="i method">GetExpressionValue</a>(<span class="r153 r">ternaryExpressionAst</span>, <span class="r154 r">isTrustedInput</span>: <b>true</b>, <a href="#76a3866bfe00686a" class="i field">t_context</a>, <span class="r155 r">usingValues</span>: <b>null</b>);
+        }
+ 
+        <b>public object</b> <a id="0e59f9eefa12aefd" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitBinaryExpression</a>(<a href="ast.cs.html#f3e3848ef2eae593" class="t t">BinaryExpressionAst</a> <span id="r156 rd" class="r156 r">binaryExpressionAst</span>)
+        {
+            <span class="c">// This can be used for a denial of service</span>
+            <span class="c">// Write-Output ((((((&quot;AAAAAAAAAAAAAAAAAAAAAA&quot;*2)*2)*2)*2)*2)*2)</span>
+            <span class="c">// Keep on going with that pattern, and we&#39;re generating gigabytes of strings.</span>
+            <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r156 r">binaryExpressionAst</span>));
+        }
+ 
+        <b>public object</b> <a id="89128a5aa4ef4d57" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitUnaryExpression</a>(<a href="ast.cs.html#ee62c8a99269d267" class="t t">UnaryExpressionAst</a> <span id="r157 rd" class="r157 r">unaryExpressionAst</span>)
+        {
+            <b>if</b> (<a href="#76a3866bfe00686a" class="i field">t_context</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r157 r">unaryExpressionAst</span>));
+            }
+ 
+            <b>return</b> <a href="Compiler.cs.html#8bdfc042f41c96c5" class="t t">Compiler</a>.<a href="Compiler.cs.html#e64c031d9d5607aa" class="i method">GetExpressionValue</a>(<span class="r157 r">unaryExpressionAst</span>, <span class="r154 r">isTrustedInput</span>: <b>true</b>, <a href="#76a3866bfe00686a" class="i field">t_context</a>, <span class="r155 r">usingValues</span>: <b>null</b>);
+        }
+ 
+        <b>public object</b> <a id="260793cef3eea128" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitConvertExpression</a>(<a href="ast.cs.html#49daf252fdb62723" class="t t">ConvertExpressionAst</a> <span id="r158 rd" class="r158 r">convertExpressionAst</span>)
+        {
+            <span class="c">// at this point, we know we&#39;re safe because we checked both the type and the child,</span>
+            <span class="c">// so now we can just call the compiler and indicate that it&#39;s trusted (at this point)</span>
+            <b>if</b> (<a href="#76a3866bfe00686a" class="i field">t_context</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r158 r">convertExpressionAst</span>));
+            }
+ 
+            <b>return</b> <a href="Compiler.cs.html#8bdfc042f41c96c5" class="t t">Compiler</a>.<a href="Compiler.cs.html#e64c031d9d5607aa" class="i method">GetExpressionValue</a>(<span class="r158 r">convertExpressionAst</span>, <span class="r154 r">isTrustedInput</span>: <b>true</b>, <a href="#76a3866bfe00686a" class="i field">t_context</a>, <span class="r155 r">usingValues</span>: <b>null</b>);
+        }
+ 
+        <b>public object</b> <a id="f74d2a87c086bd44" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitConstantExpression</a>(<a href="ast.cs.html#ebd8ad798cde7861" class="t t">ConstantExpressionAst</a> <span id="r159 rd" class="r159 r">constantExpressionAst</span>)
+        {
+            <b>return</b> <span class="r159 r">constantExpressionAst</span>.<a href="ast.cs.html#8e2d2054af044253" class="i property">Value</a>;
+        }
+ 
+        <b>public object</b> <a id="eae7ca800f159613" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitStringConstantExpression</a>(<a href="ast.cs.html#e18e1bad255cd022" class="t t">StringConstantExpressionAst</a> <span id="r160 rd" class="r160 r">stringConstantExpressionAst</span>)
+        {
+            <b>return</b> <span class="r160 r">stringConstantExpressionAst</span>.<a href="ast.cs.html#a6dc72732a1c7e0d" class="i property">Value</a>;
+        }
+ 
+        <b>public object</b> <a id="286f5ea018dedd96" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitSubExpression</a>(<a href="ast.cs.html#e6552a77ab32112a" class="t t">SubExpressionAst</a> <span id="r161 rd" class="r161 r">subExpressionAst</span>)
+        {
+            <b>return</b> <span class="r161 r">subExpressionAst</span>.<a href="ast.cs.html#ec0bda1def565114" class="i property">SubExpression</a>.<a href="ast.cs.html#320e0abd734f9b5f" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="cc661279eb538881" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitUsingExpression</a>(<a href="ast.cs.html#42d36b88817a807f" class="t t">UsingExpressionAst</a> <span id="r162 rd" class="r162 r">usingExpressionAst</span>)
+        {
+            <span class="c">// $using:true should be safe - it&#39;s silly to write that, but not harmful.</span>
+            <b>return</b> <span class="r162 r">usingExpressionAst</span>.<a href="ast.cs.html#eb8bbf44ea3ab101" class="i property">SubExpression</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+        }
+ 
+        <b>public object</b> <a id="038421dcea638305" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitVariableExpression</a>(<a href="ast.cs.html#248562b22b336dec" class="t t">VariableExpressionAst</a> <span id="r163 rd" class="r163 r">variableExpressionAst</span>)
+        {
+            <span class="c">// There are earlier checks to be sure that we are not using unreferenced variables</span>
+            <span class="c">// this ensures that we only use what was declared in the param block</span>
+            <span class="c">// other variables such as true/false/args etc have been already vetted</span>
+            <b>string</b> <span id="r164 rd" class="r164 r">name</span> = <span class="r163 r">variableExpressionAst</span>.<a href="ast.cs.html#d094d170ef781837" class="i property">VariablePath</a>.<a href="../VariablePath.cs.html#4d193f060335d69e" class="i property">UnqualifiedPath</a>;
+            <b>if</b> (<span class="r163 r">variableExpressionAst</span>.<a href="ast.cs.html#1f31fa8ef6d4e586" class="i method">IsConstantVariable</a>())
+            {
+                <b>if</b> (<span class="r164 r">name</span>.<span class="i">Equals</span>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#bc3a5c92bd98b407" class="i field">True</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    <b>return</b> <b>true</b>;
+ 
+                <b>if</b> (<span class="r164 r">name</span>.<span class="i">Equals</span>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#0d63e40a08074c09" class="i field">False</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    <b>return</b> <b>false</b>;
+ 
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<span class="i">Assert</span>(<span class="r164 r">name</span>.<span class="i">Equals</span>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#d67486c961066178" class="i field">Null</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>), <span class="s">&quot;Unexpected constant variable&quot;</span>);
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>if</b> (<span class="r164 r">name</span>.<span class="i">Equals</span>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#3d4b8747790649ee" class="i field">PSScriptRoot</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <b>var</b> <span id="r165 rd" class="r165 r">scriptFileName</span> = <span class="r163 r">variableExpressionAst</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>.<a href="Position.cs.html#e933edecd2b0cc1d" class="i property">File</a>;
+                <b>if</b> (<span class="r165 r">scriptFileName</span> == <b>null</b>)
+                    <b>return</b> <b>null</b>;
+ 
+                <b>return</b> <span class="i">Path</span>.<span class="i">GetDirectoryName</span>(<span class="r165 r">scriptFileName</span>);
+            }
+ 
+            <b>if</b> (<a href="#76a3866bfe00686a" class="i field">t_context</a> != <b>null</b>)
+            {
+                <b>return</b> <a href="../runtime/Operations/VariableOps.cs.html#d5ccea9fa7bfb556" class="t t">VariableOps</a>.<a href="../runtime/Operations/VariableOps.cs.html#95ebbb7039f5ef2d" class="i method">GetVariableValue</a>(<span class="r163 r">variableExpressionAst</span>.<a href="ast.cs.html#d094d170ef781837" class="i property">VariablePath</a>, <a href="#76a3866bfe00686a" class="i field">t_context</a>, <span class="r163 r">variableExpressionAst</span>);
+            }
+ 
+            <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r163 r">variableExpressionAst</span>));
+        }
+ 
+        <b>public object</b> <a id="eca245d765542151" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitTypeExpression</a>(<a href="ast.cs.html#bf258955590d49b7" class="t t">TypeExpressionAst</a> <span id="r166 rd" class="r166 r">typeExpressionAst</span>)
+        {
+            <span class="c">// Type expressions are not safe as they allow fingerprinting by providing</span>
+            <span class="c">// a set of types, you can inspect the types in the AppDomain implying which assemblies are in use</span>
+            <span class="c">// and their version</span>
+            <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r166 r">typeExpressionAst</span>));
+        }
+ 
+        <b>public object</b> <a id="258beb03a19d3368" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitMemberExpression</a>(<a href="ast.cs.html#a3e8bc64452a67d0" class="t t">MemberExpressionAst</a> <span id="r167 rd" class="r167 r">memberExpressionAst</span>)
+        {
+            <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r167 r">memberExpressionAst</span>));
+        }
+ 
+        <b>public object</b> <a id="ba6817907951e5a4" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitArrayExpression</a>(<a href="ast.cs.html#6bb067a9fcfafabf" class="t t">ArrayExpressionAst</a> <span id="r168 rd" class="r168 r">arrayExpressionAst</span>)
+        {
+            <span class="c">// An Array expression *may* be safe, if its components are safe</span>
+            <b>var</b> <span id="r169 rd" class="r169 r">arrayExpressionAstResult</span> = (<b>object</b>[])<span class="r168 r">arrayExpressionAst</span>.<a href="ast.cs.html#ccfc39397cd3e8e5" class="i property">SubExpression</a>.<a href="ast.cs.html#320e0abd734f9b5f" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+            <b>return</b> <span class="r169 r">arrayExpressionAstResult</span>;
+        }
+ 
+        <b>public object</b> <a id="0b2800d2c3b91ecf" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitArrayLiteral</a>(<a href="ast.cs.html#0e44bc9125134006" class="t t">ArrayLiteralAst</a> <span id="r170 rd" class="r170 r">arrayLiteralAst</span>)
+        {
+            <span class="c">// An array literal is safe</span>
+            <span class="i">ArrayList</span> <span id="r171 rd" class="r171 r">arrayElements</span> = <b>new</b> <span class="i">ArrayList</span>();
+            <b>foreach</b> (<b>var</b> <span id="r172 rd" class="r172 r">element</span> <b>in</b> <span class="r170 r">arrayLiteralAst</span>.<a href="ast.cs.html#1b2cdef74794d8b9" class="i property">Elements</a>)
+            {
+                <span class="r171 r">arrayElements</span>.<span class="i">Add</span>(<span class="r172 r">element</span>.<span class="i">Accept</span>(<a href="#802786d75c891d39" class="k">this</a>));
+            }
+ 
+            <b>return</b> <span class="r171 r">arrayElements</span>.<span class="i">ToArray</span>();
+        }
+ 
+        <b>public object</b> <a id="c640fbff259dbbea" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitHashtable</a>(<a href="ast.cs.html#fd6e450f68cfd52b" class="t t">HashtableAst</a> <span id="r173 rd" class="r173 r">hashtableAst</span>)
+        {
+            <span class="i">Hashtable</span> <span id="r174 rd" class="r174 r">hashtable</span> = <b>new</b> <span class="i">Hashtable</span>(<span class="i">StringComparer</span>.<span class="i">CurrentCultureIgnoreCase</span>);
+            <b>foreach</b> (<b>var</b> <span id="r175 rd" class="r175 r">pair</span> <b>in</b> <span class="r173 r">hashtableAst</span>.<a href="ast.cs.html#87313f35bc2b66d9" class="i property">KeyValuePairs</a>)
+            {
+                <b>var</b> <span id="r176 rd" class="r176 r">key</span> = <span class="r175 r">pair</span>.<span class="i">Item1</span>.<span class="i">Accept</span>(<a href="#802786d75c891d39" class="k">this</a>);
+                <b>var</b> <span id="r177 rd" class="r177 r">value</span> = <span class="r175 r">pair</span>.<span class="i">Item2</span>.<span class="i">Accept</span>(<a href="#802786d75c891d39" class="k">this</a>);
+                <span class="r174 r">hashtable</span>.<span class="i">Add</span>(<span class="r176 r">key</span>, <span class="r177 r">value</span>);
+            }
+ 
+            <b>return</b> <span class="r174 r">hashtable</span>;
+        }
+ 
+        <b>public object</b> <a id="6bb6af37f30c4a49" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitScriptBlockExpression</a>(<a href="ast.cs.html#5ec0737db546f4f5" class="t t">ScriptBlockExpressionAst</a> <span id="r178 rd" class="r178 r">scriptBlockExpressionAst</span>)
+        {
+            <b>return</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../lang/scriptblock.cs.html#adfac0fa7bf5725f" class="i method">Create</a>(<span class="r178 r">scriptBlockExpressionAst</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>.<a href="Position.cs.html#43ce932d9225bc9c" class="i property">Text</a>);
+        }
+ 
+        <b>public object</b> <a id="b6713aae809291f1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">VisitParenExpression</a>(<a href="ast.cs.html#a9797c05604b61e8" class="t t">ParenExpressionAst</a> <span id="r179 rd" class="r179 r">parenExpressionAst</span>)
+        {
+            <b>return</b> <span class="r179 r">parenExpressionAst</span>.<a href="ast.cs.html#021e323175cb804d" class="i property">Pipeline</a>.<a href="ast.cs.html#71efa3501b9475f2" class="i method">Accept</a>(<a href="#802786d75c891d39" class="k">this</a>);
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

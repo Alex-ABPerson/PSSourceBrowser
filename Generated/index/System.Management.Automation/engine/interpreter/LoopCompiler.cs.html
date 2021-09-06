@@ -1,0 +1,398 @@
+﻿<!DOCTYPE html>
+<html><head><title>LoopCompiler.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(389);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/interpreter/LoopCompiler.cs" target="_top">engine\interpreter\LoopCompiler.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">/* ****************************************************************************
+ *
+ * Copyright (c) Microsoft Corporation.
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+ * by the terms of the Apache License, Version 2.0.
+ *
+ * You must not remove this notice, or any other, from this software.
+ *
+ *
+ * ***************************************************************************/</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CLR2</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>
+{
+    <b>using</b> <span class="t">AstUtils</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>.<a href="Utilities.cs.html#55b509010bbde4b3" class="t t">Utils</a>;
+    <b>using</b> <span class="i">LoopFunc</span> = <span class="i">Func</span>&lt;<b>object</b>[], <span class="i">StrongBox</span>&lt;<b>object</b>&gt;[], <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a>, <b>int</b>&gt;;
+ 
+    <b>internal sealed class</b> <a id="66a31d5f01ed5403" href="../../R/66a31d5f01ed5403.html" target="n" data-glyph="2,0" class="t t">LoopCompiler</a> : <span class="i">ExpressionVisitor</span>
+    {
+        <b>private struct</b> <a id="2849743cb413970c" href="../../R/2849743cb413970c.html" target="n" data-glyph="112,1" class="t t"><span id="a07c8539ba2a3cec">LoopVariable</span></a>
+        {
+            <b>public</b> <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a> <a id="252cfba0e1d28b35" href="../../R/252cfba0e1d28b35.html" target="n" data-glyph="42,2" class="i field">Access</a>;
+ 
+            <span class="c">// a variable that holds on the strong box for closure variables:</span>
+            <b>public</b> <span class="i">ParameterExpression</span> <a id="4ae862e3aeb4480b" href="../../R/4ae862e3aeb4480b.html" target="n" data-glyph="42,2" class="i field">BoxStorage</a>;
+ 
+            <b>public</b> <a id="7bcfab5c6185a77d" href="../../R/7bcfab5c6185a77d.html" target="n" data-glyph="72,2" class="t constructor">LoopVariable</a>(<a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a> <span id="r0 rd" class="r0 r">access</span>, <span class="i">ParameterExpression</span> <span id="r1 rd" class="r1 r">box</span>)
+            {
+                <a href="#252cfba0e1d28b35" class="i field">Access</a> = <span class="r0 r">access</span>;
+                <a href="#4ae862e3aeb4480b" class="i field">BoxStorage</a> = <span class="r1 r">box</span>;
+            }
+ 
+            <b>public override string</b> <a id="45396f1d93884ccc" href="../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">ToString</a>()
+            {
+                <b>return</b> <a href="#252cfba0e1d28b35" class="i field">Access</a>.<span class="i">ToString</span>() + <span class="s">&quot; &quot;</span> + <a href="#4ae862e3aeb4480b" class="i field">BoxStorage</a>;
+            }
+        }
+ 
+        <b>private readonly</b> <span class="i">ParameterExpression</span> <a id="2ddc907ce672c279" href="../../R/2ddc907ce672c279.html" target="n" data-glyph="46,1" class="i field">_frameDataVar</a>;
+        <b>private readonly</b> <span class="i">ParameterExpression</span> <a id="c428df2f60e33019" href="../../R/c428df2f60e33019.html" target="n" data-glyph="46,1" class="i field">_frameClosureVar</a>;
+        <b>private readonly</b> <span class="i">ParameterExpression</span> <a id="6b6bba6d1c9a0ae9" href="../../R/6b6bba6d1c9a0ae9.html" target="n" data-glyph="46,1" class="i field">_frameVar</a>;
+        <b>private readonly</b> <span class="i">LabelTarget</span> <a id="62a383b8cc53a4fd" href="../../R/62a383b8cc53a4fd.html" target="n" data-glyph="46,1" class="i field">_returnLabel</a>;
+        <span class="c">// locals and closure variables defined outside the loop</span>
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <a id="81a4caf0ca16efda" href="../../R/81a4caf0ca16efda.html" target="n" data-glyph="46,1" class="i field">_outerVariables</a>, <a id="f3c0a00705a4cfb5" href="../../R/f3c0a00705a4cfb5.html" target="n" data-glyph="46,1" class="i field">_closureVariables</a>;
+        <b>private readonly</b> <a href="../parser/Compiler.cs.html#0fe6cf831dd0d23e" class="t t">PowerShellLoopExpression</a> <a id="fae3a12bf44aa1a1" href="../../R/fae3a12bf44aa1a1.html" target="n" data-glyph="46,1" class="i field">_loop</a>;
+        <b>private</b> <span class="i">List</span>&lt;<span class="i">ParameterExpression</span>&gt; <a id="6ad64a05204041bc" href="../../R/6ad64a05204041bc.html" target="n" data-glyph="46,1" class="i field">_temps</a>;
+        <span class="c">// tracks variables that flow in and flow out for initialization and</span>
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="#2849743cb413970c" class="t t">LoopVariable</a>&gt; <a id="e77935c23b80d497" href="../../R/e77935c23b80d497.html" target="n" data-glyph="46,1" class="i field">_loopVariables</a>;
+        <span class="c">// variables which are defined and used within the loop</span>
+        <b>private</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt; <a id="202a7eb147e1a990" href="../../R/202a7eb147e1a990.html" target="n" data-glyph="46,1" class="i field">_loopLocals</a>;
+ 
+        <b>private readonly</b> <a href="Utilities.cs.html#600f1e648b51e109" class="t t">HybridReferenceDictionary</a>&lt;<span class="i">LabelTarget</span>, <a href="BranchLabel.cs.html#eddd89038e02be60" class="t t">BranchLabel</a>&gt; <a id="c4fee8772e66024e" href="../../R/c4fee8772e66024e.html" target="n" data-glyph="46,1" class="i field">_labelMapping</a>;
+        <b>private readonly int</b> <a id="26a54a254451f5af" href="../../R/26a54a254451f5af.html" target="n" data-glyph="46,1" class="i field">_loopStartInstructionIndex</a>;
+        <b>private readonly int</b> <a id="428434c5a677a9cf" href="../../R/428434c5a677a9cf.html" target="n" data-glyph="46,1" class="i field">_loopEndInstructionIndex</a>;
+ 
+        <b>internal</b> <a id="c44a289bc6a2e015" href="../../R/c44a289bc6a2e015.html" target="n" data-glyph="74,1" class="t constructor">LoopCompiler</a>(<a href="../parser/Compiler.cs.html#0fe6cf831dd0d23e" class="t t">PowerShellLoopExpression</a> <span id="r2 rd" class="r2 r">loop</span>,
+                              <a href="Utilities.cs.html#600f1e648b51e109" class="t t">HybridReferenceDictionary</a>&lt;<span class="i">LabelTarget</span>, <a href="BranchLabel.cs.html#eddd89038e02be60" class="t t">BranchLabel</a>&gt; <span id="r3 rd" class="r3 r">labelMapping</span>,
+                              <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <span id="r4 rd" class="r4 r">locals</span>,
+                              <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <span id="r5 rd" class="r5 r">closureVariables</span>,
+                              <b>int</b> <span id="r6 rd" class="r6 r">loopStartInstructionIndex</span>,
+                              <b>int</b> <span id="r7 rd" class="r7 r">loopEndInstructionIndex</span>)
+        {
+            <a href="#fae3a12bf44aa1a1" class="i field">_loop</a> = <span class="r2 r">loop</span>;
+            <a href="#81a4caf0ca16efda" class="i field">_outerVariables</a> = <span class="r4 r">locals</span>;
+            <a href="#f3c0a00705a4cfb5" class="i field">_closureVariables</a> = <span class="r5 r">closureVariables</span>;
+            <a href="#2ddc907ce672c279" class="i field">_frameDataVar</a> = <span class="i">Expression</span>.<span class="i">Parameter</span>(<b>typeof</b>(<b>object</b>[]));
+            <a href="#c428df2f60e33019" class="i field">_frameClosureVar</a> = <span class="i">Expression</span>.<span class="i">Parameter</span>(<b>typeof</b>(<span class="i">StrongBox</span>&lt;<b>object</b>&gt;[]));
+            <a href="#6b6bba6d1c9a0ae9" class="i field">_frameVar</a> = <span class="i">Expression</span>.<span class="i">Parameter</span>(<b>typeof</b>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a>));
+            <a href="#e77935c23b80d497" class="i field">_loopVariables</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="#2849743cb413970c" class="t t">LoopVariable</a>&gt;();
+            <a href="#62a383b8cc53a4fd" class="i field">_returnLabel</a> = <span class="i">Expression</span>.<span class="i">Label</span>(<b>typeof</b>(<b>int</b>));
+            <a href="#c4fee8772e66024e" class="i field">_labelMapping</a> = <span class="r3 r">labelMapping</span>;
+            <a href="#26a54a254451f5af" class="i field">_loopStartInstructionIndex</a> = <span class="r6 r">loopStartInstructionIndex</span>;
+            <a href="#428434c5a677a9cf" class="i field">_loopEndInstructionIndex</a> = <span class="r7 r">loopEndInstructionIndex</span>;
+        }
+ 
+        <b>internal</b> <span class="i">LoopFunc</span> <a id="7e8948191b5f660d" href="../../R/7e8948191b5f660d.html" target="n" data-glyph="74,1" class="i method">CreateDelegate</a>()
+        {
+            <b>var</b> <span id="r8 rd" class="r8 r">loop</span> = <span class="i">Visit</span>(<a href="#fae3a12bf44aa1a1" class="i field">_loop</a>);
+            <b>var</b> <span id="r9 rd" class="r9 r">body</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Expression</span>&gt;();
+            <b>var</b> <span id="r10 rd" class="r10 r">finallyClause</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Expression</span>&gt;();
+ 
+            <b>foreach</b> (<b>var</b> <span id="r11 rd" class="r11 r">variable</span> <b>in</b> <a href="#e77935c23b80d497" class="i field">_loopVariables</a>)
+            {
+                <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a> <span id="r12 rd" class="r12 r">local</span>;
+                <b>if</b> (!<a href="#81a4caf0ca16efda" class="i field">_outerVariables</a>.<span class="i">TryGetValue</span>(<span class="r11 r">variable</span>.<span class="i">Key</span>, <b>out</b> <span class="r12 r">local</span>))
+                {
+                    <span class="r12 r">local</span> = <a href="#f3c0a00705a4cfb5" class="i field">_closureVariables</a>[<span class="r11 r">variable</span>.<span class="i">Key</span>];
+                }
+ 
+                <span class="i">Expression</span> <span id="r13 rd" class="r13 r">elemRef</span> = <span class="r12 r">local</span>.<span class="i">LoadFromArray</span>(<a href="#2ddc907ce672c279" class="i field">_frameDataVar</a>, <a href="#c428df2f60e33019" class="i field">_frameClosureVar</a>);
+ 
+                <b>if</b> (<span class="r12 r">local</span>.<a href="LocalVariables.cs.html#6848161d80400c8b" class="i property">InClosureOrBoxed</a>)
+                {
+                    <b>var</b> <span id="r14 rd" class="r14 r">box</span> = <span class="r11 r">variable</span>.<span class="i">Value</span>.<span class="i">BoxStorage</span>;
+                    <span class="i">Debug</span>.<span class="i">Assert</span>(<span class="r14 r">box</span> != <b>null</b>);
+                    <span class="r9 r">body</span>.<span class="i">Add</span>(<span class="i">Expression</span>.<span class="i">Assign</span>(<span class="r14 r">box</span>, <span class="r13 r">elemRef</span>));
+                    <span class="i">AddTemp</span>(<span class="r14 r">box</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Always initialize the variable even if it is only written to.</span>
+                    <span class="c">// If a write-only variable is actually not assigned during execution of the loop we will still write some value back.</span>
+                    <span class="c">// This value must be the original value, which we assign at entry.</span>
+                    <span class="r9 r">body</span>.<span class="i">Add</span>(<span class="i">Expression</span>.<span class="i">Assign</span>(<span class="r11 r">variable</span>.<span class="i">Key</span>, <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<span class="i">Convert</span>(<span class="r13 r">elemRef</span>, <span class="r11 r">variable</span>.<span class="i">Key</span>.<span class="i">Type</span>)));
+ 
+                    <b>if</b> ((<span class="r11 r">variable</span>.<span class="i">Value</span>.<span class="i">Access</span> &amp; <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a>.<a href="Utilities.cs.html#092dbaca4ce2eb02" class="i field">Write</a>) != 0)
+                    {
+                        <span class="r10 r">finallyClause</span>.<span class="i">Add</span>(<span class="i">Expression</span>.<span class="i">Assign</span>(<span class="r13 r">elemRef</span>, <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<span class="i">Box</span>(<span class="r11 r">variable</span>.<span class="i">Key</span>)));
+                    }
+ 
+                    <span class="i">AddTemp</span>(<span class="r11 r">variable</span>.<span class="i">Key</span>);
+                }
+            }
+ 
+            <b>if</b> (<span class="r10 r">finallyClause</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <span class="r9 r">body</span>.<span class="i">Add</span>(<span class="i">Expression</span>.<span class="i">TryFinally</span>(<span class="r8 r">loop</span>, <span class="i">Expression</span>.<span class="i">Block</span>(<span class="r10 r">finallyClause</span>)));
+            }
+            <b>else</b>
+            {
+                <span class="r9 r">body</span>.<span class="i">Add</span>(<span class="r8 r">loop</span>);
+            }
+ 
+            <span class="r9 r">body</span>.<span class="i">Add</span>(<span class="i">Expression</span>.<span class="i">Label</span>(<a href="#62a383b8cc53a4fd" class="i field">_returnLabel</a>, <span class="i">Expression</span>.<span class="i">Constant</span>(<a href="#428434c5a677a9cf" class="i field">_loopEndInstructionIndex</a> - <a href="#26a54a254451f5af" class="i field">_loopStartInstructionIndex</a>)));
+ 
+            <b>var</b> <span id="r15 rd" class="r15 r">lambda</span> = <span class="i">Expression</span>.<span class="i">Lambda</span>&lt;<span class="i">LoopFunc</span>&gt;(
+                <a href="#6ad64a05204041bc" class="i field">_temps</a> != <b>null</b> ? <span class="i">Expression</span>.<span class="i">Block</span>(<a href="#6ad64a05204041bc" class="i field">_temps</a>, <span class="r9 r">body</span>) : <span class="i">Expression</span>.<span class="i">Block</span>(<span class="r9 r">body</span>),
+                <b>new</b>[] { <a href="#2ddc907ce672c279" class="i field">_frameDataVar</a>, <a href="#c428df2f60e33019" class="i field">_frameClosureVar</a>, <a href="#6b6bba6d1c9a0ae9" class="i field">_frameVar</a> }
+            );
+            <b>return</b> <span class="r15 r">lambda</span>.<span class="i">Compile</span>();
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="c8824d3a2596133a" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitExtension</a>(<span class="i">Expression</span> <span id="r16 rd" class="r16 r">node</span>)
+        {
+            <span class="c">// Reduce extensions before we visit them so that we operate on a plain DLR tree,</span>
+            <span class="c">// where we know relationships among the nodes (which nodes represent write context etc.).</span>
+            <b>if</b> (<span class="r16 r">node</span>.<span class="i">CanReduce</span>)
+            {
+                <b>return</b> <span class="i">Visit</span>(<span class="r16 r">node</span>.<span class="i">Reduce</span>());
+            }
+ 
+            <b>return</b> <b>base</b>.<span class="i">VisitExtension</span>(<span class="r16 r">node</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Gotos
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="6509db2cf964af14" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitGoto</a>(<span class="i">GotoExpression</span> <span id="r17 rd" class="r17 r">node</span>)
+        {
+            <a href="BranchLabel.cs.html#eddd89038e02be60" class="t t">BranchLabel</a> <span id="r18 rd" class="r18 r">label</span>;
+ 
+            <b>var</b> <span id="r19 rd" class="r19 r">target</span> = <span class="r17 r">node</span>.<span class="i">Target</span>;
+            <b>var</b> <span id="r20 rd" class="r20 r">value</span> = <span class="i">Visit</span>(<span class="r17 r">node</span>.<span class="i">Value</span>);
+ 
+            <span class="c">// TODO: Is it possible for an inner reducible node of the loop to rely on nodes produced by reducing outer reducible nodes?</span>
+ 
+            <span class="c">// Unknown label =&gt; must be within the loop:</span>
+            <b>if</b> (!<a href="#c4fee8772e66024e" class="i field">_labelMapping</a>.<span class="i">TryGetValue</span>(<span class="r19 r">target</span>, <b>out</b> <span class="r18 r">label</span>))
+            {
+                <b>return</b> <span class="r17 r">node</span>.<span class="i">Update</span>(<span class="r19 r">target</span>, <span class="r20 r">value</span>);
+            }
+ 
+            <span class="c">// Known label within the loop:</span>
+            <b>if</b> (<span class="r18 r">label</span>.<a href="BranchLabel.cs.html#3587d6433fd71b3e" class="i property">TargetIndex</a> &gt;= <a href="#26a54a254451f5af" class="i field">_loopStartInstructionIndex</a> &amp;&amp; <span class="r18 r">label</span>.<a href="BranchLabel.cs.html#3587d6433fd71b3e" class="i property">TargetIndex</a> &lt; <a href="#428434c5a677a9cf" class="i field">_loopEndInstructionIndex</a>)
+            {
+                <b>return</b> <span class="r17 r">node</span>.<span class="i">Update</span>(<span class="r19 r">target</span>, <span class="r20 r">value</span>);
+            }
+ 
+            <b>return</b> <span class="i">Expression</span>.<span class="i">Return</span>(<a href="#62a383b8cc53a4fd" class="i field">_returnLabel</a>,
+                (<span class="r20 r">value</span> != <b>null</b> &amp;&amp; <span class="r20 r">value</span>.<span class="i">Type</span> != <b>typeof</b>(<b>void</b>)) ?
+                    <span class="i">Expression</span>.<span class="i">Call</span>(<a href="#6b6bba6d1c9a0ae9" class="i field">_frameVar</a>, <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a>.<a href="InterpretedFrame.cs.html#c5ab024b44d6e695" class="i property">GotoMethod</a>, <span class="i">Expression</span>.<span class="i">Constant</span>(<span class="r18 r">label</span>.<a href="BranchLabel.cs.html#5a45778633c90a02" class="i property">LabelIndex</a>), <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<span class="i">Box</span>(<span class="r20 r">value</span>)) :
+                    <span class="i">Expression</span>.<span class="i">Call</span>(<a href="#6b6bba6d1c9a0ae9" class="i field">_frameVar</a>, <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a>.<a href="InterpretedFrame.cs.html#17337975b5c6c4d9" class="i property">VoidGotoMethod</a>, <span class="i">Expression</span>.<span class="i">Constant</span>(<span class="r18 r">label</span>.<a href="BranchLabel.cs.html#5a45778633c90a02" class="i property">LabelIndex</a>)),
+                <span class="r17 r">node</span>.<span class="i">Type</span>
+           );
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Local Variables
+ 
+        <span class="c">// Gather all outer variables accessed in the loop.</span>
+        <span class="c">// Determines which ones are read from and written to.</span>
+        <span class="c">// We will consider a variable as &quot;read&quot; if it is read anywhere in the loop even though</span>
+        <span class="c">// the first operation might actually always be &quot;write&quot;. We could do better if we had CFG.</span>
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="eceb73cec9582f07" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitBlock</a>(<span class="i">BlockExpression</span> <span id="r21 rd" class="r21 r">node</span>)
+        {
+            <b>var</b> <span id="r22 rd" class="r22 r">variables</span> = ((<span class="i">BlockExpression</span>)<span class="r21 r">node</span>).<span class="i">Variables</span>;
+            <b>var</b> <span id="r23 rd" class="r23 r">prevLocals</span> = <span class="i">EnterVariableScope</span>(<span class="r22 r">variables</span>);
+ 
+            <b>var</b> <span id="r24 rd" class="r24 r">res</span> = <b>base</b>.<span class="i">VisitBlock</span>(<span class="r21 r">node</span>);
+ 
+            <a href="#ccc0086026993e4f" class="i method">ExitVariableScope</a>(<span class="r23 r">prevLocals</span>);
+            <b>return</b> <span class="r24 r">res</span>;
+        }
+ 
+        <b>private</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt; <a id="78fea081c605af9c" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">EnterVariableScope</a>(<span class="i">ICollection</span>&lt;<span class="i">ParameterExpression</span>&gt; <span id="r25 rd" class="r25 r">variables</span>)
+        {
+            <b>if</b> (<a href="#202a7eb147e1a990" class="i field">_loopLocals</a> == <b>null</b>)
+            {
+                <a href="#202a7eb147e1a990" class="i field">_loopLocals</a> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;(<span class="r25 r">variables</span>);
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>var</b> <span id="r26 rd" class="r26 r">prevLocals</span> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;(<a href="#202a7eb147e1a990" class="i field">_loopLocals</a>);
+            <a href="#202a7eb147e1a990" class="i field">_loopLocals</a>.<span class="i">UnionWith</span>(<span class="r25 r">variables</span>);
+            <b>return</b> <span class="r26 r">prevLocals</span>;
+        }
+ 
+        <b>protected override</b> <span class="i">CatchBlock</span> <a id="a9d40008caedb547" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitCatchBlock</a>(<span class="i">CatchBlock</span> <span id="r27 rd" class="r27 r">node</span>)
+        {
+            <b>if</b> (<span class="r27 r">node</span>.<span class="i">Variable</span> != <b>null</b>)
+            {
+                <b>var</b> <span id="r28 rd" class="r28 r">prevLocals</span> = <span class="i">EnterVariableScope</span>(<b>new</b>[] { <span class="r27 r">node</span>.<span class="i">Variable</span> });
+                <b>var</b> <span id="r29 rd" class="r29 r">res</span> = <b>base</b>.<span class="i">VisitCatchBlock</span>(<span class="r27 r">node</span>);
+                <a href="#ccc0086026993e4f" class="i method">ExitVariableScope</a>(<span class="r28 r">prevLocals</span>);
+                <b>return</b> <span class="r29 r">res</span>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <b>base</b>.<span class="i">VisitCatchBlock</span>(<span class="r27 r">node</span>);
+            }
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="c8f1bbc5a9491479" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitLambda</a>&lt;<span id="r30 rd t" class="r30 r t">T</span>&gt;(<span class="i">Expression</span>&lt;<span class="r30 r t">T</span>&gt; <span id="r31 rd" class="r31 r">node</span>)
+        {
+            <b>var</b> <span id="r32 rd" class="r32 r">prevLocals</span> = <span class="i">EnterVariableScope</span>(<span class="r31 r">node</span>.<span class="i">Parameters</span>);
+            <b>try</b>
+            {
+                <b>return</b> <b>base</b>.<span class="i">VisitLambda</span>&lt;<span class="r30 r t">T</span>&gt;(<span class="r31 r">node</span>);
+            }
+            <b>finally</b>
+            {
+                <a href="#ccc0086026993e4f" class="i method">ExitVariableScope</a>(<span class="r32 r">prevLocals</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="ccc0086026993e4f" href="../../R/ccc0086026993e4f.html" target="n" data-glyph="76,1" class="i method">ExitVariableScope</a>(<span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt; <span id="r33 rd" class="r33 r">prevLocals</span>)
+        {
+            <a href="#202a7eb147e1a990" class="i field">_loopLocals</a> = <span class="r33 r">prevLocals</span>;
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="d249724d49ba1a7a" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitBinary</a>(<span class="i">BinaryExpression</span> <span id="r34 rd" class="r34 r">node</span>)
+        {
+            <span class="c">// reduce compound assignments:</span>
+            <b>if</b> (<span class="r34 r">node</span>.<span class="i">CanReduce</span>)
+            {
+                <b>return</b> <span class="i">Visit</span>(<span class="r34 r">node</span>.<span class="i">Reduce</span>());
+            }
+ 
+            <span class="i">Debug</span>.<span class="i">Assert</span>(!<span class="r34 r">node</span>.<span class="i">NodeType</span>.<span class="i">IsReadWriteAssignment</span>());
+ 
+            <b>var</b> <span id="r35 rd" class="r35 r">param</span> = <span class="r34 r">node</span>.<span class="i">Left</span> <b>as</b> <span class="i">ParameterExpression</span>;
+            <b>if</b> (<span class="r35 r">param</span> != <b>null</b> &amp;&amp; <span class="r34 r">node</span>.<span class="i">NodeType</span> == <span class="i">ExpressionType</span>.<span class="i">Assign</span>)
+            {
+                <b>var</b> <span id="r36 rd" class="r36 r">left</span> = <a href="#bb31f0a8a5a352a0" class="i method">VisitVariable</a>(<span class="r35 r">param</span>, <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a>.<a href="Utilities.cs.html#092dbaca4ce2eb02" class="i field">Write</a>);
+                <b>var</b> <span id="r37 rd" class="r37 r">right</span> = <span class="i">Visit</span>(<span class="r34 r">node</span>.<span class="i">Right</span>);
+ 
+                <span class="c">// left parameter is a boxed variable:</span>
+                <b>if</b> (<span class="r36 r">left</span>.<span class="i">Type</span> != <span class="r35 r">param</span>.<span class="i">Type</span>)
+                {
+                    <span class="i">Debug</span>.<span class="i">Assert</span>(<span class="r36 r">left</span>.<span class="i">Type</span> == <b>typeof</b>(<b>object</b>));
+ 
+                    <span class="i">Expression</span> <span id="r38 rd" class="r38 r">rightVar</span>;
+                    <b>if</b> (<span class="r37 r">right</span>.<span class="i">NodeType</span> != <span class="i">ExpressionType</span>.<span class="i">Parameter</span>)
+                    {
+                        <span class="c">// { left.Value = (object)(rightVar = right), rightVar }</span>
+ 
+                        <span class="r38 r">rightVar</span> = <span class="i">AddTemp</span>(<span class="i">Expression</span>.<span class="i">Parameter</span>(<span class="r37 r">right</span>.<span class="i">Type</span>));
+                        <span class="r37 r">right</span> = <span class="i">Expression</span>.<span class="i">Assign</span>(<span class="r38 r">rightVar</span>, <span class="r37 r">right</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// { left.Value = (object)right, right }</span>
+ 
+                        <span class="r38 r">rightVar</span> = <span class="r37 r">right</span>;
+                    }
+ 
+                    <b>return</b> <span class="i">Expression</span>.<span class="i">Block</span>(
+                        <span class="r34 r">node</span>.<span class="i">Update</span>(<span class="r36 r">left</span>, <b>null</b>, <span class="i">Expression</span>.<span class="i">Convert</span>(<span class="r37 r">right</span>, <span class="r36 r">left</span>.<span class="i">Type</span>)),
+                        <span class="r38 r">rightVar</span>
+                    );
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <span class="r34 r">node</span>.<span class="i">Update</span>(<span class="r36 r">left</span>, <b>null</b>, <span class="r37 r">right</span>);
+                }
+            }
+            <b>else</b>
+            {
+                <b>return</b> <b>base</b>.<span class="i">VisitBinary</span>(<span class="r34 r">node</span>);
+            }
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="011dc481b29060a8" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitUnary</a>(<span class="i">UnaryExpression</span> <span id="r39 rd" class="r39 r">node</span>)
+        {
+            <span class="c">// reduce inplace increment/decrement:</span>
+            <b>if</b> (<span class="r39 r">node</span>.<span class="i">CanReduce</span>)
+            {
+                <b>return</b> <span class="i">Visit</span>(<span class="r39 r">node</span>.<span class="i">Reduce</span>());
+            }
+ 
+            <span class="i">Debug</span>.<span class="i">Assert</span>(!<span class="r39 r">node</span>.<span class="i">NodeType</span>.<span class="i">IsReadWriteAssignment</span>());
+            <b>return</b> <b>base</b>.<span class="i">VisitUnary</span>(<span class="r39 r">node</span>);
+        }
+ 
+        <span class="c">// TODO: if we supported ref/out parameter we would need to override</span>
+        <span class="c">// MethodCallExpression, VisitDynamic and VisitNew</span>
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="02d5fb20885240cd" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitParameter</a>(<span class="i">ParameterExpression</span> <span id="r40 rd" class="r40 r">node</span>)
+        {
+            <b>return</b> <a href="#bb31f0a8a5a352a0" class="i method">VisitVariable</a>(<span class="r40 r">node</span>, <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a>.<a href="Utilities.cs.html#f0a61e2f3516b768" class="i field">Read</a>);
+        }
+ 
+        <b>private</b> <span class="i">Expression</span> <a id="bb31f0a8a5a352a0" href="../../R/bb31f0a8a5a352a0.html" target="n" data-glyph="76,1" class="i method">VisitVariable</a>(<span class="i">ParameterExpression</span> <span id="r41 rd" class="r41 r">node</span>, <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a> <span id="r42 rd" class="r42 r">access</span>)
+        {
+            <span class="i">ParameterExpression</span> <span id="r43 rd" class="r43 r">box</span>;
+            <a href="#2849743cb413970c" class="t t">LoopVariable</a> <span id="r44 rd" class="r44 r">existing</span>;
+            <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a> <span id="r45 rd" class="r45 r">loc</span>;
+ 
+            <b>if</b> (<a href="#202a7eb147e1a990" class="i field">_loopLocals</a>.<span class="i">Contains</span>(<span class="r41 r">node</span>))
+            {
+                <span class="c">// local to the loop - not propagated in or out</span>
+                <b>return</b> <span class="r41 r">node</span>;
+            }
+            <b>else</b> <b>if</b> (<a href="#e77935c23b80d497" class="i field">_loopVariables</a>.<span class="i">TryGetValue</span>(<span class="r41 r">node</span>, <b>out</b> <span class="r44 r">existing</span>))
+            {
+                <span class="c">// existing outer variable that we are already tracking</span>
+                <span class="r43 r">box</span> = <span class="r44 r">existing</span>.<a href="#4ae862e3aeb4480b" class="i field">BoxStorage</a>;
+                <a href="#e77935c23b80d497" class="i field">_loopVariables</a>[<span class="r41 r">node</span>] = <b>new</b> <a href="#7bcfab5c6185a77d" class="t constructor">LoopVariable</a>(<span class="r44 r">existing</span>.<a href="#252cfba0e1d28b35" class="i field">Access</a> | <span class="r42 r">access</span>, <span class="r43 r">box</span>);
+            }
+            <b>else</b> <b>if</b> (<a href="#81a4caf0ca16efda" class="i field">_outerVariables</a>.<span class="i">TryGetValue</span>(<span class="r41 r">node</span>, <b>out</b> <span class="r45 r">loc</span>) ||
+              (<a href="#f3c0a00705a4cfb5" class="i field">_closureVariables</a> != <b>null</b> &amp;&amp; <a href="#f3c0a00705a4cfb5" class="i field">_closureVariables</a>.<span class="i">TryGetValue</span>(<span class="r41 r">node</span>, <b>out</b> <span class="r45 r">loc</span>)))
+            {
+                <span class="c">// not tracking this variable yet, but defined in outer scope and seen for the 1st time</span>
+                <span class="r43 r">box</span> = <span class="r45 r">loc</span>.<a href="LocalVariables.cs.html#6848161d80400c8b" class="i property">InClosureOrBoxed</a> ? <span class="i">Expression</span>.<span class="i">Parameter</span>(<b>typeof</b>(<span class="i">StrongBox</span>&lt;<b>object</b>&gt;), <span class="r41 r">node</span>.<span class="i">Name</span>) : <b>null</b>;
+                <a href="#e77935c23b80d497" class="i field">_loopVariables</a>[<span class="r41 r">node</span>] = <b>new</b> <a href="#7bcfab5c6185a77d" class="t constructor">LoopVariable</a>(<span class="r42 r">access</span>, <span class="r43 r">box</span>);
+            }
+            <b>else</b>
+            {
+                <span class="c">// node is a variable defined in a nested lambda -&gt; skip</span>
+                <b>return</b> <span class="r41 r">node</span>;
+            }
+ 
+            <b>if</b> (<span class="r43 r">box</span> != <b>null</b>)
+            {
+                <b>if</b> ((<span class="r42 r">access</span> &amp; <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a>.<a href="Utilities.cs.html#092dbaca4ce2eb02" class="i field">Write</a>) != 0)
+                {
+                    <span class="c">// compound assignments were reduced:</span>
+                    <span class="i">Debug</span>.<span class="i">Assert</span>((<span class="r42 r">access</span> &amp; <a href="Utilities.cs.html#4b9f85886332e3c3" class="t t">ExpressionAccess</a>.<a href="Utilities.cs.html#f0a61e2f3516b768" class="i field">Read</a>) == 0);
+ 
+                    <span class="c">// box.Value = (object)rhs</span>
+                    <b>return</b> <a href="LightCompiler.cs.html#bee3a40ad9cb3a51" class="t t">LightCompiler</a>.<span class="i">Unbox</span>(<span class="r43 r">box</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="c">// (T)box.Value</span>
+                    <b>return</b> <span class="i">Expression</span>.<span class="i">Convert</span>(<a href="LightCompiler.cs.html#bee3a40ad9cb3a51" class="t t">LightCompiler</a>.<span class="i">Unbox</span>(<span class="r43 r">box</span>), <span class="r41 r">node</span>.<span class="i">Type</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r41 r">node</span>;
+        }
+ 
+        <b>private</b> <span class="i">ParameterExpression</span> <a id="4f2e6a63d9b69aaf" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">AddTemp</a>(<span class="i">ParameterExpression</span> <span id="r46 rd" class="r46 r">variable</span>)
+        {
+            <b>if</b> (<a href="#6ad64a05204041bc" class="i field">_temps</a> == <b>null</b>)
+            {
+                <a href="#6ad64a05204041bc" class="i field">_temps</a> = <b>new</b> <span class="i">List</span>&lt;<span class="i">ParameterExpression</span>&gt;();
+            }
+ 
+            <a href="#6ad64a05204041bc" class="i field">_temps</a>.<span class="i">Add</span>(<span class="r46 r">variable</span>);
+            <b>return</b> <span class="r46 r">variable</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

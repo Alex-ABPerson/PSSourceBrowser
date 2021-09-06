@@ -1,0 +1,588 @@
+﻿<!DOCTYPE html>
+<html><head><title>InternalHost.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(579);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/hostifaces/InternalHost.cs" target="_top">engine\hostifaces\InternalHost.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 1634, 1691 <span class="c">// Stops compiler from warning about unknown warnings</span>
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>.<span class="i n">Host</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Wraps PSHost instances to provide a shim layer</span>
+    <span class="c">///</span><span class="c"> between InternalCommand and the host-supplied PSHost instance.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This class exists for the purpose of ensuring that an externally-supplied PSHost meets the minimum proper required</span>
+    <span class="c">///</span><span class="c"> implementation, and also to provide a leverage point at which the monad engine can hook the interaction between the engine,</span>
+    <span class="c">///</span><span class="c"> cmdlets, and that external host.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> That leverage may be necessary to manage concurrent access between multiple pipelines sharing the same instance of</span>
+    <span class="c">///</span><span class="c"> PSHost.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="83104f2ad59a19df" href="../../R/83104f2ad59a19df.html" target="n" data-glyph="2,0" class="t t">InternalHost</a> : <a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a>, <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> There should only be one instance of InternalHost per runspace (i.e. per engine), and all engine use of the host</span>
+        <span class="c">///</span><span class="c"> should be through that single instance.  If we ever accidentally create more than one instance of InternalHost per</span>
+        <span class="c">///</span><span class="c"> runspace, then some of the internal state checks that InternalHost makes, like checking the nestedPromptCounter, can</span>
+        <span class="c">///</span><span class="c"> be messed up.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> To ensure that this constraint is met, I wanted to make this class a singleton.  However, Hitesh rightly pointed out</span>
+        <span class="c">///</span><span class="c"> that a singleton would be appdomain-global, which would prevent having multiple runspaces per appdomain. So we will</span>
+        <span class="c">///</span><span class="c"> just have to be careful not to create extra instances of InternalHost per runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="2b5c657f9611aac9" href="../../R/2b5c657f9611aac9.html" target="n" data-glyph="74,1" class="t constructor">InternalHost</a>(<a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r0 rd" class="r0 r">externalHost</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r1 rd" class="r1 r">executionContext</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r0 r">externalHost</span> != <b>null</b>, <span class="s">&quot;must supply an PSHost&quot;</span>);
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r0 r">externalHost</span> <b>is not</b> <a href="#83104f2ad59a19df" class="t t">InternalHost</a>, <span class="s">&quot;try to create an InternalHost from another InternalHost&quot;</span>);
+ 
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r1 r">executionContext</span> != <b>null</b>, <span class="s">&quot;must supply an ExecutionContext&quot;</span>);
+ 
+            <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a> = <b>new</b> <a href="../remoting/common/ObjectRef.cs.html#5120d88e7c7e837d" class="t constructor">ObjectRef</a>&lt;<a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a>&gt;(<span class="r0 r">externalHost</span>);
+            <a href="#e67698b7e18d9a6b" class="i property">Context</a> = <span class="r1 r">executionContext</span>;
+ 
+            <a href="MshHostUserInterface.cs.html#3fd0cd9d58631820" class="t t">PSHostUserInterface</a> <span id="r2 rd" class="r2 r">ui</span> = <span class="r0 r">externalHost</span>.<a href="MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a>;
+ 
+            <a href="#6e06e26b98bcfeaa" class="i field">_internalUIRef</a> = <b>new</b> <a href="../remoting/common/ObjectRef.cs.html#5120d88e7c7e837d" class="t constructor">ObjectRef</a>&lt;<a href="../../P/660d078b9d606b70.html#660d078b9d606b70" class="t t">InternalHostUserInterface</a>&gt;(<b>new</b> <a href="InternalHostUserInterface.cs.html#4d9e1a73fc882b76" class="t constructor">InternalHostUserInterface</a>(<span class="r2 r">ui</span>, <a href="#83104f2ad59a19df" class="k">this</a>));
+            <a href="#2afc9ed2ecb2ef09" class="i field">_zeroGuid</a> = <b>new</b> <span class="i">Guid</span>(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            <a href="#112f20e7a51693e7" class="i field">_idResult</a> = <a href="#2afc9ed2ecb2ef09" class="i field">_zeroGuid</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">NotImplementedException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">  when the external host&#39;s Name is null or empty.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="20e8052a252e9b6d" href="../../R/20e8052a252e9b6d.html" target="n" data-glyph="102,1" class="i property">Name</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#dd8787d051e35cf6" class="i field">_nameResult</a>))
+                {
+                    <a href="#dd8787d051e35cf6" class="i field">_nameResult</a> = <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#be091ea30a661c13" class="i property">Name</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56503
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#dd8787d051e35cf6" class="i field">_nameResult</a>))
+                    {
+                        <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#a7ba17ebc98e51be" class="i method">NewNotImplementedException</a>();
+                    }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56503
+                }
+ 
+                <b>return</b> <a href="#dd8787d051e35cf6" class="i field">_nameResult</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">NotImplementedException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">  when the external host&#39;s Version is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i n">System</span>.<span class="i">Version</span> <a id="207f67c40acf5ce7" href="../../R/207f67c40acf5ce7.html" target="n" data-glyph="102,1" class="i property">Version</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#227bcbb0337bbdcb" class="i field">_versionResult</a> == <b>null</b>)
+                {
+                    <a href="#227bcbb0337bbdcb" class="i field">_versionResult</a> = <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#0cc2fd05fb98c219" class="i property">Version</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56503
+                    <b>if</b> (<a href="#227bcbb0337bbdcb" class="i field">_versionResult</a> == <b>null</b>)
+                    {
+                        <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#a7ba17ebc98e51be" class="i method">NewNotImplementedException</a>();
+                    }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56503
+                }
+ 
+                <b>return</b> <a href="#227bcbb0337bbdcb" class="i field">_versionResult</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">NotImplementedException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">  when the external host&#39;s InstanceId is a zero Guid.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i n">System</span>.<span class="i">Guid</span> <a id="a941ed378638f83b" href="../../R/a941ed378638f83b.html" target="n" data-glyph="102,1" class="i property">InstanceId</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#112f20e7a51693e7" class="i field">_idResult</a> == <a href="#2afc9ed2ecb2ef09" class="i field">_zeroGuid</a>)
+                {
+                    <a href="#112f20e7a51693e7" class="i field">_idResult</a> = <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#0ef3ebc6fae0f13d" class="i property">InstanceId</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56503
+                    <b>if</b> (<a href="#112f20e7a51693e7" class="i field">_idResult</a> == <a href="#2afc9ed2ecb2ef09" class="i field">_zeroGuid</a>)
+                    {
+                        <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#a7ba17ebc98e51be" class="i method">NewNotImplementedException</a>();
+                    }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56503
+                }
+ 
+                <b>return</b> <a href="#112f20e7a51693e7" class="i field">_idResult</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>.<a href="MshHostUserInterface.cs.html#3fd0cd9d58631820" class="t t">PSHostUserInterface</a> <a id="d35ea6d8b175fa76" href="../../R/d35ea6d8b175fa76.html" target="n" data-glyph="102,1" class="i property">UI</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#6e06e26b98bcfeaa" class="i field">_internalUIRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Interface to be used for interaction with internal</span>
+        <span class="c">///</span><span class="c"> host UI. InternalHostUserInterface wraps the host UI</span>
+        <span class="c">///</span><span class="c"> supplied during construction. Use this wrapper to access</span>
+        <span class="c">///</span><span class="c"> functionality specific to InternalHost.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../P/660d078b9d606b70.html#660d078b9d606b70" class="t t">InternalHostUserInterface</a> <a id="1bea3254cf92b0e3" href="../../R/1bea3254cf92b0e3.html" target="n" data-glyph="104,1" class="i property">InternalUI</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#6e06e26b98bcfeaa" class="i field">_internalUIRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">NotImplementedException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">  when the external host&#39;s CurrentCulture is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i n">System</span>.<span class="i">Globalization</span>.<span class="i">CultureInfo</span> <a id="4ed98f9ccdb287f3" href="../../R/4ed98f9ccdb287f3.html" target="n" data-glyph="102,1" class="i property">CurrentCulture</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">CultureInfo</span> <span id="r3 rd" class="r3 r">ci</span> = <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#d531244924cf2614" class="i property">CurrentCulture</a> ?? <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>;
+ 
+                <b>return</b> <span class="r3 r">ci</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">NotImplementedException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the external host&#39;s CurrentUICulture is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">CultureInfo</span> <a id="8c7ac4619f8b15bc" href="../../R/8c7ac4619f8b15bc.html" target="n" data-glyph="102,1" class="i property">CurrentUICulture</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">CultureInfo</span> <span id="r4 rd" class="r4 r">ci</span> = <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#0aea5ccb4133325b" class="i property">CurrentUICulture</a> ?? <span class="i">CultureInfo</span>.<span class="i">InstalledUICulture</span>;
+                <b>return</b> <span class="r4 r">ci</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">exitCode</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="4ac17d8c20fc5216" href="../../R/4ac17d8c20fc5216.html" target="n" data-glyph="72,1" class="i method">SetShouldExit</a>(<b>int</b> <span id="r5 rd" class="r5 r">exitCode</span>)
+        {
+            <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#cee507197716baad" class="i method">SetShouldExit</a>(<span class="r5 r">exitCode</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#104283da945618dc" class="i method">ExitNestedPrompt</a><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="e8d8d03e1e41d942" href="../../R/e8d8d03e1e41d942.html" target="n" data-glyph="72,1" class="i method">EnterNestedPrompt</a>()
+        {
+            <a href="#008a1c3c3f30cf44" class="i method">EnterNestedPrompt</a>(<b>null</b>);
+        }
+ 
+        <b>private struct</b> <a id="0d7bf0415254885d" href="../../R/0d7bf0415254885d.html" target="n" data-glyph="112,1" class="t t"><span id="054dfe1c6762c7a3">PromptContextData</span></a>
+        {
+            <b>public object</b> <a id="e0224a5693df31f2" href="../../R/e0224a5693df31f2.html" target="n" data-glyph="42,2" class="i field">SavedCurrentlyExecutingCommandVarValue</a>;
+            <b>public object</b> <a id="c92f7add4eae79a4" href="../../R/c92f7add4eae79a4.html" target="n" data-glyph="42,2" class="i field">SavedPSBoundParametersVarValue</a>;
+            <b>public</b> <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a>.<a href="../ExecutionContext.cs.html#c9eabf4b0724b3fc" class="t t">SavedContextData</a> <a id="9fc88ad5ad8618a1" href="../../R/9fc88ad5ad8618a1.html" target="n" data-glyph="42,2" class="i field">SavedContextData</a>;
+            <b>public</b> <a href="Connection.cs.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a> <a id="fa62349dcbaf8953" href="../../R/fa62349dcbaf8953.html" target="n" data-glyph="42,2" class="i field">RunspaceAvailability</a>;
+            <b>public</b> <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a> <a id="f84ae0b917f26321" href="../../R/f84ae0b917f26321.html" target="n" data-glyph="42,2" class="i field">LanguageMode</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Internal proxy for EnterNestedPrompt.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">callingCommand</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="008a1c3c3f30cf44" href="../../R/008a1c3c3f30cf44.html" target="n" data-glyph="74,1" class="i method">EnterNestedPrompt</a>(<a href="../CommandBase.cs.html#26cb3aadccaa58ac" class="t t">InternalCommand</a> <span id="r6 rd" class="r6 r">callingCommand</span>)
+        {
+            <span class="c">// Ensure we are in control of the pipeline</span>
+            <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="t t">LocalRunspace</a> <span id="r7 rd" class="r7 r">localRunspace</span> = <b>null</b>;
+ 
+            <span class="c">// This needs to be in a try / catch, since the LocalRunspace cast</span>
+            <span class="c">// tries to verify that the host supports interactive sessions.</span>
+            <span class="c">// Tests hosts do not.</span>
+            <b>try</b> { <span class="r7 r">localRunspace</span> = <a href="#83104f2ad59a19df" class="k">this</a>.<a href="#8e7bab15e6b298bf" class="i property">Runspace</a> <b>as</b> <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="t t">LocalRunspace</a>; }
+            <b>catch</b> (<a href="../../utils/MshNotImplementedException.cs.html#ddab2b46a60907f3" class="t t">PSNotImplementedException</a>) { }
+ 
+            <b>if</b> (<span class="r7 r">localRunspace</span> != <b>null</b>)
+            {
+                <a href="Pipeline.cs.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r8 rd" class="r8 r">currentlyRunningPipeline</span> = <a href="#83104f2ad59a19df" class="k">this</a>.<a href="#8e7bab15e6b298bf" class="i property">Runspace</a>.<a href="Connection.cs.html#9db062bececf98bd" class="i method">GetCurrentlyRunningPipeline</a>();
+ 
+                <b>if</b> ((<span class="r8 r">currentlyRunningPipeline</span> != <b>null</b>) &amp;&amp;
+                    (<span class="r8 r">currentlyRunningPipeline</span> == <span class="r7 r">localRunspace</span>.<a href="ConnectionBase.cs.html#5970aa4db61a1c2c" class="i property">PulsePipeline</a>))
+                    <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>();
+            }
+ 
+            <span class="c">// NTRAID#Windows OS Bugs-986407-2004/07/29 When kumarp has done the configuration work in the engine, it</span>
+            <span class="c">// should include setting a bit that indicates that the initialization is complete, and code should be</span>
+            <span class="c">// added here to throw an exception if this function is called before that bit is set.</span>
+ 
+            <b>if</b> (<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a> &lt; 0)
+            {
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;nested prompt counter should never be negative.&quot;</span>);
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">InternalHostStrings</span>.<span class="i">EnterExitNestedPromptOutOfSync</span>);
+            }
+ 
+            <span class="c">// Increment our nesting counter.  When we set the value of the variable, we will replace any existing variable</span>
+            <span class="c">// of the same name.  This is good, as any existing value is either 1) ours, and we have claim to replace it, or</span>
+            <span class="c">// 2) is a squatter, and we have claim to clobber it.</span>
+ 
+            ++<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a>;
+            <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#fa7f7322f772be22" class="i method">SetVariable</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#43944a89e7c10e43" class="i field">NestedPromptCounterVarPath</a>, <a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a>);
+ 
+            <span class="c">// On entering a subshell, save and reset values of certain bits of session state</span>
+ 
+            <a href="#0d7bf0415254885d" class="t t">PromptContextData</a> <span id="r9 rd" class="r9 r">contextData</span> = <b>new</b> <span class="t">PromptContextData</span>();
+            <span class="r9 r">contextData</span>.<a href="#9fc88ad5ad8618a1" class="i field">SavedContextData</a> = <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#b3f92b89118fffcf" class="i method">SaveContextData</a>();
+            <span class="r9 r">contextData</span>.<a href="#e0224a5693df31f2" class="i field">SavedCurrentlyExecutingCommandVarValue</a> = <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#3a6f9a48ec862dfb" class="i method">GetVariableValue</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#50fc5de9b7f691fb" class="i field">CurrentlyExecutingCommandVarPath</a>);
+            <span class="r9 r">contextData</span>.<a href="#c92f7add4eae79a4" class="i field">SavedPSBoundParametersVarValue</a> = <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#3a6f9a48ec862dfb" class="i method">GetVariableValue</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#ac0581fe030e7548" class="i field">PSBoundParametersVarPath</a>);
+            <span class="r9 r">contextData</span>.<a href="#fa62349dcbaf8953" class="i field">RunspaceAvailability</a> = <a href="#83104f2ad59a19df" class="k">this</a>.<a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>.<a href="Connection.cs.html#c8bea13c75bd3198" class="i property">RunspaceAvailability</a>;
+            <span class="r9 r">contextData</span>.<a href="#f84ae0b917f26321" class="i field">LanguageMode</a> = <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a>;
+ 
+            <a href="../MshMemberInfo.cs.html#13ab3796654e613c" class="t t">PSPropertyInfo</a> <span id="r10 rd" class="r10 r">commandInfoProperty</span> = <b>null</b>;
+            <a href="../MshMemberInfo.cs.html#13ab3796654e613c" class="t t">PSPropertyInfo</a> <span id="r11 rd" class="r11 r">stackTraceProperty</span> = <b>null</b>;
+            <b>object</b> <span id="r12 rd" class="r12 r">oldCommandInfo</span> = <b>null</b>;
+            <b>object</b> <span id="r13 rd" class="r13 r">oldStackTrace</span> = <b>null</b>;
+            <b>if</b> (<span class="r6 r">callingCommand</span> != <b>null</b>)
+            {
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r6 r">callingCommand</span>.<a href="../CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a> == <a href="#e67698b7e18d9a6b" class="i property">Context</a>, <span class="s">&quot;I expect that the contexts should match&quot;</span>);
+ 
+                <span class="c">// Populate $CurrentlyExecutingCommand to facilitate debugging.  One of the gotchas is that we are going to want</span>
+                <span class="c">// to expose more and more debug info. We could just populate more and more local variables but that is probably</span>
+                <span class="c">// a lousy approach as it pollutes the namespace.  A better way to do it is to add NOTES to the variable value</span>
+                <span class="c">// object.</span>
+ 
+                <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r14 rd" class="r14 r">newValue</span> = <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../MshObject.cs.html#e81a321a846beda7" class="i method">AsPSObject</a>(<span class="r6 r">callingCommand</span>);
+ 
+                <span class="r10 r">commandInfoProperty</span> = <span class="r14 r">newValue</span>.<a href="../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a><a href="../MshMemberInfo.cs.html#f603b32aa49d3ffa">[</a><span class="s">&quot;CommandInfo&quot;</span>];
+                <b>if</b> (<span class="r10 r">commandInfoProperty</span> == <b>null</b>)
+                {
+                    <span class="r14 r">newValue</span>.<a href="../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a>.<a href="../MshMemberInfo.cs.html#a9e3a2dc56d98237" class="i method">Add</a>(<b>new</b> <a href="../MshMemberInfo.cs.html#f4e5bccf8ccb9f2a" class="t constructor">PSNoteProperty</a>(<span class="s">&quot;CommandInfo&quot;</span>, <span class="r6 r">callingCommand</span>.<a href="../CommandBase.cs.html#1f4a1f38862b466a" class="i property">CommandInfo</a>));
+                }
+                <b>else</b>
+                {
+                    <span class="r12 r">oldCommandInfo</span> = <span class="r10 r">commandInfoProperty</span>.<a href="../MshMemberInfo.cs.html#cd3a9989baedf3dd" class="i property">Value</a>;
+                    <span class="r10 r">commandInfoProperty</span>.<a href="../MshMemberInfo.cs.html#cd3a9989baedf3dd" class="i property">Value</a> = <span class="r6 r">callingCommand</span>.<a href="../CommandBase.cs.html#1f4a1f38862b466a" class="i property">CommandInfo</a>;
+                }
+ 
+                <span class="r11 r">stackTraceProperty</span> = <span class="r14 r">newValue</span>.<a href="../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a><a href="../MshMemberInfo.cs.html#f603b32aa49d3ffa">[</a><span class="s">&quot;StackTrace&quot;</span>];
+                <b>if</b> (<span class="r11 r">stackTraceProperty</span> == <b>null</b>)
+                {
+                    <span class="r14 r">newValue</span>.<a href="../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a>.<a href="../MshMemberInfo.cs.html#a9e3a2dc56d98237" class="i method">Add</a>(<b>new</b> <span class="t">PSNoteProperty</span>(<span class="s">&quot;StackTrace&quot;</span>, <b>new</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">StackTrace</span>()));
+                }
+                <b>else</b>
+                {
+                    <span class="r13 r">oldStackTrace</span> = <span class="r11 r">stackTraceProperty</span>.<a href="../MshMemberInfo.cs.html#cd3a9989baedf3dd" class="i property">Value</a>;
+                    <span class="r11 r">stackTraceProperty</span>.<a href="../MshMemberInfo.cs.html#cd3a9989baedf3dd" class="i property">Value</a> = <b>new</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">StackTrace</span>();
+                }
+ 
+                <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#fa7f7322f772be22" class="i method">SetVariable</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#50fc5de9b7f691fb" class="i field">CurrentlyExecutingCommandVarPath</a>, <span class="r14 r">newValue</span>);
+            }
+ 
+            <a href="#3d84dab7c9c9ac66" class="i field">_contextStack</a>.<span class="i">Push</span>(<span class="r9 r">contextData</span>);
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#3d84dab7c9c9ac66" class="i field">_contextStack</a>.<span class="i">Count</span> == <a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a>, <span class="s">&quot;number of saved contexts should equal nesting count&quot;</span>);
+ 
+            <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#0ee8614c19edc283" class="i property">PSDebugTraceStep</a> = <b>false</b>;
+            <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#0b681c156010f201" class="i property">PSDebugTraceLevel</a> = 0;
+            <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#6a1fab44246ee35d" class="i method">ResetShellFunctionErrorOutputPipe</a>();
+ 
+            <span class="c">// Lock down the language in the nested prompt</span>
+            <b>if</b> (<a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#6ec645dc27615492" class="i property">HasRunspaceEverUsedConstrainedLanguageMode</a>)
+            {
+                <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a> = <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>.<a href="../SessionStatePublic.cs.html#9f1205fe78117fc2" class="i field">ConstrainedLanguage</a>;
+            }
+ 
+            <a href="#83104f2ad59a19df" class="k">this</a>.<a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>.<a href="Connection.cs.html#222554c22c4a3071" class="i method">UpdateRunspaceAvailability</a>(<a href="Connection.cs.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="Connection.cs.html#7d8f97430ae71e2a" class="i field">AvailableForNestedCommand</a>, <b>true</b>);
+ 
+            <b>try</b>
+            {
+                <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#eaf1c9286d38d5b7" class="i method">EnterNestedPrompt</a>();
+            }
+            <b>catch</b>
+            {
+                <span class="c">// So where things really go south is this path; which is possible for hosts (like our ConsoleHost)</span>
+                <span class="c">// that don&#39;t return from EnterNestedPrompt immediately.</span>
+                <span class="c">//      EnterNestedPrompt() starts</span>
+                <span class="c">//          ExitNestedPrompt() called</span>
+                <span class="c">//          EnterNestedPrompt throws</span>
+ 
+                <a href="#4aadabeb0459b884" class="i method">ExitNestedPromptHelper</a>();
+                <b>throw</b>;
+            }
+            <b>finally</b>
+            {
+                <b>if</b> (<span class="r10 r">commandInfoProperty</span> != <b>null</b>)
+                {
+                    <span class="r10 r">commandInfoProperty</span>.<a href="../MshMemberInfo.cs.html#cd3a9989baedf3dd" class="i property">Value</a> = <span class="r12 r">oldCommandInfo</span>;
+                }
+ 
+                <b>if</b> (<span class="r11 r">stackTraceProperty</span> != <b>null</b>)
+                {
+                    <span class="r11 r">stackTraceProperty</span>.<a href="../MshMemberInfo.cs.html#cd3a9989baedf3dd" class="i property">Value</a> = <span class="r13 r">oldStackTrace</span>;
+                }
+            }
+ 
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a> &gt;= 0, <span class="s">&quot;nestedPromptCounter should be greater than or equal to 0&quot;</span>);
+        }
+ 
+        <b>private void</b> <a id="4aadabeb0459b884" href="../../R/4aadabeb0459b884.html" target="n" data-glyph="76,1" class="i method">ExitNestedPromptHelper</a>()
+        {
+            --<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a>;
+            <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#fa7f7322f772be22" class="i method">SetVariable</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#43944a89e7c10e43" class="i field">NestedPromptCounterVarPath</a>, <a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a>);
+ 
+            <span class="c">// restore the saved context</span>
+ 
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#3d84dab7c9c9ac66" class="i field">_contextStack</a>.<span class="i">Count</span> &gt; 0, <span class="s">&quot;ExitNestedPrompt: called without any saved context&quot;</span>);
+ 
+            <b>if</b> (<a href="#3d84dab7c9c9ac66" class="i field">_contextStack</a>.<span class="i">Count</span> &gt; 0)
+            {
+                <a href="#0d7bf0415254885d" class="t t">PromptContextData</a> <span id="r15 rd" class="r15 r">pcd</span> = <a href="#3d84dab7c9c9ac66" class="i field">_contextStack</a>.<span class="i">Pop</span>();
+ 
+                <span class="r15 r">pcd</span>.<a href="#9fc88ad5ad8618a1" class="i field">SavedContextData</a>.<a href="../ExecutionContext.cs.html#59ddec273ae68ba3" class="i method">RestoreContextData</a>(<a href="#e67698b7e18d9a6b" class="i property">Context</a>);
+                <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#ebe55e376f6c32fa" class="i property">LanguageMode</a> = <span class="r15 r">pcd</span>.<a href="#f84ae0b917f26321" class="i field">LanguageMode</a>;
+                <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#fa7f7322f772be22" class="i method">SetVariable</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#50fc5de9b7f691fb" class="i field">CurrentlyExecutingCommandVarPath</a>, <span class="r15 r">pcd</span>.<a href="#e0224a5693df31f2" class="i field">SavedCurrentlyExecutingCommandVarValue</a>);
+                <a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#fa7f7322f772be22" class="i method">SetVariable</a>(<a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#ac0581fe030e7548" class="i field">PSBoundParametersVarPath</a>, <span class="r15 r">pcd</span>.<a href="#c92f7add4eae79a4" class="i field">SavedPSBoundParametersVarValue</a>);
+                <a href="#83104f2ad59a19df" class="k">this</a>.<a href="#e67698b7e18d9a6b" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>.<a href="Connection.cs.html#222554c22c4a3071" class="i method">UpdateRunspaceAvailability</a>(<span class="r15 r">pcd</span>.<a href="#fa62349dcbaf8953" class="i field">RunspaceAvailability</a>, <b>true</b>);
+            }
+ 
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#3d84dab7c9c9ac66" class="i field">_contextStack</a>.<span class="i">Count</span> == <a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a>, <span class="s">&quot;number of saved contexts should equal nesting count&quot;</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#e8d8d03e1e41d942" class="i method">EnterNestedPrompt</a>()<span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="104283da945618dc" href="../../R/104283da945618dc.html" target="n" data-glyph="72,1" class="i method">ExitNestedPrompt</a>()
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a> &gt;= 0, <span class="s">&quot;nestedPromptCounter should be greater than or equal to 0&quot;</span>);
+ 
+            <b>if</b> (<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a> == 0)
+                <b>return</b>;
+ 
+            <b>try</b>
+            {
+                <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#2b536a9ba3c83a0b" class="i method">ExitNestedPrompt</a>();
+            }
+            <b>finally</b>
+            {
+                <a href="#4aadabeb0459b884" class="i method">ExitNestedPromptHelper</a>();
+            }
+ 
+            <a href="../lang/parserutils.cs.html#714b20adffed66d6" class="t t">ExitNestedPromptException</a> <span id="r16 rd" class="r16 r">enpe</span> = <b>new</b> <span class="t">ExitNestedPromptException</span>();
+            <b>throw</b> <span class="r16 r">enpe</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="017e846fa7ea99da" href="../../R/017e846fa7ea99da.html" target="n" data-glyph="102,1" class="i property">PrivateData</a>
+        {
+            <b>get</b>
+            {
+                <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r17 rd" class="r17 r">result</span> = <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#ab8699cef7eb001a" class="i property">PrivateData</a>;
+                <b>return</b> <span class="r17 r">result</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> See base class</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#0fda743d438f5210" class="i method">NotifyEndApplication</a><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="866e294c04bcbe85" href="../../R/866e294c04bcbe85.html" target="n" data-glyph="72,1" class="i method">NotifyBeginApplication</a>()
+        {
+            <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#25c3addb5cb5bc7d" class="i method">NotifyBeginApplication</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called by the engine to notify the host that the execution of a legacy command has completed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#866e294c04bcbe85" class="i method">NotifyBeginApplication</a><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="0fda743d438f5210" href="../../R/0fda743d438f5210.html" target="n" data-glyph="72,1" class="i method">NotifyEndApplication</a>()
+        {
+            <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>.<a href="MshHost.cs.html#112d71f653f639d8" class="i method">NotifyEndApplication</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property enables and disables the host debugger if debugging is supported.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="f3b48cb41d9f0dfe" href="../../R/f3b48cb41d9f0dfe.html" target="n" data-glyph="102,1" class="i property">DebuggerEnabled</a> { <b>get</b>; <b>set</b>; } = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the external host as an IHostSupportsInteractiveSession if it implements this interface;</span>
+        <span class="c">///</span><span class="c"> throws an exception otherwise.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <a id="ea329ddb2b7c29b3" href="../../R/ea329ddb2b7c29b3.html" target="n" data-glyph="76,1" class="i method">GetIHostSupportsInteractiveSession</a>()
+        {
+            <b>if</b> (!(<a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a> <b>is</b> <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r18 rd" class="r18 r">host</span>))
+            {
+                <b>throw</b> <b>new</b> <a href="../../utils/MshNotImplementedException.cs.html#7c86d87f06a2f375" class="t constructor">PSNotImplementedException</a>();
+            }
+ 
+            <b>return</b> <span class="r18 r">host</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called by the engine to notify the host that a runspace push has been requested.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#cac515b36e1b4a41" class="i method">PopRunspace</a><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <b>public void</b> <a id="190fddc2442f275e" href="../../R/190fddc2442f275e.html" target="n" data-glyph="72,1" class="i method">PushRunspace</a>(<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>.<a href="Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r19 rd" class="r19 r">runspace</span>)
+        {
+            <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r20 rd" class="r20 r">host</span> = <a href="#ea329ddb2b7c29b3" class="i method">GetIHostSupportsInteractiveSession</a>();
+            <span class="r20 r">host</span>.<a href="MshHost.cs.html#0de7c13b058ff86d" class="i method">PushRunspace</a>(<span class="r19 r">runspace</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called by the engine to notify the host that a runspace pop has been requested.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#190fddc2442f275e" class="i method">PushRunspace</a><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <b>public void</b> <a id="cac515b36e1b4a41" href="../../R/cac515b36e1b4a41.html" target="n" data-glyph="72,1" class="i method">PopRunspace</a>()
+        {
+            <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r21 rd" class="r21 r">host</span> = <a href="#ea329ddb2b7c29b3" class="i method">GetIHostSupportsInteractiveSession</a>();
+            <span class="r21 r">host</span>.<a href="MshHost.cs.html#bfefb28a81efacc0" class="i method">PopRunspace</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if a runspace is pushed; false otherwise.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="f1d91c3d71f1ac64" href="../../R/f1d91c3d71f1ac64.html" target="n" data-glyph="102,1" class="i property">IsRunspacePushed</a>
+        {
+            <b>get</b>
+            {
+                <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r22 rd" class="r22 r">host</span> = <a href="#ea329ddb2b7c29b3" class="i method">GetIHostSupportsInteractiveSession</a>();
+                <b>return</b> <span class="r22 r">host</span>.<a href="MshHost.cs.html#dcffa0559e25f71a" class="i property">IsRunspacePushed</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the current runspace associated with this host.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <a id="8e7bab15e6b298bf" href="../../R/8e7bab15e6b298bf.html" target="n" data-glyph="102,1" class="i property">Runspace</a>
+        {
+            <b>get</b>
+            {
+                <a href="MshHost.cs.html#8baf67daeba803e8" class="t t">IHostSupportsInteractiveSession</a> <span id="r23 rd" class="r23 r">host</span> = <a href="#ea329ddb2b7c29b3" class="i method">GetIHostSupportsInteractiveSession</a>();
+                <b>return</b> <span class="r23 r">host</span>.<a href="MshHost.cs.html#bb0974f45a993c53" class="i property">Runspace</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Checks if the host is in a nested prompt.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True, if host in nested prompt</span>
+        <span class="c">///</span><span class="c"> false, otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="2f1bcbdb45eeb8f1" href="../../R/2f1bcbdb45eeb8f1.html" target="n" data-glyph="74,1" class="i method">HostInNestedPrompt</a>()
+        {
+            <b>if</b> (<a href="#afc6f9f76c5bba72" class="i property">NestedPromptCount</a> &gt; 0)
+            {
+                <b>return</b> <b>true</b>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <b>false</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Sets the reference to the external host and the internal UI to a temporary</span>
+        <span class="c">///</span><span class="c"> new host and its UI. This exists so that if the PowerShell/Pipeline</span>
+        <span class="c">///</span><span class="c"> object has a different host from the runspace it can set it&#39;s host during its</span>
+        <span class="c">///</span><span class="c"> invocation, and then revert it after the invocation is completed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#5a26ee5df20fbaa4" class="i method">RevertHostRef</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> and</span>
+        <b>internal void</b> <a id="537447f36276d774" href="../../R/537447f36276d774.html" target="n" data-glyph="74,1" class="i method">SetHostRef</a>(<a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r24 rd" class="r24 r">psHost</span>)
+        {
+            <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#941ac12701f37148" class="i method">Override</a>(<span class="r24 r">psHost</span>);
+            <a href="#6e06e26b98bcfeaa" class="i field">_internalUIRef</a>.<a href="../remoting/common/ObjectRef.cs.html#941ac12701f37148" class="i method">Override</a>(<b>new</b> <a href="InternalHostUserInterface.cs.html#4d9e1a73fc882b76" class="t constructor">InternalHostUserInterface</a>(<span class="r24 r">psHost</span>.<a href="MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a>, <a href="#83104f2ad59a19df" class="k">this</a>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Reverts the temporary host set by SetHost. If no host was temporarily set, this has no effect.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">seealso</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#537447f36276d774" class="i method">SetHostRef</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> and</span>
+        <b>internal void</b> <a id="5a26ee5df20fbaa4" href="../../R/5a26ee5df20fbaa4.html" target="n" data-glyph="74,1" class="i method">RevertHostRef</a>()
+        {
+            <span class="c">// nothing to revert if Host reference is not set.</span>
+            <b>if</b> (!<a href="#89a9d2ce61a06e7f" class="i property">IsHostRefSet</a>) { <b>return</b>; }
+ 
+            <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#654ec503632ba849" class="i method">Revert</a>();
+            <a href="#6e06e26b98bcfeaa" class="i field">_internalUIRef</a>.<a href="../remoting/common/ObjectRef.cs.html#654ec503632ba849" class="i method">Revert</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns true if the external host reference is temporarily set to another host, masking the original host.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="89a9d2ce61a06e7f" href="../../R/89a9d2ce61a06e7f.html" target="n" data-glyph="104,1" class="i property">IsHostRefSet</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#95f316ccb41731c0" class="i property">IsOverridden</a>; }
+        }
+ 
+        <b>internal</b> <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <a id="e67698b7e18d9a6b" href="../../R/e67698b7e18d9a6b.html" target="n" data-glyph="104,1" class="i property">Context</a> { <b>get</b>; }
+ 
+        <b>internal</b> <a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <a id="f25431d0ab961179" href="../../R/f25431d0ab961179.html" target="n" data-glyph="104,1" class="i property">ExternalHost</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#bdc5e551e60cf87e" class="i field">_externalHostRef</a>.<a href="../remoting/common/ObjectRef.cs.html#396da730a140e420" class="i property">Value</a>;
+            }
+        }
+ 
+        <b>internal int</b> <a id="afc6f9f76c5bba72" href="../../R/afc6f9f76c5bba72.html" target="n" data-glyph="104,1" class="i property">NestedPromptCount</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">// Masked variables.</span>
+        <b>private readonly</b> <a href="../remoting/common/ObjectRef.cs.html#2cf76ce673a33ff2" class="t t">ObjectRef</a>&lt;<a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a>&gt; <a id="bdc5e551e60cf87e" href="../../R/bdc5e551e60cf87e.html" target="n" data-glyph="46,1" class="i field">_externalHostRef</a>;
+        <b>private readonly</b> <a href="../remoting/common/ObjectRef.cs.html#2cf76ce673a33ff2" class="t t">ObjectRef</a>&lt;<a href="../../P/660d078b9d606b70.html#660d078b9d606b70" class="t t">InternalHostUserInterface</a>&gt; <a id="6e06e26b98bcfeaa" href="../../R/6e06e26b98bcfeaa.html" target="n" data-glyph="46,1" class="i field">_internalUIRef</a>;
+ 
+        <span class="c">// Private variables.</span>
+        <b>private string</b> <a id="dd8787d051e35cf6" href="../../R/dd8787d051e35cf6.html" target="n" data-glyph="46,1" class="i field">_nameResult</a>;
+        <b>private</b> <span class="i">Version</span> <a id="227bcbb0337bbdcb" href="../../R/227bcbb0337bbdcb.html" target="n" data-glyph="46,1" class="i field">_versionResult</a>;
+        <b>private</b> <span class="i">Guid</span> <a id="112f20e7a51693e7" href="../../R/112f20e7a51693e7.html" target="n" data-glyph="46,1" class="i field">_idResult</a>;
+        <b>private readonly</b> <span class="i">Stack</span>&lt;<a href="#0d7bf0415254885d" class="t t">PromptContextData</a>&gt; <a id="3d84dab7c9c9ac66" href="../../R/3d84dab7c9c9ac66.html" target="n" data-glyph="46,1" class="i field">_contextStack</a> = <b>new</b> <span class="i">Stack</span>&lt;<a href="#0d7bf0415254885d" class="t t">PromptContextData</a>&gt;();
+ 
+        <b>private readonly</b> <span class="i">Guid</span> <a id="2afc9ed2ecb2ef09" href="../../R/2afc9ed2ecb2ef09.html" target="n" data-glyph="46,1" class="i field">_zeroGuid</a>;
+    }
+}
+</pre></td></tr></table></div></body></html>

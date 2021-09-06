@@ -1,0 +1,812 @@
+﻿<!DOCTYPE html>
+<html><head><title>WSManPluginFacade.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(803);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/fanin/WSManPluginFacade.cs" target="_top">engine\remoting\fanin\WSManPluginFacade.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="c">// ----------------------------------------------------------------------</span>
+<span class="c">//  Contents:  Entry points for managed PowerShell plugin worker used to</span>
+<span class="c">//  host powershell in a WSMan service.</span>
+<span class="c">// ----------------------------------------------------------------------</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <span class="c">// TODO: Does this comment still apply?</span>
+    <span class="c">// The following complex delegate + native function pointer model is used</span>
+    <span class="c">// because of a problem with GCRoot. GCRoots cannot hold reference to the</span>
+    <span class="c">// AppDomain that created it. In the IIS hosting scenario, there may be</span>
+    <span class="c">// cases where multiple AppDomains exist in the same hosting process. In such</span>
+    <span class="c">// cases if GCRoot is used, CLR will pick up the first AppDomain in the list</span>
+    <span class="c">// to get the managed handle. Delegates are not just function pointers, they</span>
+    <span class="c">// also contain a reference to the AppDomain that created it. However the catch</span>
+    <span class="c">// is that delegates must be marshalled into their respective unmanaged function</span>
+    <span class="c">// pointers (otherwise we end up storing the delegate into a GCRoot).</span>
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">extraInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">startupInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_SHELL_STARTUP_INFO*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">inboundShellInformation</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_DATA*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="74e7bb7a1337bda9" href="../../../R/74e7bb7a1337bda9.html" target="n" data-glyph="14,0" class="t t"><span id="69293d6e9fe1d84d">WSManPluginShellDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r0 rd" class="r0 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r1 rd" class="r1 r">requestDetails</span>,
+        <b>int</b> <span id="r2 rd" class="r2 r">flags</span>,
+        [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r3 rd" class="r3 r">extraInfo</span>,
+        <span class="i">IntPtr</span> <span id="r4 rd" class="r4 r">startupInfo</span>,
+        <span class="i">IntPtr</span> <span id="r5 rd" class="r5 r">inboundShellInformation</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="e6e667ac5b75272b" href="../../../R/e6e667ac5b75272b.html" target="n" data-glyph="14,0" class="t t"><span id="8f1353ee2f461845">WSManPluginReleaseShellContextDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r6 rd" class="r6 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r7 rd" class="r7 r">shellContext</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">inboundConnectInformation</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_DATA* optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="c8a6e762907f5a96" href="../../../R/c8a6e762907f5a96.html" target="n" data-glyph="14,0" class="t t"><span id="0cd06d3f2cd3f45b">WSManPluginConnectDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r8 rd" class="r8 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r9 rd" class="r9 r">requestDetails</span>,
+        <b>int</b> <span id="r10 rd" class="r10 r">flags</span>,
+        <span class="i">IntPtr</span> <span id="r11 rd" class="r11 r">shellContext</span>,
+        <span class="i">IntPtr</span> <span id="r12 rd" class="r12 r">commandContext</span>,
+        <span class="i">IntPtr</span> <span id="r13 rd" class="r13 r">inboundConnectInformation</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">commandLine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">arguments</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_COMMAND_ARG_SET*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="2d5f9f96f871f2bb" href="../../../R/2d5f9f96f871f2bb.html" target="n" data-glyph="14,0" class="t t"><span id="8e1d42d50ed95b1e">WSManPluginCommandDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r14 rd" class="r14 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r15 rd" class="r15 r">requestDetails</span>,
+        <b>int</b> <span id="r16 rd" class="r16 r">flags</span>,
+        <span class="i">IntPtr</span> <span id="r17 rd" class="r17 r">shellContext</span>,
+        [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r18 rd" class="r18 r">commandLine</span>,
+        <span class="i">IntPtr</span> <span id="r19 rd" class="r19 r">arguments</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Delegate that is passed to native layer for callback on operation shutdown notifications.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">shutdownContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">IntPtr.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="fde34ebc4ee5a55b" href="../../../R/fde34ebc4ee5a55b.html" target="n" data-glyph="14,0" class="t t"><span id="b9a40e837b05ef5b">WSManPluginOperationShutdownDelegate</span></a>(
+           <span class="i">IntPtr</span> <span id="r20 rd" class="r20 r">shutdownContext</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="dc6ae21324e579e7" href="../../../R/dc6ae21324e579e7.html" target="n" data-glyph="14,0" class="t t"><span id="67a92419c1668e92">WSManPluginReleaseCommandContextDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r21 rd" class="r21 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r22 rd" class="r22 r">shellContext</span>,
+        <span class="i">IntPtr</span> <span id="r23 rd" class="r23 r">commandContext</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">inboundData</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_DATA*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="aeb95aa35f1f1ae3" href="../../../R/aeb95aa35f1f1ae3.html" target="n" data-glyph="14,0" class="t t"><span id="e1e9c5c6f481a87d">WSManPluginSendDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r24 rd" class="r24 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r25 rd" class="r25 r">requestDetails</span>,
+        <b>int</b> <span id="r26 rd" class="r26 r">flags</span>,
+        <span class="i">IntPtr</span> <span id="r27 rd" class="r27 r">shellContext</span>,
+        <span class="i">IntPtr</span> <span id="r28 rd" class="r28 r">commandContext</span>,
+        [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r29 rd" class="r29 r">stream</span>,
+        <span class="i">IntPtr</span> <span id="r30 rd" class="r30 r">inboundData</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">streamSet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_STREAM_ID_SET* optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="e70b4cbf8bc9874a" href="../../../R/e70b4cbf8bc9874a.html" target="n" data-glyph="14,0" class="t t"><span id="a17f3ba7376e1e7f">WSManPluginReceiveDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r31 rd" class="r31 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r32 rd" class="r32 r">requestDetails</span>,
+        <b>int</b> <span id="r33 rd" class="r33 r">flags</span>,
+        <span class="i">IntPtr</span> <span id="r34 rd" class="r34 r">shellContext</span>,
+        <span class="i">IntPtr</span> <span id="r35 rd" class="r35 r">commandContext</span>,
+        <span class="i">IntPtr</span> <span id="r36 rd" class="r36 r">streamSet</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">code</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="97822b0c964a4708" href="../../../R/97822b0c964a4708.html" target="n" data-glyph="14,0" class="t t"><span id="3c80c161b9c9bc6a">WSManPluginSignalDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r37 rd" class="r37 r">pluginContext</span>,
+        <span class="i">IntPtr</span> <span id="r38 rd" class="r38 r">requestDetails</span>,
+        <b>int</b> <span id="r39 rd" class="r39 r">flags</span>,
+        <span class="i">IntPtr</span> <span id="r40 rd" class="r40 r">shellContext</span>,
+        <span class="i">IntPtr</span> <span id="r41 rd" class="r41 r">commandContext</span>,
+        [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r42 rd" class="r42 r">code</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Callback that handles shell shutdown notification events.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">state</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">timedOut</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="a9434a743eba3443" href="../../../R/../../0000000000.html" target="n" data-glyph="14,0" class="t t"><span id="094b07536bc5d9f4">WaitOrTimerCallbackDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r43 rd" class="r43 r">state</span>,
+        <b>bool</b> <span id="r44 rd" class="r44 r">timedOut</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+    <b>internal delegate void</b> <a id="b060704ce1686230" href="../../../R/b060704ce1686230.html" target="n" data-glyph="14,0" class="t t"><span id="3c9c907f37f6e45d">WSManShutdownPluginDelegate</span></a>(
+        <span class="i">IntPtr</span> <span id="r45 rd" class="r45 r">pluginContext</span>);
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="db2b2a53ff1514ea" href="../../../R/db2b2a53ff1514ea.html" target="n" data-glyph="2,0" class="t t">WSManPluginEntryDelegates</a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Members
+ 
+        <span class="c">// Holds the delegate pointers in a structure that has identical layout to the native structure.</span>
+        <b>private readonly</b> <a href="#af10b35af9d0480c" class="t t">WSManPluginEntryDelegatesInternal</a> <a id="1234034f4b5fd2f2" href="../../../R/1234034f4b5fd2f2.html" target="n" data-glyph="46,1" class="i field">_unmanagedStruct</a> = <b>new</b> <span class="t">WSManPluginEntryDelegatesInternal</span>();
+ 
+        <b>internal</b> <a href="#af10b35af9d0480c" class="t t">WSManPluginEntryDelegatesInternal</a> <a id="5e02b53c022569f3" href="../../../R/5e02b53c022569f3.html" target="n" data-glyph="104,1" class="i property">UnmanagedStruct</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>; }
+        }
+ 
+        <span class="c">// Flag: Has Dispose already been called?</span>
+        <b>private bool</b> <a id="35af4eb8a252de5f" href="../../../R/35af4eb8a252de5f.html" target="n" data-glyph="46,1" class="i field">_disposed</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> GC handle which prevents garbage collector from collecting this delegate.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">GCHandle</span> <a id="7df3ab1a38992500" href="../../../R/7df3ab1a38992500.html" target="n" data-glyph="46,1" class="i field">_pluginShellGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="482b5239cd7989bb" href="../../../R/482b5239cd7989bb.html" target="n" data-glyph="46,1" class="i field">_pluginReleaseShellContextGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="69ff5fc10452f54c" href="../../../R/69ff5fc10452f54c.html" target="n" data-glyph="46,1" class="i field">_pluginCommandGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="29348fc3778d3f77" href="../../../R/29348fc3778d3f77.html" target="n" data-glyph="46,1" class="i field">_pluginReleaseCommandContextGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="8910ccd9ee996256" href="../../../R/8910ccd9ee996256.html" target="n" data-glyph="46,1" class="i field">_pluginSendGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="89d884248292f040" href="../../../R/89d884248292f040.html" target="n" data-glyph="46,1" class="i field">_pluginReceiveGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="1545af029ccea86a" href="../../../R/1545af029ccea86a.html" target="n" data-glyph="46,1" class="i field">_pluginSignalGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="c9f048c5ada23a84" href="../../../R/c9f048c5ada23a84.html" target="n" data-glyph="46,1" class="i field">_pluginConnectGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="664bfeb7245c092f" href="../../../R/664bfeb7245c092f.html" target="n" data-glyph="46,1" class="i field">_shutdownPluginGCHandle</a>;
+        <b>private</b> <span class="i">GCHandle</span> <a id="7311c0ef8077d7ab" href="../../../R/7311c0ef8077d7ab.html" target="n" data-glyph="46,1" class="i field">_WSManPluginOperationShutdownGCHandle</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes the delegate struct for later use.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="1142da9e6c08483a" href="../../../R/1142da9e6c08483a.html" target="n" data-glyph="74,1" class="t constructor">WSManPluginEntryDelegates</a>()
+        {
+            <a href="#5a74dcb58ab24c4e" class="i method">populateDelegates</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Internal implementation of Dispose pattern callable by consumers.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="df386f57eedbc370" href="../../../R/df386f57eedbc370.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#dddc9527e89af0d9" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#db2b2a53ff1514ea" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Protected implementation of Dispose pattern.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="dddc9527e89af0d9" href="../../../R/dddc9527e89af0d9.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r46 rd" class="r46 r">disposing</span>)
+        {
+            <b>if</b> (<a href="#35af4eb8a252de5f" class="i field">_disposed</a>)
+                <b>return</b>;
+ 
+            <span class="c">// Free any unmanaged objects here.</span>
+            <a href="#db2b2a53ff1514ea" class="k">this</a>.<a href="#e9fdb56a00ae9407" class="i method">CleanUpDelegates</a>();
+ 
+            <a href="#35af4eb8a252de5f" class="i field">_disposed</a> = <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Finalizes an instance of the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#db2b2a53ff1514ea" class="t t">WSManPluginEntryDelegates</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        ~<a id="0ec423b59b29000c" href="../../../R/../../0000000000.html" target="n" data-glyph="75,1" class="t method">WSManPluginEntryDelegates</a>()
+        {
+            <a href="#dddc9527e89af0d9" class="i method">Dispose</a>(<b>false</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDisposable Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates delegates and populates the managed version of the</span>
+        <span class="c">///</span><span class="c"> structure that will be passed to unmanaged callers.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="5a74dcb58ab24c4e" href="../../../R/5a74dcb58ab24c4e.html" target="n" data-glyph="76,1" class="i method">populateDelegates</a>()
+        {
+            <span class="c">// if a delegate is re-located by a garbage collection, it will not affect</span>
+            <span class="c">// the underlaying managed callback, so Alloc is used to add a reference</span>
+            <span class="c">// to the delegate, allowing relocation of the delegate, but preventing</span>
+            <span class="c">// disposal. Using GCHandle without pinning reduces fragmentation potential</span>
+            <span class="c">// of the managed heap.</span>
+            {
+                <a href="#74e7bb7a1337bda9" class="t t">WSManPluginShellDelegate</a> <span id="r47 rd" class="r47 r">pluginShell</span> = <b>new</b> <span class="t">WSManPluginShellDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#8c551222ab6d06f4" class="i method">WSManPluginShell</a>);
+                <a href="#7df3ab1a38992500" class="i field">_pluginShellGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r47 r">pluginShell</span>);
+                <span class="c">// marshal the delegate to a unmanaged function pointer so that AppDomain reference is stored correctly.</span>
+                <span class="c">// Populate the outgoing structure so the caller has access to the entry points</span>
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#6ac5fe6b2eb942ee" class="i field">wsManPluginShellCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r47 r">pluginShell</span>);
+            }
+            {
+                <a href="#e6e667ac5b75272b" class="t t">WSManPluginReleaseShellContextDelegate</a> <span id="r48 rd" class="r48 r">pluginReleaseShellContext</span> = <b>new</b> <span class="t">WSManPluginReleaseShellContextDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#deb0056360a408e7" class="i method">WSManPluginReleaseShellContext</a>);
+                <a href="#482b5239cd7989bb" class="i field">_pluginReleaseShellContextGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r48 r">pluginReleaseShellContext</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#b0a3ed4894ba5c4f" class="i field">wsManPluginReleaseShellContextCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r48 r">pluginReleaseShellContext</span>);
+            }
+            {
+                <a href="#2d5f9f96f871f2bb" class="t t">WSManPluginCommandDelegate</a> <span id="r49 rd" class="r49 r">pluginCommand</span> = <b>new</b> <span class="t">WSManPluginCommandDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#6dde6802a3f8880d" class="i method">WSManPluginCommand</a>);
+                <a href="#69ff5fc10452f54c" class="i field">_pluginCommandGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r49 r">pluginCommand</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#890badb7f3de4890" class="i field">wsManPluginCommandCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r49 r">pluginCommand</span>);
+            }
+            {
+                <a href="#dc6ae21324e579e7" class="t t">WSManPluginReleaseCommandContextDelegate</a> <span id="r50 rd" class="r50 r">pluginReleaseCommandContext</span> = <b>new</b> <span class="t">WSManPluginReleaseCommandContextDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#36321fd0e69004af" class="i method">WSManPluginReleaseCommandContext</a>);
+                <a href="#29348fc3778d3f77" class="i field">_pluginReleaseCommandContextGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r50 r">pluginReleaseCommandContext</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#0a5ad2daaefc5c2d" class="i field">wsManPluginReleaseCommandContextCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r50 r">pluginReleaseCommandContext</span>);
+            }
+            {
+                <a href="#aeb95aa35f1f1ae3" class="t t">WSManPluginSendDelegate</a> <span id="r51 rd" class="r51 r">pluginSend</span> = <b>new</b> <span class="t">WSManPluginSendDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#a6e5ca5cd9f254a8" class="i method">WSManPluginSend</a>);
+                <a href="#8910ccd9ee996256" class="i field">_pluginSendGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r51 r">pluginSend</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#fc2ed2fa97d019c8" class="i field">wsManPluginSendCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r51 r">pluginSend</span>);
+            }
+            {
+                <a href="#e70b4cbf8bc9874a" class="t t">WSManPluginReceiveDelegate</a> <span id="r52 rd" class="r52 r">pluginReceive</span> = <b>new</b> <span class="t">WSManPluginReceiveDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#9c8f1f7f2ea47a07" class="i method">WSManPluginReceive</a>);
+                <a href="#89d884248292f040" class="i field">_pluginReceiveGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r52 r">pluginReceive</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#bcba6a027d4c9f22" class="i field">wsManPluginReceiveCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r52 r">pluginReceive</span>);
+            }
+            {
+                <a href="#97822b0c964a4708" class="t t">WSManPluginSignalDelegate</a> <span id="r53 rd" class="r53 r">pluginSignal</span> = <b>new</b> <span class="t">WSManPluginSignalDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#fa034952a055c16b" class="i method">WSManPluginSignal</a>);
+                <a href="#1545af029ccea86a" class="i field">_pluginSignalGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r53 r">pluginSignal</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#34e007ee7fcd446e" class="i field">wsManPluginSignalCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r53 r">pluginSignal</span>);
+            }
+            {
+                <a href="#c8a6e762907f5a96" class="t t">WSManPluginConnectDelegate</a> <span id="r54 rd" class="r54 r">pluginConnect</span> = <b>new</b> <span class="t">WSManPluginConnectDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#2c12c86324d93ddb" class="i method">WSManPluginConnect</a>);
+                <a href="#c9f048c5ada23a84" class="i field">_pluginConnectGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r54 r">pluginConnect</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#8866c77489dbbf6e" class="i field">wsManPluginConnectCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r54 r">pluginConnect</span>);
+            }
+            {
+                <a href="#b060704ce1686230" class="t t">WSManShutdownPluginDelegate</a> <span id="r55 rd" class="r55 r">shutdownPlugin</span> = <b>new</b> <span class="t">WSManShutdownPluginDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#a366f4ab3b181c95" class="i method">ShutdownPlugin</a>);
+                <a href="#664bfeb7245c092f" class="i field">_shutdownPluginGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r55 r">shutdownPlugin</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#25b1c0d75e936156" class="i field">wsManPluginShutdownPluginCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r55 r">shutdownPlugin</span>);
+            }
+ 
+            <b>if</b> (!<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+            {
+                <a href="#fde34ebc4ee5a55b" class="t t">WSManPluginOperationShutdownDelegate</a> <span id="r56 rd" class="r56 r">pluginShutDownDelegate</span> = <b>new</b> <span class="t">WSManPluginOperationShutdownDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#d8c8671c69219363" class="i method">WSManPSShutdown</a>);
+                <a href="#7311c0ef8077d7ab" class="i field">_WSManPluginOperationShutdownGCHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r56 r">pluginShutDownDelegate</span>);
+                <a href="#1234034f4b5fd2f2" class="i field">_unmanagedStruct</a>.<a href="#2c388504e25f1d23" class="i field">wsManPluginShutdownCallbackNative</a> = <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r56 r">pluginShutDownDelegate</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="e9fdb56a00ae9407" href="../../../R/e9fdb56a00ae9407.html" target="n" data-glyph="76,1" class="i method">CleanUpDelegates</a>()
+        {
+            <span class="c">// Free GCHandles so that the memory they point to may be unpinned (garbage collected)</span>
+            <b>if</b> (<a href="#7df3ab1a38992500" class="i field">_pluginShellGCHandle</a>.<span class="i">IsAllocated</span>)
+            {
+                <a href="#7df3ab1a38992500" class="i field">_pluginShellGCHandle</a>.<span class="i">Free</span>();
+                <a href="#482b5239cd7989bb" class="i field">_pluginReleaseShellContextGCHandle</a>.<span class="i">Free</span>();
+                <a href="#69ff5fc10452f54c" class="i field">_pluginCommandGCHandle</a>.<span class="i">Free</span>();
+                <a href="#29348fc3778d3f77" class="i field">_pluginReleaseCommandContextGCHandle</a>.<span class="i">Free</span>();
+                <a href="#8910ccd9ee996256" class="i field">_pluginSendGCHandle</a>.<span class="i">Free</span>();
+                <a href="#89d884248292f040" class="i field">_pluginReceiveGCHandle</a>.<span class="i">Free</span>();
+                <a href="#1545af029ccea86a" class="i field">_pluginSignalGCHandle</a>.<span class="i">Free</span>();
+                <a href="#c9f048c5ada23a84" class="i field">_pluginConnectGCHandle</a>.<span class="i">Free</span>();
+                <a href="#664bfeb7245c092f" class="i field">_shutdownPluginGCHandle</a>.<span class="i">Free</span>();
+                <b>if</b> (!<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+                {
+                    <a href="#7311c0ef8077d7ab" class="i field">_WSManPluginOperationShutdownGCHandle</a>.<span class="i">Free</span>();
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Structure definition to match the native one.</span>
+        <span class="c">///</span><span class="c"> NOTE: The layout of this structure must be IDENTICAL between here and PwrshPluginWkr_Ptrs in pwrshplugindefs.h!</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Sequential</span>)]
+        <b>internal class</b> <a id="af10b35af9d0480c" href="../../../R/af10b35af9d0480c.html" target="n" data-glyph="2,1" class="t t"><span id="3b7c0da7fe90126f">WSManPluginEntryDelegatesInternal</span></a>
+        {
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WsManPluginShutdownPluginCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="25b1c0d75e936156" href="../../../R/25b1c0d75e936156.html" target="n" data-glyph="44,2" class="i field">wsManPluginShutdownPluginCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginShellCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="6ac5fe6b2eb942ee" href="../../../R/6ac5fe6b2eb942ee.html" target="n" data-glyph="44,2" class="i field">wsManPluginShellCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginReleaseShellContextCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="b0a3ed4894ba5c4f" href="../../../R/b0a3ed4894ba5c4f.html" target="n" data-glyph="44,2" class="i field">wsManPluginReleaseShellContextCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginCommandCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="890badb7f3de4890" href="../../../R/890badb7f3de4890.html" target="n" data-glyph="44,2" class="i field">wsManPluginCommandCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginReleaseCommandContextCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="0a5ad2daaefc5c2d" href="../../../R/0a5ad2daaefc5c2d.html" target="n" data-glyph="44,2" class="i field">wsManPluginReleaseCommandContextCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginSendCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="fc2ed2fa97d019c8" href="../../../R/fc2ed2fa97d019c8.html" target="n" data-glyph="44,2" class="i field">wsManPluginSendCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginReceiveCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="bcba6a027d4c9f22" href="../../../R/bcba6a027d4c9f22.html" target="n" data-glyph="44,2" class="i field">wsManPluginReceiveCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginSignalCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="34e007ee7fcd446e" href="../../../R/34e007ee7fcd446e.html" target="n" data-glyph="44,2" class="i field">wsManPluginSignalCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginConnectCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="8866c77489dbbf6e" href="../../../R/8866c77489dbbf6e.html" target="n" data-glyph="44,2" class="i field">wsManPluginConnectCallbackNative</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> WSManPluginCommandCallbackNative.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2006:UseSafeHandleToEncapsulateNativeResources&quot;</span>)]
+            <b>internal</b> <span class="i">IntPtr</span> <a id="2c388504e25f1d23" href="../../../R/2c388504e25f1d23.html" target="n" data-glyph="44,2" class="i field">wsManPluginShutdownCallbackNative</a>;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Class containing the public static managed entry functions that are callable from outside</span>
+    <span class="c">///</span><span class="c"> the module.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="7abe8df412b63829" href="../../../R/7abe8df412b63829.html" target="n" data-glyph="0,0" class="t t">WSManPluginManagedEntryWrapper</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor is private because it only contains static members and properties.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a id="10d36c8aeddce4ec" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">WSManPluginManagedEntryWrapper</a>() { }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Immutable container that holds the delegates and their unmanaged pointers.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static readonly</b> <a href="#db2b2a53ff1514ea" class="t t">WSManPluginEntryDelegates</a> <a id="aab6ef72b9224260" href="../../../R/aab6ef72b9224260.html" target="n" data-glyph="44,1" class="i field">workerPtrs</a> = <b>new</b> <a href="#1142da9e6c08483a" class="t constructor">WSManPluginEntryDelegates</a>();
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Managed Entry Points
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called only once after the assembly is loaded..This is used to perform</span>
+        <span class="c">///</span><span class="c"> various initializations.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">wkrPtrs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">IntPtr to WSManPluginEntryDelegates.WSManPluginEntryDelegatesInternal.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">0 = Success, 1 = Failure.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public static int</b> <a id="0973d329c10042c3" href="../../../R/0973d329c10042c3.html" target="n" data-glyph="72,1" class="i method">InitPlugin</a>(
+            <span class="i">IntPtr</span> <span id="r57 rd" class="r57 r">wkrPtrs</span>)
+        {
+            <b>if</b> (<span class="r57 r">wkrPtrs</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <b>return</b> <a href="WSManPlugin.cs.html#f1ff81f0faba1926" class="t t">WSManPluginConstants</a>.<a href="WSManPlugin.cs.html#c274af99f304f814" class="i field">ExitCodeFailure</a>;
+            }
+ 
+            <span class="i">Marshal</span>.<span class="i">StructureToPtr</span>&lt;<a href="#db2b2a53ff1514ea" class="t t">WSManPluginEntryDelegates</a>.<a href="#af10b35af9d0480c" class="t t">WSManPluginEntryDelegatesInternal</a>&gt;(<a href="#aab6ef72b9224260" class="i field">workerPtrs</a>.<a href="#5e02b53c022569f3" class="i property">UnmanagedStruct</a>, <span class="r57 r">wkrPtrs</span>, <b>false</b>);
+            <b>return</b> <a href="WSManPlugin.cs.html#f1ff81f0faba1926" class="t t">WSManPluginConstants</a>.<a href="WSManPlugin.cs.html#0a6d585154325685" class="i field">ExitCodeSuccess</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called only once during shutdown. This is used to perform various deinitializations.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r58 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="a366f4ab3b181c95" href="../../../R/a366f4ab3b181c95.html" target="n" data-glyph="72,1" class="i method">ShutdownPlugin</a>(
+            <span class="i">IntPtr</span> <span id="r58 rd" class="r58 r">pluginContext</span>)
+        {
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#881be05170dd6b16" class="i method">PerformShutdown</a>(<span class="r58 r">pluginContext</span>);
+ 
+            <b>if</b> (<a href="#aab6ef72b9224260" class="i field">workerPtrs</a> != <b>null</b>)
+            {
+                <a href="#aab6ef72b9224260" class="i field">workerPtrs</a>.<a href="#df386f57eedbc370" class="i method">Dispose</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r59 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r63 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r64 r">inboundConnectInformation</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_DATA* optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="2c12c86324d93ddb" href="../../../R/2c12c86324d93ddb.html" target="n" data-glyph="72,1" class="i method">WSManPluginConnect</a>(
+            <span class="i">IntPtr</span> <span id="r59 rd" class="r59 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r60 rd" class="r60 r">requestDetails</span>,
+            <b>int</b> <span id="r61 rd" class="r61 r">flags</span>,
+            <span class="i">IntPtr</span> <span id="r62 rd" class="r62 r">shellContext</span>,
+            <span class="i">IntPtr</span> <span id="r63 rd" class="r63 r">commandContext</span>,
+            <span class="i">IntPtr</span> <span id="r64 rd" class="r64 r">inboundConnectInformation</span>)
+        {
+            <b>if</b> (<span class="r59 r">pluginContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#006f2e301f46b5b1" class="i method">ReportOperationComplete</a>(
+                    <span class="r60 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#52a260224a14ca51" class="i field">NullPluginContext</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginNullPluginContext</span>,
+                        <span class="s">&quot;pluginContext&quot;</span>,
+                        <span class="s">&quot;WSManPluginConnect&quot;</span>)
+                    );
+                <b>return</b>;
+            }
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#1d4606b16b8e9044" class="i method">PerformWSManPluginConnect</a>(<span class="r59 r">pluginContext</span>, <span class="r60 r">requestDetails</span>, <span class="r61 r">flags</span>, <span class="r62 r">shellContext</span>, <span class="r63 r">commandContext</span>, <span class="r64 r">inboundConnectInformation</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r66 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r68 r">extraInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">startupInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_SHELL_STARTUP_INFO*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">inboundShellInformation</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_DATA*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="8c551222ab6d06f4" href="../../../R/8c551222ab6d06f4.html" target="n" data-glyph="72,1" class="i method">WSManPluginShell</a>(
+            <span class="i">IntPtr</span> <span id="r65 rd" class="r65 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r66 rd" class="r66 r">requestDetails</span>,
+            <b>int</b> <span id="r67 rd" class="r67 r">flags</span>,
+            [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r68 rd" class="r68 r">extraInfo</span>,
+            <span class="i">IntPtr</span> <span id="r69 rd" class="r69 r">startupInfo</span>,
+            <span class="i">IntPtr</span> <span id="r70 rd" class="r70 r">inboundShellInformation</span>)
+        {
+            <b>if</b> (<span class="r65 r">pluginContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#006f2e301f46b5b1" class="i method">ReportOperationComplete</a>(
+                    <span class="r66 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#52a260224a14ca51" class="i field">NullPluginContext</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginNullPluginContext</span>,
+                        <span class="s">&quot;pluginContext&quot;</span>,
+                        <span class="s">&quot;WSManPluginShell&quot;</span>)
+                    );
+                <b>return</b>;
+            }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span>(<span class="i">DEBUG</span>)
+            <span class="c">// In debug builds, allow remote runspaces to wait for debugger attach</span>
+            <b>if</b> (<span class="i">Environment</span>.<span class="i">GetEnvironmentVariable</span>(<span class="s">&quot;__PSRemoteRunspaceWaitForDebugger&quot;</span>, <span class="i">EnvironmentVariableTarget</span>.<span class="i">Machine</span>) != <b>null</b>)
+            {
+                <b>bool</b> <span id="r71 rd" class="r71 r">debuggerAttached</span> = <b>false</b>;
+                <b>while</b> (!<span class="r71 r">debuggerAttached</span>)
+                {
+                    <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Thread</span>.<span class="i">Sleep</span>(100);
+                }
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#c02ac579a160fce8" class="i method">PerformWSManPluginShell</a>(<span class="r65 r">pluginContext</span>, <span class="r66 r">requestDetails</span>, <span class="r67 r">flags</span>, <span class="r68 r">extraInfo</span>, <span class="r69 r">startupInfo</span>, <span class="r70 r">inboundShellInformation</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r72 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r73 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="deb0056360a408e7" href="../../../R/deb0056360a408e7.html" target="n" data-glyph="72,1" class="i method">WSManPluginReleaseShellContext</a>(
+            <span class="i">IntPtr</span> <span id="r72 rd" class="r72 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r73 rd" class="r73 r">shellContext</span>)
+        {
+            <span class="c">// NO-OP..as our plugin does not own the memory related</span>
+            <span class="c">// to shellContext and so there is nothing to release</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r74 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r75 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r76 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r77 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r78 r">commandLine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">arguments</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_COMMAND_ARG_SET* optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="6dde6802a3f8880d" href="../../../R/6dde6802a3f8880d.html" target="n" data-glyph="72,1" class="i method">WSManPluginCommand</a>(
+            <span class="i">IntPtr</span> <span id="r74 rd" class="r74 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r75 rd" class="r75 r">requestDetails</span>,
+            <b>int</b> <span id="r76 rd" class="r76 r">flags</span>,
+            <span class="i">IntPtr</span> <span id="r77 rd" class="r77 r">shellContext</span>,
+            [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r78 rd" class="r78 r">commandLine</span>,
+            <span class="i">IntPtr</span> <span id="r79 rd" class="r79 r">arguments</span>)
+        {
+            <b>if</b> (<span class="r74 r">pluginContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#006f2e301f46b5b1" class="i method">ReportOperationComplete</a>(
+                    <span class="r75 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#52a260224a14ca51" class="i field">NullPluginContext</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginNullPluginContext</span>,
+                        <span class="s">&quot;Plugin Context&quot;</span>,
+                        <span class="s">&quot;WSManPluginCommand&quot;</span>)
+                    );
+                <b>return</b>;
+            }
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#b430214dba753480" class="i method">PerformWSManPluginCommand</a>(<span class="r74 r">pluginContext</span>, <span class="r75 r">requestDetails</span>, <span class="r76 r">flags</span>, <span class="r77 r">shellContext</span>, <span class="r78 r">commandLine</span>, <span class="r79 r">arguments</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Operation shutdown notification that was registered with the native layer for each of the shellCreate operations.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">shutdownContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">IntPtr.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="d8c8671c69219363" href="../../../R/d8c8671c69219363.html" target="n" data-glyph="72,1" class="i method">WSManPSShutdown</a>(
+            <span class="i">IntPtr</span> <span id="r80 rd" class="r80 r">shutdownContext</span>)
+        {
+            <span class="i">GCHandle</span> <span id="r81 rd" class="r81 r">gch</span> = <span class="i">GCHandle</span>.<span class="i">FromIntPtr</span>(<span class="r80 r">shutdownContext</span>);
+            <span class="i">EventWaitHandle</span> <span id="r82 rd" class="r82 r">eventHandle</span> = (<span class="i">EventWaitHandle</span>)<span class="r81 r">gch</span>.<span class="i">Target</span>;
+            <span class="r82 r">eventHandle</span>.<span class="i">Set</span>();
+            <span class="r81 r">gch</span>.<span class="i">Free</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r83 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r84 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r85 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="36321fd0e69004af" href="../../../R/36321fd0e69004af.html" target="n" data-glyph="72,1" class="i method">WSManPluginReleaseCommandContext</a>(
+            <span class="i">IntPtr</span> <span id="r83 rd" class="r83 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r84 rd" class="r84 r">shellContext</span>,
+            <span class="i">IntPtr</span> <span id="r85 rd" class="r85 r">commandContext</span>)
+        {
+            <span class="c">// NO-OP..as our plugin does not own the memory related</span>
+            <span class="c">// to commandContext and so there is nothing to release.</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r86 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r87 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r88 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r89 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r91 r">stream</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r92 r">inboundData</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_DATA*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="a6e5ca5cd9f254a8" href="../../../R/a6e5ca5cd9f254a8.html" target="n" data-glyph="72,1" class="i method">WSManPluginSend</a>(
+            <span class="i">IntPtr</span> <span id="r86 rd" class="r86 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r87 rd" class="r87 r">requestDetails</span>,
+            <b>int</b> <span id="r88 rd" class="r88 r">flags</span>,
+            <span class="i">IntPtr</span> <span id="r89 rd" class="r89 r">shellContext</span>,
+            <span class="i">IntPtr</span> <span id="r90 rd" class="r90 r">commandContext</span>,
+            [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r91 rd" class="r91 r">stream</span>,
+            <span class="i">IntPtr</span> <span id="r92 rd" class="r92 r">inboundData</span>)
+        {
+            <b>if</b> (<span class="r86 r">pluginContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#006f2e301f46b5b1" class="i method">ReportOperationComplete</a>(
+                    <span class="r87 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#52a260224a14ca51" class="i field">NullPluginContext</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginNullPluginContext</span>,
+                        <span class="s">&quot;Plugin Context&quot;</span>,
+                        <span class="s">&quot;WSManPluginSend&quot;</span>)
+                    );
+                <b>return</b>;
+            }
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#0fb9868d4c6c5fc6" class="i method">PerformWSManPluginSend</a>(<span class="r86 r">pluginContext</span>, <span class="r87 r">requestDetails</span>, <span class="r88 r">flags</span>, <span class="r89 r">shellContext</span>, <span class="r90 r">commandContext</span>, <span class="r91 r">stream</span>, <span class="r92 r">inboundData</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r94 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r95 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r96 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r97 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r98 r">streamSet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_STREAM_ID_SET* optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="9c8f1f7f2ea47a07" href="../../../R/9c8f1f7f2ea47a07.html" target="n" data-glyph="72,1" class="i method">WSManPluginReceive</a>(
+            <span class="i">IntPtr</span> <span id="r93 rd" class="r93 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r94 rd" class="r94 r">requestDetails</span>,
+            <b>int</b> <span id="r95 rd" class="r95 r">flags</span>,
+            <span class="i">IntPtr</span> <span id="r96 rd" class="r96 r">shellContext</span>,
+            <span class="i">IntPtr</span> <span id="r97 rd" class="r97 r">commandContext</span>,
+            <span class="i">IntPtr</span> <span id="r98 rd" class="r98 r">streamSet</span>)
+        {
+            <b>if</b> (<span class="r93 r">pluginContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#006f2e301f46b5b1" class="i method">ReportOperationComplete</a>(
+                    <span class="r94 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#52a260224a14ca51" class="i field">NullPluginContext</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginNullPluginContext</span>,
+                        <span class="s">&quot;Plugin Context&quot;</span>,
+                        <span class="s">&quot;WSManPluginReceive&quot;</span>)
+                    );
+                <b>return</b>;
+            }
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#c7dcd569b9a12b29" class="i method">PerformWSManPluginReceive</a>(<span class="r93 r">pluginContext</span>, <span class="r94 r">requestDetails</span>, <span class="r95 r">flags</span>, <span class="r96 r">shellContext</span>, <span class="r97 r">commandContext</span>, <span class="r98 r">streamSet</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r99 r">pluginContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r100 r">requestDetails</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">WSMAN_PLUGIN_REQUEST*.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r101 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">DWORD.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r102 r">shellContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r103 r">commandContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID optional.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r104 r">code</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PCWSTR.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="fa034952a055c16b" href="../../../R/fa034952a055c16b.html" target="n" data-glyph="72,1" class="i method">WSManPluginSignal</a>(
+            <span class="i">IntPtr</span> <span id="r99 rd" class="r99 r">pluginContext</span>,
+            <span class="i">IntPtr</span> <span id="r100 rd" class="r100 r">requestDetails</span>,
+            <b>int</b> <span id="r101 rd" class="r101 r">flags</span>,
+            <span class="i">IntPtr</span> <span id="r102 rd" class="r102 r">shellContext</span>,
+            <span class="i">IntPtr</span> <span id="r103 rd" class="r103 r">commandContext</span>,
+            [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r104 rd" class="r104 r">code</span>)
+        {
+            <b>if</b> ((<span class="r99 r">pluginContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>) || (<span class="r102 r">shellContext</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>))
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#006f2e301f46b5b1" class="i method">ReportOperationComplete</a>(
+                    <span class="r100 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#52a260224a14ca51" class="i field">NullPluginContext</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginNullPluginContext</span>,
+                        <span class="s">&quot;Plugin Context&quot;</span>,
+                        <span class="s">&quot;WSManPluginSignal&quot;</span>)
+                    );
+                <b>return</b>;
+            }
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#612d75f728c7436b" class="i method">PerformWSManPluginSignal</a>(<span class="r99 r">pluginContext</span>, <span class="r100 r">requestDetails</span>, <span class="r101 r">flags</span>, <span class="r102 r">shellContext</span>, <span class="r103 r">commandContext</span>, <span class="r104 r">code</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback used to register with thread pool to notify when a plugin operation shuts down.</span>
+        <span class="c">///</span><span class="c"> Conforms to:</span>
+        <span class="c">///</span><span class="c">     public delegate void WaitOrTimerCallback( Object state, bool timedOut )</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r105 r">operationContext</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">PVOID.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r106 r">timedOut</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">BOOLEAN.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="1029de1c812d0981" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">PSPluginOperationShutdownCallback</a>(
+            <b>object</b> <span id="r105 rd" class="r105 r">operationContext</span>,
+            <b>bool</b> <span id="r106 rd" class="r106 r">timedOut</span>)
+        {
+            <b>if</b> (<span class="r105 r">operationContext</span> == <b>null</b>)
+            {
+                <b>return</b>;
+            }
+ 
+            <a href="WSManPlugin.cs.html#3e5455aa49779e8c" class="t t">WSManPluginOperationShutdownContext</a> <span id="r107 rd" class="r107 r">context</span> = (<a href="WSManPlugin.cs.html#3e5455aa49779e8c" class="t t">WSManPluginOperationShutdownContext</a>)<span class="r105 r">operationContext</span>;
+            <span class="r107 r">context</span>.<a href="WSManPlugin.cs.html#a848dec07b8cdfdd" class="i field">isShuttingDown</a> = <b>true</b>;
+ 
+            <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#2103a47783d6d1c5" class="i method">PerformCloseOperation</a>(<span class="r107 r">context</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This is a thin wrapper around WSManPluginManagedEntryWrapper.InitPlugin()</span>
+    <span class="c">///</span><span class="c"> so that it can be called from native COM code in a non-static context.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This was done to get around an FXCop error: AvoidStaticMembersInComVisibleTypes.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="32556b3a542ec8c9" href="../../../R/32556b3a542ec8c9.html" target="n" data-glyph="0,0" class="t t"><span id="256d513a97cc6aea">WSManPluginManagedEntryInstanceWrapper</span></a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">// Flag: Has Dispose already been called?</span>
+        <b>private bool</b> <a id="a2497dfede3c2980" href="../../../R/a2497dfede3c2980.html" target="n" data-glyph="46,1" class="i field">_disposed</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Internal implementation of Dispose pattern callable by consumers.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="e0a83e52d4225f8c" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#e590c8f34a298a9c" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#32556b3a542ec8c9" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Protected implementation of Dispose pattern.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r108 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="e590c8f34a298a9c" href="../../../R/e590c8f34a298a9c.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r108 rd" class="r108 r">disposing</span>)
+        {
+            <b>if</b> (<a href="#a2497dfede3c2980" class="i field">_disposed</a>)
+                <b>return</b>;
+ 
+            <span class="c">// Free any unmanaged objects here.</span>
+            <a href="#411184ef9185b20d" class="i field">_initDelegateHandle</a>.<span class="i">Free</span>();
+ 
+            <a href="#a2497dfede3c2980" class="i field">_disposed</a> = <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Finalizes an instance of the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#32556b3a542ec8c9" class="t t">WSManPluginManagedEntryInstanceWrapper</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        ~<a id="65c51a7bd7fe60ca" href="../../../R/../../0000000000.html" target="n" data-glyph="75,1" class="t method">WSManPluginManagedEntryInstanceWrapper</a>()
+        {
+            <a href="#e590c8f34a298a9c" class="i method">Dispose</a>(<b>false</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Delegate Handling
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Matches signature for WSManPluginManagedEntryWrapper.InitPlugin.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r109 r">wkrPtrs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private delegate int</b> <a id="2b0bb409f3e40f10" href="../../../R/2b0bb409f3e40f10.html" target="n" data-glyph="16,1" class="t t"><span id="e249d6dd9c201e0f">InitPluginDelegate</span></a>(
+            <span class="i">IntPtr</span> <span id="r109 rd" class="r109 r">wkrPtrs</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Prevents the delegate object from being garbage collected so it can be passed to the native code.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">GCHandle</span> <a id="411184ef9185b20d" href="../../../R/411184ef9185b20d.html" target="n" data-glyph="46,1" class="i field">_initDelegateHandle</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Entry point for native code that cannot call static methods.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A function pointer for the static entry point for the WSManPlugin initialization function.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">IntPtr</span> <a id="7144b14c12ba173a" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetEntryDelegate</a>()
+        {
+            <a href="#2b0bb409f3e40f10" class="t t">InitPluginDelegate</a> <span id="r110 rd" class="r110 r">initDelegate</span> = <b>new</b> <span class="t">InitPluginDelegate</span>(<a href="#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<a href="#0973d329c10042c3" class="i method">InitPlugin</a>);
+            <a href="#411184ef9185b20d" class="i field">_initDelegateHandle</a> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r110 r">initDelegate</span>);
+            <b>return</b> <span class="i">Marshal</span>.<span class="i">GetFunctionPointerForDelegate</span>(<span class="r110 r">initDelegate</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

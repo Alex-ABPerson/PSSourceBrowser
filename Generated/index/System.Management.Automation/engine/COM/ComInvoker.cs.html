@@ -1,0 +1,457 @@
+﻿<!DOCTYPE html>
+<html><head><title>ComInvoker.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(448);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/COM/ComInvoker.cs" target="_top">engine\COM\ComInvoker.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+ 
+<b>using</b> <span class="i">COM</span> = <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>.<span class="i">ComTypes</span>;
+ 
+<span class="c">// Disable obsolete warnings about VarEnum and COM-marshaling APIs in CoreCLR</span>
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 618
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <b>internal static class</b> <a id="74869b0424e9f4ba" href="../../R/74869b0424e9f4ba.html" target="n" data-glyph="2,0" class="t t">ComInvoker</a>
+    {
+        <span class="c">// DISP HRESULTS - may be returned by IDispatch.Invoke</span>
+        <b>private const int</b> <a id="163677a33c350a6d" href="../../R/163677a33c350a6d.html" target="n" data-glyph="10,1" class="i field">DISP_E_EXCEPTION</a> = <b>unchecked</b>((<b>int</b>)0x80020009);
+        <span class="c">// LCID for en-US culture</span>
+        <b>private const int</b> <a id="25a8806d9ff35c04" href="../../R/25a8806d9ff35c04.html" target="n" data-glyph="10,1" class="i field">LCID_DEFAULT</a> = 0x0409;
+        <span class="c">// The dispatch identifier for a parameter that receives the value of an assignment in a PROPERTYPUT.</span>
+        <span class="c">// See https://msdn.microsoft.com/library/windows/desktop/ms221242(v=vs.85).aspx for details.</span>
+        <b>private const int</b> <a id="105141ab372d8c75" href="../../R/105141ab372d8c75.html" target="n" data-glyph="10,1" class="i field">DISPID_PROPERTYPUT</a> = -3;
+        <span class="c">// Alias of GUID_NULL. It&#39;s a GUID set to all zero</span>
+        <b>private static readonly</b> <span class="i">Guid</span> <a id="68063890ec3102c8" href="../../R/68063890ec3102c8.html" target="n" data-glyph="46,1" class="i field">s_IID_NULL</a> = <b>new</b> <span class="i">Guid</span>();
+        <span class="c">// Size of the Variant struct</span>
+        <b>private static readonly int</b> <a id="ebfd9b3c999035a3" href="../../R/ebfd9b3c999035a3.html" target="n" data-glyph="46,1" class="i field">s_variantSize</a> = <span class="i">Marshal</span>.<span class="i">SizeOf</span>&lt;<a href="#b9f8585000c44ca1" class="t t">Variant</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Make a by-Ref VARIANT value based on the passed-in VARIANT argument.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">srcVariantPtr</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The source Variant pointer.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">destVariantPtr</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The destination Variant pointer.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static unsafe void</b> <a id="1b9aeeab245226f4" href="../../R/1b9aeeab245226f4.html" target="n" data-glyph="76,1" class="i method">MakeByRefVariant</a>(<span class="i">IntPtr</span> <span id="r0 rd" class="r0 r">srcVariantPtr</span>, <span class="i">IntPtr</span> <span id="r1 rd" class="r1 r">destVariantPtr</span>)
+        {
+            <b>var</b> <span id="r2 rd" class="r2 r">srcVariant</span> = (<a href="#b9f8585000c44ca1" class="t t">Variant</a>*)<span class="r0 r">srcVariantPtr</span>;
+            <b>var</b> <span id="r3 rd" class="r3 r">destVariant</span> = (<a href="#b9f8585000c44ca1" class="t t">Variant</a>*)<span class="r1 r">destVariantPtr</span>;
+ 
+            <b>switch</b> ((<span class="i">VarEnum</span>)<span class="r2 r">srcVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#ebaa1ceb817d3285" class="i field">_vt</a>)
+            {
+                <b>case</b> <span class="i">VarEnum</span>.<span class="i">VT_EMPTY</span>:
+                <b>case</b> <span class="i">VarEnum</span>.<span class="i">VT_NULL</span>:
+                    <span class="c">// These cannot combine with VT_BYREF. Should try passing as a variant reference</span>
+                    <span class="c">// We follow the code in ComBinder to handle &#39;VT_EMPTY&#39; and &#39;VT_NULL&#39;</span>
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#90e788f3277aa5b6" class="i field">_byref</a> = <b>new</b> <span class="i">IntPtr</span>(<span class="r2 r">srcVariant</span>);
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#ebaa1ceb817d3285" class="i field">_vt</a> = (<b>ushort</b>)<span class="i">VarEnum</span>.<span class="i">VT_VARIANT</span> | (<b>ushort</b>)<span class="i">VarEnum</span>.<span class="i">VT_BYREF</span>;
+                    <b>return</b>;
+ 
+                <b>case</b> <span class="i">VarEnum</span>.<span class="i">VT_RECORD</span>:
+                    <span class="c">// Representation of record is the same with or without byref</span>
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#5fd09806d3085d0b" class="i field">_record</a>.<a href="#4b6072e8c60f0bed" class="i field">_record</a> = <span class="r2 r">srcVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#5fd09806d3085d0b" class="i field">_record</a>.<a href="#4b6072e8c60f0bed" class="i field">_record</a>;
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#5fd09806d3085d0b" class="i field">_record</a>.<a href="#db43adafb027e530" class="i field">_recordInfo</a> = <span class="r2 r">srcVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#5fd09806d3085d0b" class="i field">_record</a>.<a href="#db43adafb027e530" class="i field">_recordInfo</a>;
+                    <b>break</b>;
+ 
+                <b>case</b> <span class="i">VarEnum</span>.<span class="i">VT_VARIANT</span>:
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#90e788f3277aa5b6" class="i field">_byref</a> = <b>new</b> <span class="i">IntPtr</span>(<span class="r2 r">srcVariant</span>);
+                    <b>break</b>;
+ 
+                <b>case</b> <span class="i">VarEnum</span>.<span class="i">VT_DECIMAL</span>:
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#90e788f3277aa5b6" class="i field">_byref</a> = <b>new</b> <span class="i">IntPtr</span>(&amp;(<span class="r2 r">srcVariant</span>-&gt;<a href="#aa49908f4a9352de" class="i field">_decimal</a>));
+                    <b>break</b>;
+ 
+                <b>default</b>:
+                    <span class="c">// All the other cases start at the same offset (it&#39;s a Union) so using &amp;_i4 should work.</span>
+                    <span class="c">// This is the same code as in CLR implementation. It could be &amp;_i1, &amp;_i2 and etc. CLR implementation just prefer using &amp;_i4.</span>
+                    <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#90e788f3277aa5b6" class="i field">_byref</a> = <b>new</b> <span class="i">IntPtr</span>(&amp;(<span class="r2 r">srcVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#bf414ddc6f6364bb" class="i field">_unionTypes</a>.<a href="#0239bd4674344b59" class="i field">_i4</a>));
+                    <b>break</b>;
+            }
+ 
+            <span class="r3 r">destVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#ebaa1ceb817d3285" class="i field">_vt</a> = (<b>ushort</b>)(<span class="r2 r">srcVariant</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#ebaa1ceb817d3285" class="i field">_vt</a> | (<b>ushort</b>)<span class="i">VarEnum</span>.<span class="i">VT_BYREF</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Alloc memory for a VARIANT array with the specified length.</span>
+        <span class="c">///</span><span class="c"> Also initialize the VARIANT elements to be the type &#39;VT_EMPTY&#39;.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">length</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Array length.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Pointer to the array.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static unsafe</b> <span class="i">IntPtr</span> <a id="7de146d4fa94d887" href="../../R/7de146d4fa94d887.html" target="n" data-glyph="76,1" class="i method">NewVariantArray</a>(<b>int</b> <span id="r4 rd" class="r4 r">length</span>)
+        {
+            <span class="i">IntPtr</span> <span id="r5 rd" class="r5 r">variantArray</span> = <span class="i">Marshal</span>.<span class="i">AllocCoTaskMem</span>(<a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r4 r">length</span>);
+ 
+            <b>for</b> (<b>int</b> <span id="r6 rd" class="r6 r">i</span> = 0; <span class="r6 r">i</span> &lt; <span class="r4 r">length</span>; <span class="r6 r">i</span>++)
+            {
+                <span class="i">IntPtr</span> <span id="r7 rd" class="r7 r">currentVarPtr</span> = <span class="r5 r">variantArray</span> + <a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r6 r">i</span>;
+                <b>var</b> <span id="r8 rd" class="r8 r">currentVar</span> = (<a href="#b9f8585000c44ca1" class="t t">Variant</a>*)<span class="r7 r">currentVarPtr</span>;
+                <span class="r8 r">currentVar</span>-&gt;<a href="#9077cb6ddb304fbc" class="i field">_typeUnion</a>.<a href="#ebaa1ceb817d3285" class="i field">_vt</a> = (<b>ushort</b>)<span class="i">VarEnum</span>.<span class="i">VT_EMPTY</span>;
+            }
+ 
+            <b>return</b> <span class="r5 r">variantArray</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Generate the ByRef array indicating whether the corresponding argument is by-reference.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">parameters</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Parameters retrieved from metadata.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">argumentCount</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Count of arguments to pass in IDispatch.Invoke.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">isPropertySet</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Indicate if we are handling arguments for PropertyPut/PropertyPutRef.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static bool</b>[] <a id="60a55f690d09a3e7" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">GetByRefArray</a>(<a href="../CoreAdapter.cs.html#d694ba38a24d6665" class="t t">ParameterInformation</a>[] <span id="r9 rd" class="r9 r">parameters</span>, <b>int</b> <span id="r10 rd" class="r10 r">argumentCount</span>, <b>bool</b> <span id="r11 rd" class="r11 r">isPropertySet</span>)
+        {
+            <b>if</b> (<span class="r9 r">parameters</span>.<span class="i">Length</span> == 0)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>var</b> <span id="r12 rd" class="r12 r">byRef</span> = <b>new</b> <b>bool</b>[<span class="r10 r">argumentCount</span>];
+            <b>int</b> <span id="r13 rd" class="r13 r">argsToProcess</span> = <span class="r10 r">argumentCount</span>;
+            <b>if</b> (<span class="r11 r">isPropertySet</span>)
+            {
+                <span class="c">// If it&#39;s PropertySet, then the last value in arguments is the right-hand side value.</span>
+                <span class="c">// There is no corresponding parameter for that value, so it&#39;s for sure not by-ref.</span>
+                <span class="c">// Hence, set the last item of byRef array to be false.</span>
+                <span class="r13 r">argsToProcess</span> = <span class="r10 r">argumentCount</span> - 1;
+                <span class="r12 r">byRef</span>[<span class="r13 r">argsToProcess</span>] = <b>false</b>;
+            }
+ 
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r9 r">parameters</span>.<span class="i">Length</span> &gt;= <span class="r13 r">argsToProcess</span>,
+                               <span class="s">&quot;There might be more parameters than argsToProcess due unspecified optional arguments&quot;</span>);
+ 
+            <b>for</b> (<b>int</b> <span id="r14 rd" class="r14 r">i</span> = 0; <span class="r14 r">i</span> &lt; <span class="r13 r">argsToProcess</span>; <span class="r14 r">i</span>++)
+            {
+                <span class="r12 r">byRef</span>[<span class="r14 r">i</span>] = <span class="r9 r">parameters</span>[<span class="r14 r">i</span>].<a href="../CoreAdapter.cs.html#682d6e36c933d06b" class="i field">isByRef</a>;
+            }
+ 
+            <b>return</b> <span class="r12 r">byRef</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Invoke the COM member.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">target</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">IDispatch object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">dispId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Dispatch identifier that identifies the member.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments passed in.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">byRef</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Boolean array that indicates by-Ref parameters.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">invokeKind</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Invocation kind.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static object</b> <a id="2fb3ab1a752406e0" href="../../R/2fb3ab1a752406e0.html" target="n" data-glyph="74,1" class="i method">Invoke</a>(<a href="ComDispatch.cs.html#3ef345b929364075" class="t t">IDispatch</a> <span id="r15 rd" class="r15 r">target</span>, <b>int</b> <span id="r16 rd" class="r16 r">dispId</span>, <b>object</b>[] <span id="r17 rd" class="r17 r">args</span>, <b>bool</b>[] <span id="r18 rd" class="r18 r">byRef</span>, <span class="i">COM</span>.<span class="i">INVOKEKIND</span> <span id="r19 rd" class="r19 r">invokeKind</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r15 r">target</span> != <b>null</b>, <span class="s">&quot;Caller makes sure an IDispatch object passed in.&quot;</span>);
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r17 r">args</span> == <b>null</b> || <span class="r18 r">byRef</span> == <b>null</b> || <span class="r17 r">args</span>.<span class="i">Length</span> == <span class="r18 r">byRef</span>.<span class="i">Length</span>,
+                <span class="s">&quot;If &#39;args&#39; and &#39;byRef&#39; are not null, then they should be one-on-one mapping.&quot;</span>);
+ 
+            <b>int</b> <span id="r20 rd" class="r20 r">argCount</span> = <span class="r17 r">args</span> != <b>null</b> ? <span class="r17 r">args</span>.<span class="i">Length</span> : 0;
+            <b>int</b> <span id="r21 rd" class="r21 r">refCount</span> = <span class="r18 r">byRef</span> != <b>null</b> ? <span class="r18 r">byRef</span>.<span class="i">Count</span>(<span id="r22 rd" class="r22 r">c</span> =&gt; <span class="r22 r">c</span>) : 0;
+            <span class="i">IntPtr</span> <span id="r23 rd" class="r23 r">variantArgArray</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>, <span id="r24 rd" class="r24 r">dispIdArray</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>, <span id="r25 rd" class="r25 r">tmpVariants</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+ 
+            <b>try</b>
+            {
+                <span class="c">// Package arguments</span>
+                <b>if</b> (<span class="r20 r">argCount</span> &gt; 0)
+                {
+                    <span class="r23 r">variantArgArray</span> = <a href="#7de146d4fa94d887" class="i method">NewVariantArray</a>(<span class="r20 r">argCount</span>);
+ 
+                    <b>int</b> <span id="r26 rd" class="r26 r">refIndex</span> = 0;
+                    <b>for</b> (<b>int</b> <span id="r27 rd" class="r27 r">i</span> = 0; <span class="r27 r">i</span> &lt; <span class="r20 r">argCount</span>; <span class="r27 r">i</span>++)
+                    {
+                        <span class="c">// !! The arguments should be in REVERSED order!!</span>
+                        <b>int</b> <span id="r28 rd" class="r28 r">actualIndex</span> = <span class="r20 r">argCount</span> - <span class="r27 r">i</span> - 1;
+                        <span class="i">IntPtr</span> <span id="r29 rd" class="r29 r">varArgPtr</span> = <span class="r23 r">variantArgArray</span> + <a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r28 r">actualIndex</span>;
+ 
+                        <span class="c">// If need to pass by ref, create a by-ref variant</span>
+                        <b>if</b> (<span class="r18 r">byRef</span> != <b>null</b> &amp;&amp; <span class="r18 r">byRef</span>[<span class="r27 r">i</span>])
+                        {
+                            <span class="c">// Allocate memory for temporary VARIANTs used in by-ref marshalling</span>
+                            <b>if</b> (<span class="r25 r">tmpVariants</span> == <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                            {
+                                <span class="r25 r">tmpVariants</span> = <a href="#7de146d4fa94d887" class="i method">NewVariantArray</a>(<span class="r21 r">refCount</span>);
+                            }
+ 
+                            <span class="c">// Create a VARIANT that the by-ref VARIANT points to</span>
+                            <span class="i">IntPtr</span> <span id="r30 rd" class="r30 r">tmpVarPtr</span> = <span class="r25 r">tmpVariants</span> + <a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r26 r">refIndex</span>;
+                            <span class="i">Marshal</span>.<span class="i">GetNativeVariantForObject</span>(<span class="r17 r">args</span>[<span class="r27 r">i</span>], <span class="r30 r">tmpVarPtr</span>);
+ 
+                            <span class="c">// Create the by-ref VARIANT</span>
+                            <a href="#1b9aeeab245226f4" class="i method">MakeByRefVariant</a>(<span class="r30 r">tmpVarPtr</span>, <span class="r29 r">varArgPtr</span>);
+                            <span class="r26 r">refIndex</span>++;
+                        }
+                        <b>else</b>
+                        {
+                            <span class="i">Marshal</span>.<span class="i">GetNativeVariantForObject</span>(<span class="r17 r">args</span>[<span class="r27 r">i</span>], <span class="r29 r">varArgPtr</span>);
+                        }
+                    }
+                }
+ 
+                <b>var</b> <span id="r31 rd" class="r31 r">paramArray</span> = <b>new</b> <span class="i">COM</span>.<span class="i">DISPPARAMS</span>[1];
+                <span class="r31 r">paramArray</span>[0].<span class="i">rgvarg</span> = <span class="r23 r">variantArgArray</span>;
+                <span class="r31 r">paramArray</span>[0].<span class="i">cArgs</span> = <span class="r20 r">argCount</span>;
+ 
+                <b>if</b> (<span class="r19 r">invokeKind</span> == <span class="i">COM</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUT</span> || <span class="r19 r">invokeKind</span> == <span class="i">COM</span>.<span class="i">INVOKEKIND</span>.<span class="i">INVOKE_PROPERTYPUTREF</span>)
+                {
+                    <span class="c">// For property putters, the first DISPID argument needs to be DISPID_PROPERTYPUT</span>
+                    <span class="r24 r">dispIdArray</span> = <span class="i">Marshal</span>.<span class="i">AllocCoTaskMem</span>(4); <span class="c">// Allocate 4 bytes to hold a 32-bit signed integer</span>
+                    <span class="i">Marshal</span>.<span class="i">WriteInt32</span>(<span class="r24 r">dispIdArray</span>, <a href="#105141ab372d8c75" class="i field">DISPID_PROPERTYPUT</a>);
+ 
+                    <span class="r31 r">paramArray</span>[0].<span class="i">cNamedArgs</span> = 1;
+                    <span class="r31 r">paramArray</span>[0].<span class="i">rgdispidNamedArgs</span> = <span class="r24 r">dispIdArray</span>;
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Otherwise, no named parameters are necessary since powershell parser doesn&#39;t support named parameter</span>
+                    <span class="r31 r">paramArray</span>[0].<span class="i">cNamedArgs</span> = 0;
+                    <span class="r31 r">paramArray</span>[0].<span class="i">rgdispidNamedArgs</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+                }
+ 
+                <span class="c">// Make the call</span>
+                <a href="#553af98ea02455ff" class="t t">EXCEPINFO</a> <span id="r32 rd" class="r32 r">info</span> = <b>default</b>(<a href="#553af98ea02455ff" class="t t">EXCEPINFO</a>);
+                <b>object</b> <span id="r33 rd" class="r33 r">result</span> = <b>null</b>;
+ 
+                <b>try</b>
+                {
+                    <span class="c">// &#39;puArgErr&#39; is set when IDispatch.Invoke fails with error code &#39;DISP_E_PARAMNOTFOUND&#39; and &#39;DISP_E_TYPEMISMATCH&#39;.</span>
+                    <span class="c">// Appropriate exceptions will be thrown in such cases, but FullCLR doesn&#39;t use &#39;puArgErr&#39; in the exception handling, so we also ignore it.</span>
+                    <b>uint</b> <span id="r34 rd" class="r34 r">puArgErrNotUsed</span> = 0;
+                    <span class="r15 r">target</span>.<span class="i">Invoke</span>(<span class="r16 r">dispId</span>, <a href="#68063890ec3102c8" class="i field">s_IID_NULL</a>, <a href="#25a8806d9ff35c04" class="i field">LCID_DEFAULT</a>, <span class="r19 r">invokeKind</span>, <span class="r31 r">paramArray</span>, <b>out</b> <span class="r33 r">result</span>, <b>out</b> <span class="r32 r">info</span>, <b>out</b> <span class="r34 r">puArgErrNotUsed</span>);
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r35 rd" class="r35 r">innerException</span>)
+                {
+                    <span class="c">// When &#39;IDispatch.Invoke&#39; returns error code, CLR will raise exception based on internal HR-to-Exception mapping.</span>
+                    <span class="c">// Description of the return code can be found at https://msdn.microsoft.com/library/windows/desktop/ms221479(v=vs.85).aspx</span>
+                    <span class="c">// According to CoreCLR team (yzha), the exception needs to be wrapped as an inner exception of TargetInvocationException.</span>
+ 
+                    <b>string</b> <span id="r36 rd" class="r36 r">exceptionMsg</span> = <b>null</b>;
+                    <b>if</b> (<span class="r35 r">innerException</span>.<span class="i">HResult</span> == <a href="#163677a33c350a6d" class="i field">DISP_E_EXCEPTION</a>)
+                    {
+                        <span class="c">// Invoke was successful but the actual underlying method failed.</span>
+                        <span class="c">// In this case, we use EXCEPINFO to get additional error info.</span>
+ 
+                        <span class="c">// Use EXCEPINFO.scode or EXCEPINFO.wCode as HR to construct the correct exception.</span>
+                        <b>int</b> <span id="r37 rd" class="r37 r">code</span> = <span class="r32 r">info</span>.<a href="#1fdced27ae201fbb" class="i field">scode</a> != 0 ? <span class="r32 r">info</span>.<a href="#1fdced27ae201fbb" class="i field">scode</a> : <span class="r32 r">info</span>.<a href="#1a5b52a7ee4f0349" class="i field">wCode</a>;
+                        <span class="r35 r">innerException</span> = <span class="i">Marshal</span>.<span class="i">GetExceptionForHR</span>(<span class="r37 r">code</span>, <span class="i">IntPtr</span>.<span class="i">Zero</span>) ?? <span class="r35 r">innerException</span>;
+ 
+                        <span class="c">// Get the richer error description if it&#39;s available.</span>
+                        <b>if</b> (<span class="r32 r">info</span>.<a href="#3af962f0dee00c4d" class="i field">bstrDescription</a> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                        {
+                            <span class="r36 r">exceptionMsg</span> = <span class="i">Marshal</span>.<span class="i">PtrToStringBSTR</span>(<span class="r32 r">info</span>.<a href="#3af962f0dee00c4d" class="i field">bstrDescription</a>);
+                            <span class="i">Marshal</span>.<span class="i">FreeBSTR</span>(<span class="r32 r">info</span>.<a href="#3af962f0dee00c4d" class="i field">bstrDescription</a>);
+                        }
+ 
+                        <span class="c">// Free the BSTRs</span>
+                        <b>if</b> (<span class="r32 r">info</span>.<a href="#f459beabe529ccb9" class="i field">bstrSource</a> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                        {
+                            <span class="i">Marshal</span>.<span class="i">FreeBSTR</span>(<span class="r32 r">info</span>.<a href="#f459beabe529ccb9" class="i field">bstrSource</a>);
+                        }
+ 
+                        <b>if</b> (<span class="r32 r">info</span>.<a href="#bac13ee275a5710e" class="i field">bstrHelpFile</a> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                        {
+                            <span class="i">Marshal</span>.<span class="i">FreeBSTR</span>(<span class="r32 r">info</span>.<a href="#bac13ee275a5710e" class="i field">bstrHelpFile</a>);
+                        }
+                    }
+ 
+                    <b>var</b> <span id="r38 rd" class="r38 r">outerException</span> = <span class="r36 r">exceptionMsg</span> == <b>null</b>
+                                              ? <b>new</b> <span class="i">TargetInvocationException</span>(<span class="r35 r">innerException</span>)
+                                              : <b>new</b> <span class="i">TargetInvocationException</span>(<span class="r36 r">exceptionMsg</span>, <span class="r35 r">innerException</span>);
+                    <b>throw</b> <span class="r38 r">outerException</span>;
+                }
+ 
+                <span class="c">// Now back propagate the by-ref arguments</span>
+                <b>if</b> (<span class="r21 r">refCount</span> &gt; 0)
+                {
+                    <b>for</b> (<b>int</b> <span id="r39 rd" class="r39 r">i</span> = 0; <span class="r39 r">i</span> &lt; <span class="r20 r">argCount</span>; <span class="r39 r">i</span>++)
+                    {
+                        <span class="c">// !! The arguments should be in REVERSED order!!</span>
+                        <b>int</b> <span id="r40 rd" class="r40 r">actualIndex</span> = <span class="r20 r">argCount</span> - <span class="r39 r">i</span> - 1;
+ 
+                        <span class="c">// If need to pass by ref, back propagate</span>
+                        <b>if</b> (<span class="r18 r">byRef</span> != <b>null</b> &amp;&amp; <span class="r18 r">byRef</span>[<span class="r39 r">i</span>])
+                        {
+                            <span class="r17 r">args</span>[<span class="r39 r">i</span>] = <span class="i">Marshal</span>.<span class="i">GetObjectForNativeVariant</span>(<span class="r23 r">variantArgArray</span> + <a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r40 r">actualIndex</span>);
+                        }
+                    }
+                }
+ 
+                <b>return</b> <span class="r33 r">result</span>;
+            }
+            <b>finally</b>
+            {
+                <span class="c">// Free the variant argument array</span>
+                <b>if</b> (<span class="r23 r">variantArgArray</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                {
+                    <b>for</b> (<b>int</b> <span id="r41 rd" class="r41 r">i</span> = 0; <span class="r41 r">i</span> &lt; <span class="r20 r">argCount</span>; <span class="r41 r">i</span>++)
+                    {
+                        <span class="i">VariantClear</span>(<span class="r23 r">variantArgArray</span> + <a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r41 r">i</span>);
+                    }
+ 
+                    <span class="i">Marshal</span>.<span class="i">FreeCoTaskMem</span>(<span class="r23 r">variantArgArray</span>);
+                }
+ 
+                <span class="c">// Free the dispId array</span>
+                <b>if</b> (<span class="r24 r">dispIdArray</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                {
+                    <span class="i">Marshal</span>.<span class="i">FreeCoTaskMem</span>(<span class="r24 r">dispIdArray</span>);
+                }
+ 
+                <span class="c">// Free the temporary variants created when handling by-Ref arguments</span>
+                <b>if</b> (<span class="r25 r">tmpVariants</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                {
+                    <b>for</b> (<b>int</b> <span id="r42 rd" class="r42 r">i</span> = 0; <span class="r42 r">i</span> &lt; <span class="r21 r">refCount</span>; <span class="r42 r">i</span>++)
+                    {
+                        <span class="i">VariantClear</span>(<span class="r25 r">tmpVariants</span> + <a href="#ebfd9b3c999035a3" class="i field">s_variantSize</a> * <span class="r42 r">i</span>);
+                    }
+ 
+                    <span class="i">Marshal</span>.<span class="i">FreeCoTaskMem</span>(<span class="r25 r">tmpVariants</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clear variables of type VARIANTARG (or VARIANT) before the memory containing the VARIANTARG is freed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">pVariant</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">DllImport</span>(<span class="s">&quot;oleaut32.dll&quot;</span>)]
+        <b>internal static extern void</b> <a id="29cf5ddc95ce6f5f" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">VariantClear</a>(<span class="i">IntPtr</span> <span id="r43 rd" class="r43 r">pVariant</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We have to declare &#39;bstrSource&#39;, &#39;bstrDescription&#39; and &#39;bstrHelpFile&#39; as pointers because</span>
+        <span class="c">///</span><span class="c"> CLR marshalling layer would try to free those BSTRs by default and that is not correct.</span>
+        <span class="c">///</span><span class="c"> Therefore, manually marshalling might be needed to extract &#39;bstrDescription&#39;.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Sequential</span>)]
+        <b>internal struct</b> <a id="553af98ea02455ff" href="../../R/553af98ea02455ff.html" target="n" data-glyph="110,1" class="t t"><span id="d566894ccafec752">EXCEPINFO</span></a>
+        {
+            <b>public short</b> <a id="1a5b52a7ee4f0349" href="../../R/1a5b52a7ee4f0349.html" target="n" data-glyph="42,2" class="i field">wCode</a>;
+            <b>public short</b> <a id="97b750c9535b885c" href="../../R/../../0000000000.html" target="n" data-glyph="42,2" class="i field">wReserved</a>;
+            <b>public</b> <span class="i">IntPtr</span> <a id="f459beabe529ccb9" href="../../R/f459beabe529ccb9.html" target="n" data-glyph="42,2" class="i field">bstrSource</a>;
+            <b>public</b> <span class="i">IntPtr</span> <a id="3af962f0dee00c4d" href="../../R/3af962f0dee00c4d.html" target="n" data-glyph="42,2" class="i field">bstrDescription</a>;
+            <b>public</b> <span class="i">IntPtr</span> <a id="bac13ee275a5710e" href="../../R/bac13ee275a5710e.html" target="n" data-glyph="42,2" class="i field">bstrHelpFile</a>;
+            <b>public int</b> <a id="fa4eba69867d517d" href="../../R/../../0000000000.html" target="n" data-glyph="42,2" class="i field">dwHelpContext</a>;
+            <b>public</b> <span class="i">IntPtr</span> <a id="ae1da5caf512744a" href="../../R/../../0000000000.html" target="n" data-glyph="42,2" class="i field">pvReserved</a>;
+            <b>public</b> <span class="i">IntPtr</span> <a id="474e715233f97004" href="../../R/../../0000000000.html" target="n" data-glyph="42,2" class="i field">pfnDeferredFillIn</a>;
+            <b>public int</b> <a id="1fdced27ae201fbb" href="../../R/1fdced27ae201fbb.html" target="n" data-glyph="42,2" class="i field">scode</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> VARIANT type used for passing arguments in COM interop.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Explicit</span>)]
+        <b>internal struct</b> <a id="b9f8585000c44ca1" href="../../R/b9f8585000c44ca1.html" target="n" data-glyph="110,1" class="t t"><span id="58c6c195ac677f66">Variant</span></a>
+        {
+            <span class="c">// Most of the data types in the Variant are carried in _typeUnion</span>
+            [<span class="i">FieldOffset</span>(0)]
+            <b>internal</b> <a href="#3b403a835586df2a" class="t t">TypeUnion</a> <a id="9077cb6ddb304fbc" href="../../R/9077cb6ddb304fbc.html" target="n" data-glyph="44,2" class="i field">_typeUnion</a>;
+ 
+            <span class="c">// Decimal is the largest data type and it needs to use the space that is normally unused in TypeUnion._wReserved1, etc.</span>
+            <span class="c">// Hence, it is declared to completely overlap with TypeUnion. A Decimal does not use the first two bytes, and so</span>
+            <span class="c">// TypeUnion._vt can still be used to encode the type.</span>
+            [<span class="i">FieldOffset</span>(0)]
+            <b>internal</b> <span class="i">Decimal</span> <a id="aa49908f4a9352de" href="../../R/aa49908f4a9352de.html" target="n" data-glyph="44,2" class="i field">_decimal</a>;
+ 
+            [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Explicit</span>)]
+            <b>internal struct</b> <a id="3b403a835586df2a" href="../../R/3b403a835586df2a.html" target="n" data-glyph="110,2" class="t t"><span id="bd3a8b2c61f1978c">TypeUnion</span></a>
+            {
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal ushort</b> <a id="ebaa1ceb817d3285" href="../../R/ebaa1ceb817d3285.html" target="n" data-glyph="44,3" class="i field">_vt</a>;
+ 
+                [<span class="i">FieldOffset</span>(2)]
+                <b>internal ushort</b> <a id="5a279adecbc8d10d" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_wReserved1</a>;
+ 
+                [<span class="i">FieldOffset</span>(4)]
+                <b>internal ushort</b> <a id="8b5f6f50c0330325" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_wReserved2</a>;
+ 
+                [<span class="i">FieldOffset</span>(6)]
+                <b>internal ushort</b> <a id="1df6e3ca3dd79374" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_wReserved3</a>;
+ 
+                [<span class="i">FieldOffset</span>(8)]
+                <b>internal</b> <a href="#5d98b00008625aa9" class="t t">UnionTypes</a> <a id="bf414ddc6f6364bb" href="../../R/bf414ddc6f6364bb.html" target="n" data-glyph="44,3" class="i field">_unionTypes</a>;
+            }
+ 
+            [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Sequential</span>)]
+            <b>internal struct</b> <a id="64632473a1075115" href="../../R/64632473a1075115.html" target="n" data-glyph="110,2" class="t t"><span id="292f957a5ef98b34">Record</span></a>
+            {
+                <b>internal</b> <span class="i">IntPtr</span> <a id="4b6072e8c60f0bed" href="../../R/4b6072e8c60f0bed.html" target="n" data-glyph="44,3" class="i field">_record</a>;
+                <b>internal</b> <span class="i">IntPtr</span> <a id="db43adafb027e530" href="../../R/db43adafb027e530.html" target="n" data-glyph="44,3" class="i field">_recordInfo</a>;
+            }
+ 
+            [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Explicit</span>)]
+            <b>internal struct</b> <a id="5d98b00008625aa9" href="../../R/5d98b00008625aa9.html" target="n" data-glyph="110,2" class="t t"><span id="ab6317e491a1ddbd">UnionTypes</span></a>
+            {
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal sbyte</b> <a id="c98d1c1b645225f2" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_i1</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int16</span> <a id="0d8a6c95f3dd82d7" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_i2</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int32</span> <a id="0239bd4674344b59" href="../../R/0239bd4674344b59.html" target="n" data-glyph="44,3" class="i field">_i4</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int64</span> <a id="0bc59ce1cf9e39bd" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_i8</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal byte</b> <a id="24b2a69fb7364865" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_ui1</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">UInt16</span> <a id="f20e12f2211a3ad6" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_ui2</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">UInt32</span> <a id="ced4029f0b2ba97b" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_ui4</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">UInt64</span> <a id="5159e7ebfc13611c" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_ui8</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int32</span> <a id="791d3a06d1dbf367" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_int</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">UInt32</span> <a id="107ceb18733e9d68" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_uint</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int16</span> <a id="1526455d27e54edf" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_bool</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int32</span> <a id="4181fe1afa900df0" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_error</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Single</span> <a id="95468ad2084b74b4" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_r4</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal double</b> <a id="aa5382a67587ace5" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_r8</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">Int64</span> <a id="5f2a2a289df79251" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_cy</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal double</b> <a id="2e98fcc5054fca85" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_date</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">IntPtr</span> <a id="158eef0d2609b69d" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_bstr</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">IntPtr</span> <a id="539f67cb6ed8e9aa" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_unknown</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">IntPtr</span> <a id="68fd6ac0e0cf5ce3" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_dispatch</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">IntPtr</span> <a id="bea100c70207c49e" href="../../R/../../0000000000.html" target="n" data-glyph="44,3" class="i field">_pvarVal</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <span class="i">IntPtr</span> <a id="90e788f3277aa5b6" href="../../R/90e788f3277aa5b6.html" target="n" data-glyph="44,3" class="i field">_byref</a>;
+ 
+                [<span class="i">FieldOffset</span>(0)]
+                <b>internal</b> <a href="#64632473a1075115" class="t t">Record</a> <a id="5fd09806d3085d0b" href="../../R/5fd09806d3085d0b.html" target="n" data-glyph="44,3" class="i field">_record</a>;
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

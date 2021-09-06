@@ -1,0 +1,1485 @@
+﻿<!DOCTYPE html>
+<html><head><title>PSType.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(1476);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/parser/PSType.cs" target="_top">engine\parser\PSType.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>.<span class="i">Emit</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>
+{
+    <b>internal static class</b> <a id="6158471889fabd77" href="../../R/6158471889fabd77.html" target="n" data-glyph="2,0" class="t t">TypeDefiner</a>
+    {
+        <b>internal const string</b> <a id="02a7dfd3fb579de9" href="../../R/02a7dfd3fb579de9.html" target="n" data-glyph="8,1" class="i field">DynamicClassAssemblyName</a> = <span class="s">&quot;PowerShell Class Assembly&quot;</span>;
+        <b>internal const string</b> <a id="ad22e2e9179304d5" href="../../R/ad22e2e9179304d5.html" target="n" data-glyph="8,1" class="i field">DynamicClassAssemblyFullNamePrefix</a> = <span class="s">&quot;PowerShell Class Assembly,&quot;</span>;
+ 
+        <b>private static int</b> <a id="2149fe966e47418c" href="../../R/2149fe966e47418c.html" target="n" data-glyph="46,1" class="i field">s_globalCounter</a> = 0;
+ 
+        <b>private static readonly</b> <span class="i">CustomAttributeBuilder</span> <a id="fb22167000d5ebe3" href="../../R/fb22167000d5ebe3.html" target="n" data-glyph="46,1" class="i field">s_hiddenCustomAttributeBuilder</a> =
+            <b>new</b> <span class="i">CustomAttributeBuilder</span>(<b>typeof</b>(<a href="../Attributes.cs.html#95fc557737f7107e" class="t t">HiddenAttribute</a>).<span class="i">GetConstructor</span>(<span class="i">Type</span>.<span class="i">EmptyTypes</span>), <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>object</b>&gt;());
+ 
+        <b>private static readonly string</b> <a id="b3b470d9c8ca1c23" href="../../R/b3b470d9c8ca1c23.html" target="n" data-glyph="46,1" class="i field">s_sessionStateKeeperFieldName</a> = <span class="s">&quot;__sessionStateKeeper&quot;</span>;
+        <b>internal static readonly string</b> <a id="b947af97221dadcf" href="../../R/b947af97221dadcf.html" target="n" data-glyph="44,1" class="i field">SessionStateFieldName</a> = <span class="s">&quot;__sessionState&quot;</span>;
+ 
+        <b>private static readonly</b> <span class="i">MethodInfo</span> <a id="a4a5d08c5d441756" href="../../R/a4a5d08c5d441756.html" target="n" data-glyph="46,1" class="i field">s_sessionStateKeeper_GetSessionState</a> =
+            <b>typeof</b>(<a href="../runtime/Operations/ClassOps.cs.html#af827321341eaffb" class="t t">SessionStateKeeper</a>).<span class="i">GetMethod</span>(<span class="s">&quot;GetSessionState&quot;</span>, <span class="i">BindingFlags</span>.<span class="i">Instance</span> | <span class="i">BindingFlags</span>.<span class="i">Public</span>);
+ 
+        <b>private static bool</b> <a id="0ad9ab55a22c3665" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">TryConvertArg</a>(<b>object</b> <span id="r0 rd" class="r0 r">arg</span>, <span class="i">Type</span> <span id="r1 rd" class="r1 r">type</span>, <b>out object</b> <span id="r2 rd" class="r2 r">result</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r3 rd" class="r3 r">parser</span>, <a href="Position.cs.html#bbc751d075344454" class="t t">IScriptExtent</a> <span id="r4 rd" class="r4 r">errorExtent</span>)
+        {
+            <span class="c">// This code could be added to LanguagePrimitives.ConvertTo</span>
+            <b>if</b> (<span class="r0 r">arg</span> != <b>null</b> &amp;&amp; <span class="r0 r">arg</span>.<span class="i">GetType</span>() == <span class="r1 r">type</span>)
+            {
+                <span class="r2 r">result</span> = <span class="r0 r">arg</span>;
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>if</b> (!<a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../LanguagePrimitives.cs.html#12cdec88face783f" class="i method">TryConvertTo</a>(<span class="r0 r">arg</span>, <span class="r1 r">type</span>, <b>out</b> <span class="r2 r">result</span>))
+            {
+                <span class="r3 r">parser</span>.<span class="i">ReportError</span>(<span class="r4 r">errorExtent</span>,
+                    <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">CannotConvertValue</span>),
+                    <span class="i">ParserStrings</span>.<span class="i">CannotConvertValue</span>,
+                    <a href="../../P/6fbe6ac0a6a7f8d2.html#6fbe6ac0a6a7f8d2" class="t t">ToStringCodeMethods</a>.<a href="../MshObject.cs.html#edc1ecfda5d75ea9" class="i method">Type</a>(<span class="r1 r">type</span>));
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>private static</b> <span class="i">CustomAttributeBuilder</span> <a id="0d5656f2c52c4ee0" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetAttributeBuilder</a>(<a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r5 rd" class="r5 r">parser</span>, <a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a> <span id="r6 rd" class="r6 r">attributeAst</span>, <span class="i">AttributeTargets</span> <span id="r7 rd" class="r7 r">attributeTargets</span>)
+        {
+            <b>var</b> <span id="r8 rd" class="r8 r">attributeType</span> = <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#eae1f2f74db44d11" class="i property">TypeName</a>.<a href="ast.cs.html#32e4c2eb2fe24684" class="i method">GetReflectionAttributeType</a>();
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r8 r">attributeType</span> != <b>null</b>, <span class="s">&quot;Semantic checks should have verified attribute type exists&quot;</span>);
+ 
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(
+                <span class="r8 r">attributeType</span>.<span class="i">GetCustomAttribute</span>&lt;<span class="i">AttributeUsageAttribute</span>&gt;(<b>true</b>) == <b>null</b> ||
+                (<span class="r8 r">attributeType</span>.<span class="i">GetCustomAttribute</span>&lt;<span class="i">AttributeUsageAttribute</span>&gt;(<b>true</b>).<span class="i">ValidOn</span> &amp; <span class="r7 r">attributeTargets</span>) != 0, <span class="s">&quot;Semantic checks should have verified attribute usage&quot;</span>);
+ 
+            <b>var</b> <span id="r9 rd" class="r9 r">positionalArgs</span> = <b>new</b> <b>object</b>[<span class="r6 r">attributeAst</span>.<a href="ast.cs.html#0ad84283990f3553" class="i property">PositionalArguments</a>.<span class="i">Count</span>];
+            <a href="ConstantValues.cs.html#2a167202840f224e" class="k">var</a> <span id="r10 rd" class="r10 r">cvv</span> = <b>new</b> <span class="t">ConstantValueVisitor</span> { <a href="ConstantValues.cs.html#1ccd283df010f4e4" class="i property">AttributeArgument</a> = <b>false</b> };
+            <b>for</b> (<b>var</b> <span id="r11 rd" class="r11 r">i</span> = 0; <span class="r11 r">i</span> &lt; <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#0ad84283990f3553" class="i property">PositionalArguments</a>.<span class="i">Count</span>; <span class="r11 r">i</span>++)
+            {
+                <b>var</b> <span id="r12 rd" class="r12 r">posArg</span> = <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#0ad84283990f3553" class="i property">PositionalArguments</a>[<span class="r11 r">i</span>];
+                <span class="r9 r">positionalArgs</span>[<span class="r11 r">i</span>] = <span class="r12 r">posArg</span>.<span class="i">Accept</span>(<span class="r10 r">cvv</span>);
+            }
+ 
+            <b>var</b> <span id="r13 rd" class="r13 r">ctorInfos</span> = <span class="r8 r">attributeType</span>.<span class="i">GetConstructors</span>();
+            <b>var</b> <span id="r14 rd" class="r14 r">newConstructors</span> = <a href="../CoreAdapter.cs.html#27353615475f6dbc" class="t t">DotNetAdapter</a>.<span class="i">GetMethodInformationArray</span>(<span class="r13 r">ctorInfos</span>);
+ 
+            <b>string</b> <span id="r15 rd" class="r15 r">errorId</span> = <b>null</b>;
+            <b>string</b> <span id="r16 rd" class="r16 r">errorMsg</span> = <b>null</b>;
+            <b>bool</b> <span id="r17 rd" class="r17 r">expandParamsOnBest</span>;
+            <b>bool</b> <span id="r18 rd" class="r18 r">callNonVirtually</span>;
+            <b>var</b> <span id="r19 rd" class="r19 r">positionalArgCount</span> = <span class="r9 r">positionalArgs</span>.<span class="i">Length</span>;
+ 
+            <a href="../CoreAdapter.cs.html#8ae0c30e474b7c1e" class="k">var</a> <span id="r20 rd" class="r20 r">bestMethod</span> = <a href="../CoreAdapter.cs.html#88aa0312e9fc25c7" class="t t">Adapter</a>.<a href="../CoreAdapter.cs.html#938ac4d3d430f987" class="i method">FindBestMethod</a>(
+                <span class="r14 r">newConstructors</span>,
+                <span class="r21 r">invocationConstraints</span>: <b>null</b>,
+                <span class="r22 r">allowCastingToByRefLikeType</span>: <b>false</b>,
+                <span class="r9 r">positionalArgs</span>,
+                <b>ref</b> <span class="r15 r">errorId</span>,
+                <b>ref</b> <span class="r16 r">errorMsg</span>,
+                <b>out</b> <span class="r17 r">expandParamsOnBest</span>,
+                <b>out</b> <span class="r18 r">callNonVirtually</span>);
+ 
+            <b>if</b> (<span class="r20 r">bestMethod</span> == <b>null</b>)
+            {
+                <span class="r5 r">parser</span>.<a href="Parser.cs.html#67620d15942976b8" class="i method">ReportError</a>(<b>new</b> <span class="t">ParseError</span>(<span class="r6 r">attributeAst</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>, <span class="r15 r">errorId</span>,
+                    <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="r16 r">errorMsg</span>, <span class="r8 r">attributeType</span>.<span class="i">Name</span>, <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#0ad84283990f3553" class="i property">PositionalArguments</a>.<span class="i">Count</span>)));
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>var</b> <span id="r23 rd" class="r23 r">constructorInfo</span> = (<span class="i">ConstructorInfo</span>)<span class="r20 r">bestMethod</span>.<a href="../CoreAdapter.cs.html#3a0e575988f5a5de" class="i field">method</a>;
+ 
+            <b>var</b> <span id="r24 rd" class="r24 r">parameterInfo</span> = <span class="r23 r">constructorInfo</span>.<span class="i">GetParameters</span>();
+            <b>var</b> <span id="r25 rd" class="r25 r">ctorArgs</span> = <b>new</b> <b>object</b>[<span class="r24 r">parameterInfo</span>.<span class="i">Length</span>];
+            <b>object</b> <span id="r26 rd" class="r26 r">arg</span>;
+            <b>for</b> (<b>var</b> <span id="r27 rd" class="r27 r">argIndex</span> = 0; <span class="r27 r">argIndex</span> &lt; <span class="r24 r">parameterInfo</span>.<span class="i">Length</span>; ++<span class="r27 r">argIndex</span>)
+            {
+                <b>var</b> <span id="r28 rd" class="r28 r">resultType</span> = <span class="r24 r">parameterInfo</span>[<span class="r27 r">argIndex</span>].<span class="i">ParameterType</span>;
+ 
+                <span class="c">// The extension method &#39;CustomAttributeExtensions.GetCustomAttributes(ParameterInfo, Type, Boolean)&#39; has inconsistent</span>
+                <span class="c">// behavior on its return value in both FullCLR and CoreCLR. According to MSDN, if the attribute cannot be found, it</span>
+                <span class="c">// should return an empty collection. However, it returns null in some rare cases [when the parameter isn&#39;t backed by</span>
+                <span class="c">// actual metadata].</span>
+                <span class="c">// This inconsistent behavior affects OneCore powershell because we are using the extension method here when compiling</span>
+                <span class="c">// against CoreCLR. So we need to add a null check until this is fixed in CLR.</span>
+                <b>var</b> <span id="r29 rd" class="r29 r">paramArrayAttrs</span> = <span class="r24 r">parameterInfo</span>[<span class="r27 r">argIndex</span>].<span class="i">GetCustomAttributes</span>(<b>typeof</b>(<span class="i">ParamArrayAttribute</span>), <b>true</b>);
+                <b>if</b> (<span class="r29 r">paramArrayAttrs</span> != <b>null</b> &amp;&amp; <span class="r29 r">paramArrayAttrs</span>.<span class="i">Length</span> &gt; 0 &amp;&amp; <span class="r17 r">expandParamsOnBest</span>)
+                {
+                    <b>var</b> <span id="r30 rd" class="r30 r">elementType</span> = <span class="r24 r">parameterInfo</span>[<span class="r27 r">argIndex</span>].<span class="i">ParameterType</span>.<span class="i">GetElementType</span>();
+                    <b>var</b> <span id="r31 rd" class="r31 r">paramsArray</span> = <span class="i">Array</span>.<span class="i">CreateInstance</span>(<span class="r30 r">elementType</span>, <span class="r19 r">positionalArgCount</span> - <span class="r27 r">argIndex</span>);
+                    <span class="r25 r">ctorArgs</span>[<span class="r27 r">argIndex</span>] = <span class="r31 r">paramsArray</span>;
+ 
+                    <b>for</b> (<b>var</b> <span id="r32 rd" class="r32 r">i</span> = 0; <span class="r32 r">i</span> &lt; <span class="r31 r">paramsArray</span>.<span class="i">Length</span>; ++<span class="r32 r">i</span>, ++<span class="r27 r">argIndex</span>)
+                    {
+                        <b>if</b> (!<span class="i">TryConvertArg</span>(<span class="r9 r">positionalArgs</span>[<span class="r27 r">argIndex</span>], <span class="r30 r">elementType</span>, <b>out</b> <span class="r26 r">arg</span>,
+                            <span class="r5 r">parser</span>, <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#0ad84283990f3553" class="i property">PositionalArguments</a>[<span class="r27 r">argIndex</span>].<span class="i">Extent</span>))
+                        {
+                            <b>return</b> <b>null</b>;
+                        }
+ 
+                        <span class="r31 r">paramsArray</span>.<span class="i">SetValue</span>(<span class="r26 r">arg</span>, <span class="r32 r">i</span>);
+                    }
+ 
+                    <b>break</b>;
+                }
+ 
+                <b>if</b> (!<span class="i">TryConvertArg</span>(<span class="r9 r">positionalArgs</span>[<span class="r27 r">argIndex</span>], <span class="r28 r">resultType</span>, <b>out</b> <span class="r26 r">arg</span>,
+                    <span class="r5 r">parser</span>, <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#0ad84283990f3553" class="i property">PositionalArguments</a>[<span class="r27 r">argIndex</span>].<span class="i">Extent</span>))
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <span class="r25 r">ctorArgs</span>[<span class="r27 r">argIndex</span>] = <span class="r26 r">arg</span>;
+            }
+ 
+            <b>if</b> (<span class="r6 r">attributeAst</span>.<a href="ast.cs.html#6bb710ef7b74106a" class="i property">NamedArguments</a>.<span class="i">Count</span> == 0)
+            {
+                <b>return</b> <b>new</b> <span class="i">CustomAttributeBuilder</span>(<span class="r23 r">constructorInfo</span>, <span class="r25 r">ctorArgs</span>);
+            }
+ 
+            <b>var</b> <span id="r33 rd" class="r33 r">propertyInfoList</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">PropertyInfo</span>&gt;();
+            <b>var</b> <span id="r34 rd" class="r34 r">propertyArgs</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <b>var</b> <span id="r35 rd" class="r35 r">fieldInfoList</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">FieldInfo</span>&gt;();
+            <b>var</b> <span id="r36 rd" class="r36 r">fieldArgs</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <b>foreach</b> (<b>var</b> <span id="r37 rd" class="r37 r">namedArg</span> <b>in</b> <span class="r6 r">attributeAst</span>.<a href="ast.cs.html#6bb710ef7b74106a" class="i property">NamedArguments</a>)
+            {
+                <b>var</b> <span id="r38 rd" class="r38 r">name</span> = <span class="r37 r">namedArg</span>.<span class="i">ArgumentName</span>;
+                <b>var</b> <span id="r39 rd" class="r39 r">members</span> = <span class="r8 r">attributeType</span>.<span class="i">GetMember</span>(<span class="r38 r">name</span>, <span class="i">MemberTypes</span>.<span class="i">Field</span> | <span class="i">MemberTypes</span>.<span class="i">Property</span>,
+                    <span class="i">BindingFlags</span>.<span class="i">IgnoreCase</span> | <span class="i">BindingFlags</span>.<span class="i">Public</span> | <span class="i">BindingFlags</span>.<span class="i">Instance</span> | <span class="i">BindingFlags</span>.<span class="i">FlattenHierarchy</span>);
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r39 r">members</span>.<span class="i">Length</span> == 1 &amp;&amp; (<span class="r39 r">members</span>[0] <b>is</b> <span class="i">PropertyInfo</span> || <span class="r39 r">members</span>[0] <b>is</b> <span class="i">FieldInfo</span>),
+                    <span class="s">&quot;Semantic checks should have ensured names attribute argument exists&quot;</span>);
+ 
+                <span class="r26 r">arg</span> = <span class="r37 r">namedArg</span>.<span class="i">Argument</span>.<span class="i">Accept</span>(<span class="r10 r">cvv</span>);
+ 
+                <b>var</b> <span id="r40 rd" class="r40 r">propertyInfo</span> = <span class="r39 r">members</span>[0] <b>as</b> <span class="i">PropertyInfo</span>;
+                <b>if</b> (<span class="r40 r">propertyInfo</span> != <b>null</b>)
+                {
+                    <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r40 r">propertyInfo</span>.<span class="i">GetSetMethod</span>() != <b>null</b>, <span class="s">&quot;Semantic checks ensures property is settable&quot;</span>);
+ 
+                    <b>if</b> (!<span class="i">TryConvertArg</span>(<span class="r26 r">arg</span>, <span class="r40 r">propertyInfo</span>.<span class="i">PropertyType</span>, <b>out</b> <span class="r26 r">arg</span>, <span class="r5 r">parser</span>, <span class="r37 r">namedArg</span>.<span class="i">Argument</span>.<span class="i">Extent</span>))
+                    {
+                        <b>return</b> <b>null</b>;
+                    }
+ 
+                    <span class="r33 r">propertyInfoList</span>.<span class="i">Add</span>(<span class="r40 r">propertyInfo</span>);
+                    <span class="r34 r">propertyArgs</span>.<span class="i">Add</span>(<span class="r26 r">arg</span>);
+                    <b>continue</b>;
+                }
+ 
+                <b>var</b> <span id="r41 rd" class="r41 r">fieldInfo</span> = (<span class="i">FieldInfo</span>)<span class="r39 r">members</span>[0];
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<span class="i">Assert</span>(!<span class="r41 r">fieldInfo</span>.<span class="i">IsInitOnly</span> &amp;&amp; !<span class="r41 r">fieldInfo</span>.<span class="i">IsLiteral</span>, <span class="s">&quot;Semantic checks ensures field is settable&quot;</span>);
+ 
+                <b>if</b> (!<span class="i">TryConvertArg</span>(<span class="r26 r">arg</span>, <span class="r41 r">fieldInfo</span>.<span class="i">FieldType</span>, <b>out</b> <span class="r26 r">arg</span>, <span class="r5 r">parser</span>, <span class="r37 r">namedArg</span>.<span class="i">Argument</span>.<span class="i">Extent</span>))
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <span class="r35 r">fieldInfoList</span>.<span class="i">Add</span>(<span class="r41 r">fieldInfo</span>);
+                <span class="r36 r">fieldArgs</span>.<span class="i">Add</span>(<span class="r26 r">arg</span>);
+            }
+ 
+            <b>return</b> <b>new</b> <span class="i">CustomAttributeBuilder</span>(<span class="r23 r">constructorInfo</span>, <span class="r25 r">ctorArgs</span>,
+                <span class="r33 r">propertyInfoList</span>.<span class="i">ToArray</span>(), <span class="r34 r">propertyArgs</span>.<span class="i">ToArray</span>(),
+                <span class="r35 r">fieldInfoList</span>.<span class="i">ToArray</span>(), <span class="r36 r">fieldArgs</span>.<span class="i">ToArray</span>());
+        }
+ 
+        <b>internal static void</b> <a id="f4b98ea56bf64df3" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DefineCustomAttributes</a>(<span class="i">TypeBuilder</span> <span id="r42 rd" class="r42 r">member</span>, <span class="i">ReadOnlyCollection</span>&lt;<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a>&gt; <span id="r43 rd" class="r43 r">attributes</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r44 rd" class="r44 r">parser</span>, <span class="i">AttributeTargets</span> <span id="r45 rd" class="r45 r">attributeTargets</span>)
+        {
+            <b>if</b> (<span class="r43 r">attributes</span> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r46 rd" class="r46 r">attr</span> <b>in</b> <span class="r43 r">attributes</span>)
+                {
+                    <b>var</b> <span id="r47 rd" class="r47 r">cabuilder</span> = <span class="i">GetAttributeBuilder</span>(<span class="r44 r">parser</span>, <span class="r46 r">attr</span>, <span class="r45 r">attributeTargets</span>);
+                    <b>if</b> (<span class="r47 r">cabuilder</span> != <b>null</b>)
+                    {
+                        <span class="r42 r">member</span>.<span class="i">SetCustomAttribute</span>(<span class="r47 r">cabuilder</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>internal static void</b> <a id="614103f2ff4ca238" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DefineCustomAttributes</a>(<span class="i">PropertyBuilder</span> <span id="r48 rd" class="r48 r">member</span>, <span class="i">ReadOnlyCollection</span>&lt;<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a>&gt; <span id="r49 rd" class="r49 r">attributes</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r50 rd" class="r50 r">parser</span>, <span class="i">AttributeTargets</span> <span id="r51 rd" class="r51 r">attributeTargets</span>)
+        {
+            <b>if</b> (<span class="r49 r">attributes</span> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r52 rd" class="r52 r">attr</span> <b>in</b> <span class="r49 r">attributes</span>)
+                {
+                    <b>var</b> <span id="r53 rd" class="r53 r">cabuilder</span> = <span class="i">GetAttributeBuilder</span>(<span class="r50 r">parser</span>, <span class="r52 r">attr</span>, <span class="r51 r">attributeTargets</span>);
+                    <b>if</b> (<span class="r53 r">cabuilder</span> != <b>null</b>)
+                    {
+                        <span class="r48 r">member</span>.<span class="i">SetCustomAttribute</span>(<span class="r53 r">cabuilder</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>internal static void</b> <a id="5f63603114492d85" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DefineCustomAttributes</a>(<span class="i">ConstructorBuilder</span> <span id="r54 rd" class="r54 r">member</span>, <span class="i">ReadOnlyCollection</span>&lt;<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a>&gt; <span id="r55 rd" class="r55 r">attributes</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r56 rd" class="r56 r">parser</span>, <span class="i">AttributeTargets</span> <span id="r57 rd" class="r57 r">attributeTargets</span>)
+        {
+            <b>if</b> (<span class="r55 r">attributes</span> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r58 rd" class="r58 r">attr</span> <b>in</b> <span class="r55 r">attributes</span>)
+                {
+                    <b>var</b> <span id="r59 rd" class="r59 r">cabuilder</span> = <span class="i">GetAttributeBuilder</span>(<span class="r56 r">parser</span>, <span class="r58 r">attr</span>, <span class="r57 r">attributeTargets</span>);
+                    <b>if</b> (<span class="r59 r">cabuilder</span> != <b>null</b>)
+                    {
+                        <span class="r54 r">member</span>.<span class="i">SetCustomAttribute</span>(<span class="r59 r">cabuilder</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>internal static void</b> <a id="004a8b2d870ea2d3" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DefineCustomAttributes</a>(<span class="i">MethodBuilder</span> <span id="r60 rd" class="r60 r">member</span>, <span class="i">ReadOnlyCollection</span>&lt;<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a>&gt; <span id="r61 rd" class="r61 r">attributes</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r62 rd" class="r62 r">parser</span>, <span class="i">AttributeTargets</span> <span id="r63 rd" class="r63 r">attributeTargets</span>)
+        {
+            <b>if</b> (<span class="r61 r">attributes</span> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r64 rd" class="r64 r">attr</span> <b>in</b> <span class="r61 r">attributes</span>)
+                {
+                    <b>var</b> <span id="r65 rd" class="r65 r">cabuilder</span> = <span class="i">GetAttributeBuilder</span>(<span class="r62 r">parser</span>, <span class="r64 r">attr</span>, <span class="r63 r">attributeTargets</span>);
+                    <b>if</b> (<span class="r65 r">cabuilder</span> != <b>null</b>)
+                    {
+                        <span class="r60 r">member</span>.<span class="i">SetCustomAttribute</span>(<span class="r65 r">cabuilder</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>internal static void</b> <a id="48cbd82777b6ecb2" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DefineCustomAttributes</a>(<span class="i">EnumBuilder</span> <span id="r66 rd" class="r66 r">member</span>, <span class="i">ReadOnlyCollection</span>&lt;<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a>&gt; <span id="r67 rd" class="r67 r">attributes</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r68 rd" class="r68 r">parser</span>, <span class="i">AttributeTargets</span> <span id="r69 rd" class="r69 r">attributeTargets</span>)
+        {
+            <b>if</b> (<span class="r67 r">attributes</span> != <b>null</b>)
+            {
+                <b>foreach</b> (<b>var</b> <span id="r70 rd" class="r70 r">attr</span> <b>in</b> <span class="r67 r">attributes</span>)
+                {
+                    <b>var</b> <span id="r71 rd" class="r71 r">cabuilder</span> = <span class="i">GetAttributeBuilder</span>(<span class="r68 r">parser</span>, <span class="r70 r">attr</span>, <span class="r69 r">attributeTargets</span>);
+                    <b>if</b> (<span class="r71 r">cabuilder</span> != <b>null</b>)
+                    {
+                        <span class="r66 r">member</span>.<span class="i">SetCustomAttribute</span>(<span class="r71 r">cabuilder</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="370c15e1c633239b" href="../../R/370c15e1c633239b.html" target="n" data-glyph="4,1" class="t t">DefineTypeHelper</a>
+        {
+            <b>private readonly</b> <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <a id="193dbe348a3a38d7" href="../../R/193dbe348a3a38d7.html" target="n" data-glyph="46,2" class="i field">_parser</a>;
+            <b>internal readonly</b> <a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <a id="13ad99330c335996" href="../../R/13ad99330c335996.html" target="n" data-glyph="44,2" class="i field">_typeDefinitionAst</a>;
+            <b>internal readonly</b> <span class="i">TypeBuilder</span> <a id="c83d0d0c3e3dc3a9" href="../../R/c83d0d0c3e3dc3a9.html" target="n" data-glyph="44,2" class="i field">_typeBuilder</a>;
+            <b>internal readonly</b> <span class="i">FieldBuilder</span> <a id="3d230eeded31fea2" href="../../R/3d230eeded31fea2.html" target="n" data-glyph="44,2" class="i field">_sessionStateField</a>;
+            <b>internal readonly</b> <span class="i">FieldBuilder</span> <a id="706fb051f22b3133" href="../../R/706fb051f22b3133.html" target="n" data-glyph="44,2" class="i field">_sessionStateKeeperField</a>;
+            <b>internal readonly</b> <span class="i">ModuleBuilder</span> <a id="a1352fd07a758168" href="../../R/a1352fd07a758168.html" target="n" data-glyph="44,2" class="i field">_moduleBuilder</a>;
+            <b>internal readonly</b> <span class="i">TypeBuilder</span> <a id="a00e7b1df2e8cfde" href="../../R/a00e7b1df2e8cfde.html" target="n" data-glyph="44,2" class="i field">_staticHelpersTypeBuilder</a>;
+            <b>private readonly</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a>&gt; <a id="5b316f8b66e3ef73" href="../../R/5b316f8b66e3ef73.html" target="n" data-glyph="46,2" class="i field">_definedProperties</a>;
+            <b>private readonly</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">List</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>, <span class="i">Type</span>[]&gt;&gt;&gt; <a id="55c99a1348450b08" href="../../R/55c99a1348450b08.html" target="n" data-glyph="46,2" class="i field">_definedMethods</a>;
+            <b>private</b> <span class="i">HashSet</span>&lt;<span class="i">Tuple</span>&lt;<b>string</b>, <span class="i">Type</span>&gt;&gt; <a id="6efbe3521a9aee73" href="../../R/6efbe3521a9aee73.html" target="n" data-glyph="46,2" class="i field">_interfaceProperties</a>;
+            <b>internal readonly</b> <span class="i">List</span>&lt;(<b>string</b> <span class="i">fieldName</span>, <a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a> <span class="i">bodyAst</span>, <b>bool</b> <span class="i">isStatic</span>)&gt; <a id="129c3ed19bef79b2" href="../../R/129c3ed19bef79b2.html" target="n" data-glyph="44,2" class="i field">_fieldsToInitForMemberFunctions</a>;
+            <b>private bool</b> <a id="c992b0676288c3cd" href="../../R/c992b0676288c3cd.html" target="n" data-glyph="46,2" class="i field">_baseClassHasDefaultCtor</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> If type has fatal errors we cannot construct .NET type from it.</span>
+            <span class="c">///</span><span class="c"> TypeBuilder.CreateTypeInfo() would throw exception.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public bool</b> <a id="ba55a6a47f9d5488" href="../../R/ba55a6a47f9d5488.html" target="n" data-glyph="102,2" class="i property">HasFatalErrors</a> { <b>get</b>; <b>private set</b>; }
+ 
+            <b>public</b> <a id="650882894ef95fb3" href="../../R/../../0000000000.html" target="n" data-glyph="72,2" class="t constructor">DefineTypeHelper</a>(<a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r72 rd" class="r72 r">parser</span>, <span class="i">ModuleBuilder</span> <span id="r73 rd" class="r73 r">module</span>, <a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <span id="r74 rd" class="r74 r">typeDefinitionAst</span>, <b>string</b> <span id="r75 rd" class="r75 r">typeName</span>)
+            {
+                <a href="#a1352fd07a758168" class="i field">_moduleBuilder</a> = <span class="r73 r">module</span>;
+                <a href="#193dbe348a3a38d7" class="i field">_parser</a> = <span class="r72 r">parser</span>;
+                <a href="#13ad99330c335996" class="i field">_typeDefinitionAst</a> = <span class="r74 r">typeDefinitionAst</span>;
+ 
+                <span class="i">List</span>&lt;<span class="i">Type</span>&gt; <span id="r76 rd" class="r76 r">interfaces</span>;
+                <b>var</b> <span id="r77 rd" class="r77 r">baseClass</span> = <a href="#370c15e1c633239b" class="k">this</a>.<a href="#be828f080c628972" class="i method">GetBaseTypes</a>(<span class="r72 r">parser</span>, <span class="r74 r">typeDefinitionAst</span>, <b>out</b> <span class="r76 r">interfaces</span>);
+ 
+                <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a> = <span class="r73 r">module</span>.<span class="i">DefineType</span>(<span class="r75 r">typeName</span>, <span class="i">Reflection</span>.<span class="i">TypeAttributes</span>.<span class="i">Class</span> | <span class="i">Reflection</span>.<span class="i">TypeAttributes</span>.<span class="i">Public</span>, <span class="r77 r">baseClass</span>, <span class="r76 r">interfaces</span>.<span class="i">ToArray</span>());
+                <a href="#a00e7b1df2e8cfde" class="i field">_staticHelpersTypeBuilder</a> = <span class="r73 r">module</span>.<span class="i">DefineType</span>(<b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;{0}_&lt;staticHelpers&gt;&quot;</span>, <span class="r75 r">typeName</span>), <span class="i">Reflection</span>.<span class="i">TypeAttributes</span>.<span class="i">Class</span>);
+                <span class="i">DefineCustomAttributes</span>(<a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>, <span class="r74 r">typeDefinitionAst</span>.<a href="ast.cs.html#9bd8b4fdfddab8c7" class="i property">Attributes</a>, <a href="#193dbe348a3a38d7" class="i field">_parser</a>, <span class="i">AttributeTargets</span>.<span class="i">Class</span>);
+                <a href="#13ad99330c335996" class="i field">_typeDefinitionAst</a>.<a href="ast.cs.html#238185060b3af590" class="i property">Type</a> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>;
+ 
+                <a href="#129c3ed19bef79b2" class="i field">_fieldsToInitForMemberFunctions</a> = <b>new</b> <span class="i">List</span>&lt;(<b>string</b>, <a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a>, <b>bool</b>)&gt;();
+                <a href="#55c99a1348450b08" class="i field">_definedMethods</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">List</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>, <span class="i">Type</span>[]&gt;&gt;&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <a href="#5b316f8b66e3ef73" class="i field">_definedProperties</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+                <a href="#3d230eeded31fea2" class="i field">_sessionStateField</a> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineField</span>(<a href="#b947af97221dadcf" class="i field">SessionStateFieldName</a>, <b>typeof</b>(<a href="../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a>), <span class="i">FieldAttributes</span>.<span class="i">Private</span>);
+                <a href="#706fb051f22b3133" class="i field">_sessionStateKeeperField</a> = <a href="#a00e7b1df2e8cfde" class="i field">_staticHelpersTypeBuilder</a>.<span class="i">DefineField</span>(<a href="#b3b470d9c8ca1c23" class="i field">s_sessionStateKeeperFieldName</a>, <b>typeof</b>(<a href="../runtime/Operations/ClassOps.cs.html#af827321341eaffb" class="t t">SessionStateKeeper</a>), <span class="i">FieldAttributes</span>.<span class="i">Assembly</span> | <span class="i">FieldAttributes</span>.<span class="i">Static</span>);
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Return base class type, never return null.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r78 r">parser</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">typeDefinitionAst</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">interfaces</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Return declared interfaces.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+            <b>private</b> <span class="i">Type</span> <a id="be828f080c628972" href="../../R/be828f080c628972.html" target="n" data-glyph="76,2" class="i method">GetBaseTypes</a>(<a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r78 rd" class="r78 r">parser</span>, <a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <span id="r79 rd" class="r79 r">typeDefinitionAst</span>, <b>out</b> <span class="i">List</span>&lt;<span class="i">Type</span>&gt; <span id="r80 rd" class="r80 r">interfaces</span>)
+            {
+                <span class="c">// Define base types and report errors.</span>
+                <span class="i">Type</span> <span id="r81 rd" class="r81 r">baseClass</span> = <b>null</b>;
+                <span class="r80 r">interfaces</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Type</span>&gt;();
+ 
+                <span class="c">// Default base class is System.Object and it has a default ctor.</span>
+                <a href="#c992b0676288c3cd" class="i field">_baseClassHasDefaultCtor</a> = <b>true</b>;
+                <b>if</b> (<span class="r79 r">typeDefinitionAst</span>.<a href="ast.cs.html#10a87071659a5887" class="i property">BaseTypes</a>.<span class="i">Count</span> &gt; 0)
+                {
+                    <span class="c">// base class</span>
+                    <b>var</b> <span id="r82 rd" class="r82 r">baseTypeAsts</span> = <span class="r79 r">typeDefinitionAst</span>.<a href="ast.cs.html#10a87071659a5887" class="i property">BaseTypes</a>;
+                    <b>var</b> <span id="r83 rd" class="r83 r">firstBaseTypeAst</span> = <span class="r82 r">baseTypeAsts</span>[0];
+ 
+                    <b>if</b> (<span class="r83 r">firstBaseTypeAst</span>.<span class="i">TypeName</span>.<span class="i">IsArray</span>)
+                    {
+                        <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r83 r">firstBaseTypeAst</span>.<span class="i">Extent</span>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">SubtypeArray</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">SubtypeArray</span>,
+                            <span class="r83 r">firstBaseTypeAst</span>.<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                        <span class="c">// fall to the default base type</span>
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r81 r">baseClass</span> = <span class="r83 r">firstBaseTypeAst</span>.<span class="i">TypeName</span>.<span class="i">GetReflectionType</span>();
+                        <b>if</b> (<span class="r81 r">baseClass</span> == <b>null</b>)
+                        {
+                            <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r83 r">firstBaseTypeAst</span>.<span class="i">Extent</span>,
+                                <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>),
+                                <span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>,
+                                <span class="r83 r">firstBaseTypeAst</span>.<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                            <span class="c">// fall to the default base type</span>
+                        }
+                        <b>else</b>
+                        {
+                            <b>if</b> (<span class="r81 r">baseClass</span>.<span class="i">IsSealed</span>)
+                            {
+                                <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r83 r">firstBaseTypeAst</span>.<span class="i">Extent</span>,
+                                    <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">SealedBaseClass</span>),
+                                    <span class="i">ParserStrings</span>.<span class="i">SealedBaseClass</span>,
+                                    <span class="r81 r">baseClass</span>.<span class="i">Name</span>);
+                                <span class="c">// ignore base type if it&#39;s sealed.</span>
+                                <span class="r81 r">baseClass</span> = <b>null</b>;
+                            }
+                            <b>else</b> <b>if</b> (<span class="r81 r">baseClass</span>.<span class="i">IsGenericType</span> &amp;&amp; !<span class="r81 r">baseClass</span>.<span class="i">IsConstructedGenericType</span>)
+                            {
+                                <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r83 r">firstBaseTypeAst</span>.<span class="i">Extent</span>,
+                                    <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">SubtypeUnclosedGeneric</span>),
+                                    <span class="i">ParserStrings</span>.<span class="i">SubtypeUnclosedGeneric</span>,
+                                    <span class="r81 r">baseClass</span>.<span class="i">Name</span>);
+                                <span class="c">// ignore base type, we cannot inherit from unclosed generic.</span>
+                                <span class="r81 r">baseClass</span> = <b>null</b>;
+                            }
+                            <b>else</b> <b>if</b> (<span class="r81 r">baseClass</span>.<span class="i">IsInterface</span>)
+                            {
+                                <span class="c">// First Ast can represent interface as well as BaseClass.</span>
+                                <span class="r80 r">interfaces</span>.<span class="i">Add</span>(<span class="r81 r">baseClass</span>);
+                                <span class="r81 r">baseClass</span> = <b>null</b>;
+                            }
+                        }
+                    }
+ 
+                    <b>if</b> (<span class="r81 r">baseClass</span> != <b>null</b>)
+                    {
+                        <span class="c">// All PS classes are TypeName instances.</span>
+                        <span class="c">// For PS classes we cannot use reflection API, because type is not created yet.</span>
+                        <a href="ast.cs.html#83b43c1855a09e15" class="k">var</a> <span id="r84 rd" class="r84 r">baseTypeName</span> = <span class="r83 r">firstBaseTypeAst</span>.<span class="i">TypeName</span> <b>as</b> <a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a>;
+                        <b>if</b> (<span class="r84 r">baseTypeName</span> != <b>null</b>)
+                        {
+                            <a href="#c992b0676288c3cd" class="i field">_baseClassHasDefaultCtor</a> = <span class="r84 r">baseTypeName</span>.<a href="ast.cs.html#c3248e79a2c8f624" class="i method">HasDefaultCtor</a>();
+                        }
+                        <b>else</b>
+                        {
+                            <a href="#c992b0676288c3cd" class="i field">_baseClassHasDefaultCtor</a> = <span class="r81 r">baseClass</span>.<a href="../../utils/ExtensionMethods.cs.html#066e8afd9c6503e7" class="i method">HasDefaultCtor</a>();
+                        }
+                    }
+ 
+                    <b>for</b> (<b>int</b> <span id="r85 rd" class="r85 r">i</span> = 0; <span class="r85 r">i</span> &lt; <span class="r82 r">baseTypeAsts</span>.<span class="i">Count</span>; <span class="r85 r">i</span>++)
+                    {
+                        <b>if</b> (<span class="r82 r">baseTypeAsts</span>[<span class="r85 r">i</span>].<span class="i">TypeName</span>.<span class="i">IsArray</span>)
+                        {
+                            <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r82 r">baseTypeAsts</span>[<span class="r85 r">i</span>].<span class="i">Extent</span>,
+                                <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">SubtypeArray</span>),
+                                <span class="i">ParserStrings</span>.<span class="i">SubtypeArray</span>,
+                                <span class="r82 r">baseTypeAsts</span>[<span class="r85 r">i</span>].<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                            <a href="#370c15e1c633239b" class="k">this</a>.<a href="#ba55a6a47f9d5488" class="i property">HasFatalErrors</a> = <b>true</b>;
+                        }
+                    }
+ 
+                    <b>for</b> (<b>int</b> <span id="r86 rd" class="r86 r">i</span> = 1; <span class="r86 r">i</span> &lt; <span class="r82 r">baseTypeAsts</span>.<span class="i">Count</span>; <span class="r86 r">i</span>++)
+                    {
+                        <b>if</b> (<span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">TypeName</span>.<span class="i">IsArray</span>)
+                        {
+                            <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">Extent</span>,
+                                <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">SubtypeArray</span>),
+                                <span class="i">ParserStrings</span>.<span class="i">SubtypeArray</span>,
+                                <span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                        }
+                        <b>else</b>
+                        {
+                            <span class="i">Type</span> <span id="r87 rd" class="r87 r">interfaceType</span> = <span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">TypeName</span>.<span class="i">GetReflectionType</span>();
+                            <b>if</b> (<span class="r87 r">interfaceType</span> == <b>null</b>)
+                            {
+                                <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">Extent</span>,
+                                    <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>),
+                                    <span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>,
+                                    <span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                            }
+                            <b>else</b>
+                            {
+                                <b>if</b> (<span class="r87 r">interfaceType</span>.<span class="i">IsInterface</span>)
+                                {
+                                    <span class="r80 r">interfaces</span>.<span class="i">Add</span>(<span class="r87 r">interfaceType</span>);
+                                }
+                                <b>else</b>
+                                {
+                                    <span class="r78 r">parser</span>.<span class="i">ReportError</span>(<span class="r82 r">baseTypeAsts</span>[<span class="r86 r">i</span>].<span class="i">Extent</span>,
+                                        <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">InterfaceNameExpected</span>),
+                                        <span class="i">ParserStrings</span>.<span class="i">InterfaceNameExpected</span>,
+                                        <span class="r87 r">interfaceType</span>.<span class="i">Name</span>);
+                                }
+                            }
+                        }
+                    }
+                }
+ 
+                <b>return</b> <span class="r81 r">baseClass</span> ?? <b>typeof</b>(<b>object</b>);
+            }
+ 
+            <b>private bool</b> <a id="0d53e358a26906c3" href="../../R/0d53e358a26906c3.html" target="n" data-glyph="76,2" class="i method">ShouldImplementProperty</a>(<b>string</b> <span id="r88 rd" class="r88 r">name</span>, <span class="i">Type</span> <span id="r89 rd" class="r89 r">type</span>)
+            {
+                <b>if</b> (<a href="#6efbe3521a9aee73" class="i field">_interfaceProperties</a> == <b>null</b>)
+                {
+                    <a href="#6efbe3521a9aee73" class="i field">_interfaceProperties</a> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">Tuple</span>&lt;<b>string</b>, <span class="i">Type</span>&gt;&gt;();
+                    <b>var</b> <span id="r90 rd" class="r90 r">allInterfaces</span> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">Type</span>&gt;();
+ 
+                    <span class="c">// TypeBuilder.GetInterfaces() returns only the interfaces that was explicitly passed to its constructor.</span>
+                    <span class="c">// During compilation the interface hierarchy is flattened, so we only need to resolve one level of ancestral interfaces.</span>
+                    <b>foreach</b> (<b>var</b> <span id="r91 rd" class="r91 r">interfaceType</span> <b>in</b> <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">GetInterfaces</span>())
+                    {
+                        <b>foreach</b> (<b>var</b> <span id="r92 rd" class="r92 r">parentInterface</span> <b>in</b> <span class="r91 r">interfaceType</span>.<span class="i">GetInterfaces</span>())
+                        {
+                            <span class="r90 r">allInterfaces</span>.<span class="i">Add</span>(<span class="r92 r">parentInterface</span>);
+                        }
+ 
+                        <span class="r90 r">allInterfaces</span>.<span class="i">Add</span>(<span class="r91 r">interfaceType</span>);
+                    }
+ 
+                    <b>foreach</b> (<b>var</b> <span id="r93 rd" class="r93 r">interfaceType</span> <b>in</b> <span class="r90 r">allInterfaces</span>)
+                    {
+                        <b>foreach</b> (<b>var</b> <span id="r94 rd" class="r94 r">property</span> <b>in</b> <span class="r93 r">interfaceType</span>.<span class="i">GetProperties</span>())
+                        {
+                            <a href="#6efbe3521a9aee73" class="i field">_interfaceProperties</a>.<span class="i">Add</span>(<span class="i">Tuple</span>.<span class="i">Create</span>(<span class="r94 r">property</span>.<span class="i">Name</span>, <span class="r94 r">property</span>.<span class="i">PropertyType</span>));
+                        }
+                    }
+                }
+ 
+                <b>return</b> <a href="#6efbe3521a9aee73" class="i field">_interfaceProperties</a>.<span class="i">Contains</span>(<span class="i">Tuple</span>.<span class="i">Create</span>(<span class="r88 r">name</span>, <span class="r89 r">type</span>));
+            }
+ 
+            <b>public void</b> <a id="e4d7d4180b5281c7" href="../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">DefineMembers</a>()
+            {
+                <span class="c">// If user didn&#39;t provide any instance ctors or static ctor we will generate default ctor or static ctor respectively.</span>
+                <span class="c">// We can avoid explicit default ctor and static ctor, if we don&#39;t have any properties to initialize.</span>
+                <b>bool</b> <span id="r95 rd" class="r95 r">needStaticCtor</span> = <b>false</b>;
+                <b>bool</b> <span id="r96 rd" class="r96 r">needDefaultCtor</span> = <b>false</b>;
+                <b>bool</b> <span id="r97 rd" class="r97 r">hasAnyMethods</span> = <b>false</b>;
+                <span class="i">List</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>&gt; <span id="r98 rd" class="r98 r">staticCtors</span> = <b>new</b> <span class="i">List</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>&gt;();
+                <span class="i">List</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>&gt; <span id="r99 rd" class="r99 r">instanceCtors</span> = <b>new</b> <span class="i">List</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>&gt;();
+ 
+                <b>foreach</b> (<b>var</b> <span id="r100 rd" class="r100 r">member</span> <b>in</b> <a href="#13ad99330c335996" class="i field">_typeDefinitionAst</a>.<a href="ast.cs.html#9f439131b4d83a32" class="i property">Members</a>)
+                {
+                    <a href="ast.cs.html#88ad8abafd061e97" class="k">var</a> <span id="r101 rd" class="r101 r">propertyMemberAst</span> = <span class="r100 r">member</span> <b>as</b> <a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a>;
+                    <b>if</b> (<span class="r101 r">propertyMemberAst</span> != <b>null</b>)
+                    {
+                        <a href="#f179e4e34b4a380f" class="i method">DefineProperty</a>(<span class="r101 r">propertyMemberAst</span>);
+                        <b>if</b> (<span class="r101 r">propertyMemberAst</span>.<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a> != <b>null</b>)
+                        {
+                            <b>if</b> (<span class="r101 r">propertyMemberAst</span>.<a href="ast.cs.html#a4fccd8c1d834725" class="i property">IsStatic</a>)
+                            {
+                                <span class="r95 r">needStaticCtor</span> = <b>true</b>;
+                            }
+                            <b>else</b>
+                            {
+                                <span class="r96 r">needDefaultCtor</span> = <b>true</b>;
+                            }
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a> <span id="r102 rd" class="r102 r">method</span> = <span class="r100 r">member</span> <b>as</b> <a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>;
+                        <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r102 r">method</span> != <b>null</b>, <a href="../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="s">&quot;Unexpected subtype of MemberAst &#39;{0}&#39;. Expect `{1}`&quot;</span>,
+                            <span class="r100 r">member</span>.<span class="i">GetType</span>().<span class="i">Name</span>, <b>typeof</b>(<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>).<span class="i">GetType</span>().<span class="i">Name</span>));
+                        <b>if</b> (<span class="r102 r">method</span>.<a href="ast.cs.html#4faa75be8a2eed76" class="i property">IsConstructor</a>)
+                        {
+                            <b>if</b> (<span class="r102 r">method</span>.<a href="ast.cs.html#d453a785cf1ce2d4" class="i property">IsStatic</a>)
+                            {
+                                <span class="r98 r">staticCtors</span>.<span class="i">Add</span>(<span class="r102 r">method</span>);
+                            }
+                            <b>else</b>
+                            {
+                                <span class="r99 r">instanceCtors</span>.<span class="i">Add</span>(<span class="r102 r">method</span>);
+                            }
+                        }
+ 
+                        <span class="r97 r">hasAnyMethods</span> = <b>true</b>;
+ 
+                        <a href="#0eed0e1d52f931c6" class="i method">DefineMethod</a>(<span class="r102 r">method</span>);
+                    }
+                }
+ 
+                <span class="c">// inside ctor we put logic to capture session state from execution context,</span>
+                <span class="c">// we cannot delegate default ctor creation to _typeBuilder, if we have any methods.</span>
+                <span class="c">// If there are only static methods, we still want to capture context to allow static method calls on instances in the right context.</span>
+                <b>if</b> (<span class="r97 r">hasAnyMethods</span>)
+                {
+                    <span class="r96 r">needDefaultCtor</span> = <b>true</b>;
+                }
+ 
+                <b>if</b> (<span class="r95 r">needStaticCtor</span>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r103 rd" class="r103 r">ctor</span> <b>in</b> <span class="r98 r">staticCtors</span>)
+                    {
+                        <b>var</b> <span id="r104 rd" class="r104 r">parameters</span> = ((<a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a>)<span class="r103 r">ctor</span>.<span class="i">Body</span>).<a href="ast.cs.html#57fef4bbca7ab95c" class="i property">Parameters</a>;
+                        <span class="c">// We report error for static ctors with parameters, even with default values.</span>
+                        <span class="c">// We don&#39;t take them into account.</span>
+                        <b>if</b> (<span class="r104 r">parameters</span> == <b>null</b> || <span class="r104 r">parameters</span>.<span class="i">Count</span> == 0)
+                        {
+                            <span class="r95 r">needStaticCtor</span> = <b>false</b>;
+                        }
+                    }
+                }
+ 
+                <b>if</b> (<span class="r96 r">needDefaultCtor</span>)
+                {
+                    <span class="r96 r">needDefaultCtor</span> = <span class="r99 r">instanceCtors</span>.<span class="i">Count</span> == 0;
+                }
+ 
+                <span class="c">//// Now we can decide to create explicit default ctors or report error.</span>
+ 
+                <b>if</b> (<span class="r95 r">needStaticCtor</span>)
+                {
+                    <a href="ast.cs.html#542e4087fd3a0dac" class="k">var</a> <span id="r105 rd" class="r105 r">staticCtorAst</span> = <b>new</b> <a href="ast.cs.html#b4a695ea7bedf426" class="t constructor">CompilerGeneratedMemberFunctionAst</a>(<a href="Position.cs.html#5892e754643a6045" class="t t">PositionUtilities</a>.<a href="Position.cs.html#01bfb713b57f7955" class="i property">EmptyExtent</a>, <a href="#13ad99330c335996" class="i field">_typeDefinitionAst</a>, <a href="ast.cs.html#19743eab765b38bd" class="t t">SpecialMemberFunctionType</a>.<a href="ast.cs.html#b78a27783df5b515" class="i field">StaticConstructor</a>);
+                    <span class="i">DefineConstructor</span>(<span class="r105 r">staticCtorAst</span>, <b>null</b>, <b>true</b>, <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Private</span> | <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Static</span>, <span class="i">Type</span>.<span class="i">EmptyTypes</span>);
+                }
+ 
+                <b>if</b> (<a href="#c992b0676288c3cd" class="i field">_baseClassHasDefaultCtor</a>)
+                {
+                    <b>if</b> (<span class="r96 r">needDefaultCtor</span>)
+                    {
+                        <a href="ast.cs.html#542e4087fd3a0dac" class="k">var</a> <span id="r106 rd" class="r106 r">defaultCtorAst</span> = <b>new</b> <a href="ast.cs.html#b4a695ea7bedf426" class="t constructor">CompilerGeneratedMemberFunctionAst</a>(<a href="Position.cs.html#5892e754643a6045" class="t t">PositionUtilities</a>.<a href="Position.cs.html#01bfb713b57f7955" class="i property">EmptyExtent</a>, <a href="#13ad99330c335996" class="i field">_typeDefinitionAst</a>, <a href="ast.cs.html#19743eab765b38bd" class="t t">SpecialMemberFunctionType</a>.<a href="ast.cs.html#2db5275de9fc26b7" class="i field">DefaultConstructor</a>);
+                        <span class="i">DefineConstructor</span>(<span class="r106 r">defaultCtorAst</span>, <b>null</b>, <b>true</b>, <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Public</span>, <span class="i">Type</span>.<span class="i">EmptyTypes</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>if</b> (<span class="r99 r">instanceCtors</span>.<span class="i">Count</span> == 0)
+                    {
+                        <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<a href="#13ad99330c335996" class="i field">_typeDefinitionAst</a>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">BaseClassNoDefaultCtor</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">BaseClassNoDefaultCtor</span>,
+                            <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">BaseType</span>.<span class="i">Name</span>);
+                        <a href="#370c15e1c633239b" class="k">this</a>.<a href="#ba55a6a47f9d5488" class="i property">HasFatalErrors</a> = <b>true</b>;
+                    }
+                }
+            }
+ 
+            <b>private void</b> <a id="f179e4e34b4a380f" href="../../R/f179e4e34b4a380f.html" target="n" data-glyph="76,2" class="i method">DefineProperty</a>(<a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a> <span id="r107 rd" class="r107 r">propertyMemberAst</span>)
+            {
+                <b>if</b> (<a href="#5b316f8b66e3ef73" class="i field">_definedProperties</a>.<span class="i">ContainsKey</span>(<span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>))
+                {
+                    <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                        <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">MemberAlreadyDefined</span>),
+                        <span class="i">ParserStrings</span>.<span class="i">MemberAlreadyDefined</span>,
+                        <span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>);
+                    <b>return</b>;
+                }
+ 
+                <a href="#5b316f8b66e3ef73" class="i field">_definedProperties</a>.<span class="i">Add</span>(<span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>, <span class="r107 r">propertyMemberAst</span>);
+ 
+                <span class="i">Type</span> <span id="r108 rd" class="r108 r">type</span>;
+                <b>if</b> (<span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#15850665413648cb" class="i property">PropertyType</a> == <b>null</b>)
+                {
+                    <span class="r108 r">type</span> = <b>typeof</b>(<b>object</b>);
+                }
+                <b>else</b>
+                {
+                    <span class="r108 r">type</span> = <span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#15850665413648cb" class="i property">PropertyType</a>.<a href="ast.cs.html#eae1f2f74db44d11" class="i property">TypeName</a>.<a href="ast.cs.html#eba83ef9fd0feedd" class="i method">GetReflectionType</a>();
+                    <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r108 r">type</span> != <b>null</b>, <span class="s">&quot;Semantic checks should have ensure type can&#39;t be null&quot;</span>);
+                }
+ 
+                <span class="i">PropertyBuilder</span> <span id="r109 rd" class="r109 r">property</span> = <a href="#370c15e1c633239b" class="k">this</a>.<a href="#0a6de685a2d36ba1" class="i method">EmitPropertyIl</a>(<span class="r107 r">propertyMemberAst</span>, <span class="r108 r">type</span>);
+                <span class="c">// Define custom attributes on the property, not on the backingField</span>
+                <span class="i">DefineCustomAttributes</span>(<span class="r109 r">property</span>, <span class="r107 r">propertyMemberAst</span>.<a href="ast.cs.html#8ea99b56a0b0002a" class="i property">Attributes</a>, <a href="#193dbe348a3a38d7" class="i field">_parser</a>, <span class="i">AttributeTargets</span>.<span class="i">Field</span> | <span class="i">AttributeTargets</span>.<span class="i">Property</span>);
+            }
+ 
+            <b>private</b> <span class="i">PropertyBuilder</span> <a id="0a6de685a2d36ba1" href="../../R/0a6de685a2d36ba1.html" target="n" data-glyph="76,2" class="i method">EmitPropertyIl</a>(<a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a> <span id="r110 rd" class="r110 r">propertyMemberAst</span>, <span class="i">Type</span> <span id="r111 rd" class="r111 r">type</span>)
+            {
+                <span class="c">// backing field is always private.</span>
+                <b>var</b> <span id="r112 rd" class="r112 r">backingFieldAttributes</span> = <span class="i">FieldAttributes</span>.<span class="i">Private</span>;
+                <span class="c">// The property set and property get methods require a special set of attributes.</span>
+                <b>var</b> <span id="r113 rd" class="r113 r">getSetAttributes</span> = <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">SpecialName</span> | <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">HideBySig</span>;
+                <span class="r113 r">getSetAttributes</span> |= <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#444c108d48010285" class="i property">IsPublic</a> ? <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Public</span> : <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Private</span>;
+                <b>if</b> (<a href="#0d53e358a26906c3" class="i method">ShouldImplementProperty</a>(<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>, <span class="r111 r">type</span>))
+                {
+                    <span class="r113 r">getSetAttributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Virtual</span>;
+                }
+ 
+                <b>if</b> (<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#a4fccd8c1d834725" class="i property">IsStatic</a>)
+                {
+                    <span class="r112 r">backingFieldAttributes</span> |= <span class="i">FieldAttributes</span>.<span class="i">Static</span>;
+                    <span class="r113 r">getSetAttributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Static</span>;
+                }
+                <span class="c">// C# naming convention for backing fields.</span>
+                <b>string</b> <span id="r114 rd" class="r114 r">backingFieldName</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;&lt;{0}&gt;k__BackingField&quot;</span>, <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>);
+                <b>var</b> <span id="r115 rd" class="r115 r">backingField</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineField</span>(<span class="r114 r">backingFieldName</span>, <span class="r111 r">type</span>, <span class="r112 r">backingFieldAttributes</span>);
+ 
+                <b>bool</b> <span id="r116 rd" class="r116 r">hasValidateAttributes</span> = <b>false</b>;
+                <b>if</b> (<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#8ea99b56a0b0002a" class="i property">Attributes</a> != <b>null</b>)
+                {
+                    <b>for</b> (<b>int</b> <span id="r117 rd" class="r117 r">i</span> = 0; <span class="r117 r">i</span> &lt; <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#8ea99b56a0b0002a" class="i property">Attributes</a>.<span class="i">Count</span>; <span class="r117 r">i</span>++)
+                    {
+                        <span class="i">Type</span> <span id="r118 rd" class="r118 r">attributeType</span> = <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#8ea99b56a0b0002a" class="i property">Attributes</a>[<span class="r117 r">i</span>].<span class="i">TypeName</span>.<span class="i">GetReflectionAttributeType</span>();
+                        <b>if</b> (<span class="r118 r">attributeType</span> != <b>null</b> &amp;&amp; <span class="r118 r">attributeType</span>.<span class="i">IsSubclassOf</span>(<b>typeof</b>(<a href="../Attributes.cs.html#f182d3d1083583da" class="t t">ValidateArgumentsAttribute</a>)))
+                        {
+                            <span class="r116 r">hasValidateAttributes</span> = <b>true</b>;
+                            <b>break</b>;
+                        }
+                    }
+                }
+ 
+                <span class="c">// The last argument of DefineProperty is null, because the property has no parameters.</span>
+                <span class="i">PropertyBuilder</span> <span id="r119 rd" class="r119 r">property</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineProperty</span>(<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>, <span class="i">Reflection</span>.<span class="i">PropertyAttributes</span>.<span class="i">None</span>, <span class="r111 r">type</span>, <b>null</b>);
+ 
+                <span class="c">// Define the &quot;get&quot; accessor method.</span>
+                <span class="i">MethodBuilder</span> <span id="r120 rd" class="r120 r">getMethod</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineMethod</span>(<b>string</b>.<span class="i">Concat</span>(<span class="s">&quot;get_&quot;</span>, <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>), <span class="r113 r">getSetAttributes</span>, <span class="r111 r">type</span>, <span class="i">Type</span>.<span class="i">EmptyTypes</span>);
+                <span class="i">ILGenerator</span> <span id="r121 rd" class="r121 r">getIlGen</span> = <span class="r120 r">getMethod</span>.<span class="i">GetILGenerator</span>();
+                <b>if</b> (<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#a4fccd8c1d834725" class="i property">IsStatic</a>)
+                {
+                    <span class="c">// static</span>
+                    <span class="r121 r">getIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldsfld</span>, <span class="r115 r">backingField</span>);
+                    <span class="r121 r">getIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ret</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="c">// instance</span>
+                    <span class="r121 r">getIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>);
+                    <span class="r121 r">getIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldfld</span>, <span class="r115 r">backingField</span>);
+                    <span class="r121 r">getIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ret</span>);
+                }
+ 
+                <span class="c">// Define the &quot;set&quot; accessor method.</span>
+                <span class="i">MethodBuilder</span> <span id="r122 rd" class="r122 r">setMethod</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineMethod</span>(<b>string</b>.<span class="i">Concat</span>(<span class="s">&quot;set_&quot;</span>, <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>), <span class="r113 r">getSetAttributes</span>, <b>null</b>, <b>new</b> <span class="i">Type</span>[] { <span class="r111 r">type</span> });
+                <span class="i">ILGenerator</span> <span id="r123 rd" class="r123 r">setIlGen</span> = <span class="r122 r">setMethod</span>.<span class="i">GetILGenerator</span>();
+ 
+                <b>if</b> (<span class="r116 r">hasValidateAttributes</span>)
+                {
+                    <span class="i">Type</span> <span id="r124 rd" class="r124 r">typeToLoad</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>;
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldtoken</span>, <span class="r124 r">typeToLoad</span>);
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Call</span>, <b>typeof</b>(<span class="i">Type</span>).<span class="i">GetMethod</span>(<span class="s">&quot;GetTypeFromHandle&quot;</span>)); <span class="c">// load current Type on stack</span>
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldstr</span>, <span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>); <span class="c">// load name of Property</span>
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#a4fccd8c1d834725" class="i property">IsStatic</a> ? <span class="i">OpCodes</span>.<span class="i">Ldarg_0</span> : <span class="i">OpCodes</span>.<span class="i">Ldarg_1</span>); <span class="c">// load set value</span>
+                    <b>if</b> (<span class="r111 r">type</span>.<span class="i">IsValueType</span>)
+                    {
+                        <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Box</span>, <span class="r111 r">type</span>);
+                    }
+ 
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Call</span>, <a href="Compiler.cs.html#7281bb41069e8d62" class="t t">CachedReflectionInfo</a>.<a href="Compiler.cs.html#1499eb326cb9ec72" class="i field">ClassOps_ValidateSetProperty</a>);
+                }
+ 
+                <b>if</b> (<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#a4fccd8c1d834725" class="i property">IsStatic</a>)
+                {
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>);
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Stsfld</span>, <span class="r115 r">backingField</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>);
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_1</span>);
+                    <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Stfld</span>, <span class="r115 r">backingField</span>);
+                }
+ 
+                <span class="r123 r">setIlGen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ret</span>);
+ 
+                <span class="c">// Map the two methods created above to our PropertyBuilder to</span>
+                <span class="c">// their corresponding behaviors, &quot;get&quot; and &quot;set&quot; respectively.</span>
+                <span class="r119 r">property</span>.<span class="i">SetGetMethod</span>(<span class="r120 r">getMethod</span>);
+                <span class="r119 r">property</span>.<span class="i">SetSetMethod</span>(<span class="r122 r">setMethod</span>);
+ 
+                <b>if</b> (<span class="r110 r">propertyMemberAst</span>.<a href="ast.cs.html#19f0ac305787111e" class="i property">IsHidden</a>)
+                {
+                    <span class="r119 r">property</span>.<span class="i">SetCustomAttribute</span>(<a href="#fb22167000d5ebe3" class="i field">s_hiddenCustomAttributeBuilder</a>);
+                }
+ 
+                <b>return</b> <span class="r119 r">property</span>;
+            }
+ 
+            <b>private bool</b> <a id="c48b879639a85a3e" href="../../R/c48b879639a85a3e.html" target="n" data-glyph="76,2" class="i method">CheckForDuplicateOverload</a>(<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a> <span id="r125 rd" class="r125 r">functionMemberAst</span>, <span class="i">Type</span>[] <span id="r126 rd" class="r126 r">newParameters</span>)
+            {
+                <span class="i">List</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>, <span class="i">Type</span>[]&gt;&gt; <span id="r127 rd" class="r127 r">overloads</span>;
+                <b>if</b> (!<a href="#55c99a1348450b08" class="i field">_definedMethods</a>.<span class="i">TryGetValue</span>(<span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#4a93ad116ed68e0e" class="i property">Name</a>, <b>out</b> <span class="r127 r">overloads</span>))
+                {
+                    <span class="r127 r">overloads</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Tuple</span>&lt;<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a>, <span class="i">Type</span>[]&gt;&gt;();
+                    <a href="#55c99a1348450b08" class="i field">_definedMethods</a>.<span class="i">Add</span>(<span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#4a93ad116ed68e0e" class="i property">Name</a>, <span class="r127 r">overloads</span>);
+                }
+                <b>else</b>
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r128 rd" class="r128 r">overload</span> <b>in</b> <span class="r127 r">overloads</span>)
+                    {
+                        <b>var</b> <span id="r129 rd" class="r129 r">overloadParameters</span> = <span class="r128 r">overload</span>.<span class="i">Item2</span>;
+ 
+                        <span class="c">// This test won&#39;t be correct when defaults are supported</span>
+                        <b>if</b> (<span class="r126 r">newParameters</span>.<span class="i">Length</span> != <span class="r129 r">overloadParameters</span>.<span class="i">Length</span>)
+                        {
+                            <b>continue</b>;
+                        }
+ 
+                        <b>var</b> <span id="r130 rd" class="r130 r">sameSignature</span> = <b>true</b>;
+                        <b>for</b> (<b>int</b> <span id="r131 rd" class="r131 r">i</span> = 0; <span class="r131 r">i</span> &lt; <span class="r126 r">newParameters</span>.<span class="i">Length</span>; <span class="r131 r">i</span>++)
+                        {
+                            <b>if</b> (<span class="r126 r">newParameters</span>[<span class="r131 r">i</span>] != <span class="r129 r">overloadParameters</span>[<span class="r131 r">i</span>])
+                            {
+                                <span class="r130 r">sameSignature</span> = <b>false</b>;
+                                <b>break</b>;
+                            }
+                        }
+ 
+                        <b>if</b> (<span class="r130 r">sameSignature</span>)
+                        {
+                            <span class="c">// If both are both static/instance, it&#39;s an error.</span>
+                            <span class="c">// Otherwise, signatures can match only for the constructor.</span>
+                            <b>if</b> (<span class="r128 r">overload</span>.<span class="i">Item1</span>.<span class="i">IsStatic</span> == <span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#d453a785cf1ce2d4" class="i property">IsStatic</a> ||
+                                !<span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#4faa75be8a2eed76" class="i property">IsConstructor</a>)
+                            {
+                                <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#7383b4996970fa8a" class="i property">NameExtent</a> ?? <span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                                    <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">MemberAlreadyDefined</span>),
+                                    <span class="i">ParserStrings</span>.<span class="i">MemberAlreadyDefined</span>,
+                                    <span class="r125 r">functionMemberAst</span>.<a href="ast.cs.html#4a93ad116ed68e0e" class="i property">Name</a>);
+                                <b>return</b> <b>true</b>;
+                            }
+                        }
+                    }
+                }
+ 
+                <span class="r127 r">overloads</span>.<span class="i">Add</span>(<span class="i">Tuple</span>.<span class="i">Create</span>(<span class="r125 r">functionMemberAst</span>, <span class="r126 r">newParameters</span>));
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>private</b> <span class="i">Type</span>[] <a id="e7d80aa7c2c3f331" href="../../R/e7d80aa7c2c3f331.html" target="n" data-glyph="76,2" class="i method">GetParameterTypes</a>(<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a> <span id="r132 rd" class="r132 r">functionMemberAst</span>)
+            {
+                <b>var</b> <span id="r133 rd" class="r133 r">parameters</span> = ((<a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a>)<span class="r132 r">functionMemberAst</span>).<a href="ast.cs.html#57fef4bbca7ab95c" class="i property">Parameters</a>;
+                <b>if</b> (<span class="r133 r">parameters</span> == <b>null</b>)
+                {
+                    <b>return</b> <span class="i">Type</span>.<span class="i">EmptyTypes</span>;
+                }
+ 
+                <b>bool</b> <span id="r134 rd" class="r134 r">anyErrors</span> = <b>false</b>;
+                <b>var</b> <span id="r135 rd" class="r135 r">result</span> = <b>new</b> <span class="i">Type</span>[<span class="r133 r">parameters</span>.<span class="i">Count</span>];
+                <b>for</b> (<b>var</b> <span id="r136 rd" class="r136 r">i</span> = 0; <span class="r136 r">i</span> &lt; <span class="r133 r">parameters</span>.<span class="i">Count</span>; <span class="r136 r">i</span>++)
+                {
+                    <b>var</b> <span id="r137 rd" class="r137 r">typeConstraint</span> = <span class="r133 r">parameters</span>[<span class="r136 r">i</span>].<span class="i">Attributes</span>.<span class="i">OfType</span>&lt;<a href="ast.cs.html#34b9d5dbbaca964d" class="t t">TypeConstraintAst</a>&gt;().<span class="i">FirstOrDefault</span>();
+                    <b>var</b> <span id="r138 rd" class="r138 r">paramType</span> = (<span class="r137 r">typeConstraint</span> != <b>null</b>)
+                                        ? <span class="r137 r">typeConstraint</span>.<span class="i">TypeName</span>.<span class="i">GetReflectionType</span>()
+                                        : <b>typeof</b>(<b>object</b>);
+                    <b>if</b> (<span class="r138 r">paramType</span> == <b>null</b>)
+                    {
+                        <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<span class="r137 r">typeConstraint</span>.<span class="i">Extent</span>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>,
+                            <span class="r137 r">typeConstraint</span>.<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                        <span class="r134 r">anyErrors</span> = <b>true</b>;
+                    }
+                    <b>else</b> <b>if</b> (<span class="r138 r">paramType</span> == <b>typeof</b>(<b>void</b>) || <span class="r138 r">paramType</span>.<span class="i">IsGenericTypeDefinition</span>)
+                    {
+                        <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<span class="r137 r">typeConstraint</span>.<span class="i">Extent</span>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">TypeNotAllowedForParameter</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">TypeNotAllowedForParameter</span>,
+                            <span class="r137 r">typeConstraint</span>.<span class="i">TypeName</span>.<span class="i">FullName</span>);
+                        <span class="r134 r">anyErrors</span> = <b>true</b>;
+                    }
+ 
+                    <span class="r135 r">result</span>[<span class="r136 r">i</span>] = <span class="r138 r">paramType</span>;
+                }
+ 
+                <b>return</b> <span class="r134 r">anyErrors</span> ? <b>null</b> : <span class="r135 r">result</span>;
+            }
+ 
+            <b>private bool</b> <a id="1dc212685d2c09aa" href="../../R/1dc212685d2c09aa.html" target="n" data-glyph="76,2" class="i method">MethodExistsOnBaseClassAndFinal</a>(<b>string</b> <span id="r139 rd" class="r139 r">methodName</span>, <span class="i">Type</span>[] <span id="r140 rd" class="r140 r">parameterTypes</span>)
+            {
+                <span class="i">Type</span> <span id="r141 rd" class="r141 r">baseType</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">BaseType</span>;
+ 
+                <span class="c">// If baseType is PS class, then method will be virtual, once we define it.</span>
+                <b>if</b> (<span class="r141 r">baseType</span> <b>is</b> <span class="i">TypeBuilder</span>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>var</b> <span id="r142 rd" class="r142 r">mi</span> = <span class="r141 r">baseType</span>.<span class="i">GetMethod</span>(<span class="r139 r">methodName</span>, <span class="r140 r">parameterTypes</span>);
+                <b>return</b> <span class="r142 r">mi</span> != <b>null</b> &amp;&amp; <span class="r142 r">mi</span>.<span class="i">IsFinal</span>;
+            }
+ 
+            <b>private void</b> <a id="0eed0e1d52f931c6" href="../../R/0eed0e1d52f931c6.html" target="n" data-glyph="76,2" class="i method">DefineMethod</a>(<a href="ast.cs.html#0c4f2db9a681a977" class="t t">FunctionMemberAst</a> <span id="r143 rd" class="r143 r">functionMemberAst</span>)
+            {
+                <b>var</b> <span id="r144 rd" class="r144 r">parameterTypes</span> = <a href="#e7d80aa7c2c3f331" class="i method">GetParameterTypes</a>(<span class="r143 r">functionMemberAst</span>);
+                <b>if</b> (<span class="r144 r">parameterTypes</span> == <b>null</b>)
+                {
+                    <span class="c">// There must have been an error, just return</span>
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (<a href="#c48b879639a85a3e" class="i method">CheckForDuplicateOverload</a>(<span class="r143 r">functionMemberAst</span>, <span class="r144 r">parameterTypes</span>))
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#4faa75be8a2eed76" class="i property">IsConstructor</a>)
+                {
+                    <b>var</b> <span id="r145 rd" class="r145 r">methodAttributes</span> = <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Public</span>;
+                    <b>if</b> (<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#d453a785cf1ce2d4" class="i property">IsStatic</a>)
+                    {
+                        <b>var</b> <span id="r146 rd" class="r146 r">parameters</span> = <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#f958ae4f9695b021" class="i property">Parameters</a>;
+                        <b>if</b> (<span class="r146 r">parameters</span>.<span class="i">Count</span> &gt; 0)
+                        {
+                            <a href="Position.cs.html#bbc751d075344454" class="t t">IScriptExtent</a> <span id="r147 rd" class="r147 r">errorExtent</span> = <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a>.<span class="i">ExtentOf</span>(<span class="r146 r">parameters</span>[0], <span class="r146 r">parameters</span>.<span class="i">Last</span>());
+                            <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<span class="r147 r">errorExtent</span>,
+                                <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">StaticConstructorCantHaveParameters</span>),
+                                <span class="i">ParserStrings</span>.<span class="i">StaticConstructorCantHaveParameters</span>);
+                            <b>return</b>;
+                        }
+ 
+                        <span class="r145 r">methodAttributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Static</span>;
+                    }
+ 
+                    <span class="i">DefineConstructor</span>(<span class="r143 r">functionMemberAst</span>, <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#e701f9e07e1afeec" class="i property">Attributes</a>, <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#eb78b3c043381ff5" class="i property">IsHidden</a>, <span class="r145 r">methodAttributes</span>, <span class="r144 r">parameterTypes</span>);
+                    <b>return</b>;
+                }
+ 
+                <b>var</b> <span id="r148 rd" class="r148 r">attributes</span> = <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#144d1140b3eca8bb" class="i property">IsPublic</a>
+                                     ? <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Public</span>
+                                     : <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Private</span>;
+                <b>if</b> (<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#d453a785cf1ce2d4" class="i property">IsStatic</a>)
+                {
+                    <span class="r148 r">attributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Static</span>;
+                }
+                <b>else</b>
+                {
+                    <b>if</b> (<a href="#370c15e1c633239b" class="k">this</a>.<a href="#1dc212685d2c09aa" class="i method">MethodExistsOnBaseClassAndFinal</a>(<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#4a93ad116ed68e0e" class="i property">Name</a>, <span class="r144 r">parameterTypes</span>))
+                    {
+                        <span class="r148 r">attributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">HideBySig</span>;
+                        <span class="r148 r">attributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">NewSlot</span>;
+                    }
+ 
+                    <span class="r148 r">attributes</span> |= <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Virtual</span>;
+                }
+ 
+                <b>var</b> <span id="r149 rd" class="r149 r">returnType</span> = <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#d04a04ffd2e70981" class="i method">GetReturnType</a>();
+                <b>if</b> (<span class="r149 r">returnType</span> == <b>null</b>)
+                {
+                    <a href="#193dbe348a3a38d7" class="i field">_parser</a>.<span class="i">ReportError</span>(<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#9f5c50ce429b8578" class="i property">ReturnType</a>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                        <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>),
+                        <span class="i">ParserStrings</span>.<span class="i">TypeNotFound</span>,
+                        <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#9f5c50ce429b8578" class="i property">ReturnType</a>.<a href="ast.cs.html#eae1f2f74db44d11" class="i property">TypeName</a>.<a href="ast.cs.html#15c64a580f477707" class="i property">FullName</a>);
+                    <b>return</b>;
+                }
+ 
+                <b>var</b> <span id="r150 rd" class="r150 r">method</span> = <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineMethod</span>(<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#4a93ad116ed68e0e" class="i property">Name</a>, <span class="r148 r">attributes</span>, <span class="r149 r">returnType</span>, <span class="r144 r">parameterTypes</span>);
+                <span class="i">DefineCustomAttributes</span>(<span class="r150 r">method</span>, <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#e701f9e07e1afeec" class="i property">Attributes</a>, <a href="#193dbe348a3a38d7" class="i field">_parser</a>, <span class="i">AttributeTargets</span>.<span class="i">Method</span>);
+                <b>if</b> (<span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#eb78b3c043381ff5" class="i property">IsHidden</a>)
+                {
+                    <span class="r150 r">method</span>.<span class="i">SetCustomAttribute</span>(<a href="#fb22167000d5ebe3" class="i field">s_hiddenCustomAttributeBuilder</a>);
+                }
+ 
+                <b>var</b> <span id="r151 rd" class="r151 r">ilGenerator</span> = <span class="r150 r">method</span>.<span class="i">GetILGenerator</span>();
+                <span class="i">DefineMethodBody</span>(<span class="r143 r">functionMemberAst</span>, <span class="r151 r">ilGenerator</span>, <span class="i">GetMetaDataName</span>(<span class="r150 r">method</span>.<span class="i">Name</span>, <span class="r144 r">parameterTypes</span>.<span class="i">Length</span>), <span class="r143 r">functionMemberAst</span>.<a href="ast.cs.html#d453a785cf1ce2d4" class="i property">IsStatic</a>, <span class="r144 r">parameterTypes</span>, <span class="r149 r">returnType</span>,
+                    (<span id="r152 rd" class="r152 r">i</span>, <span id="r153 rd" class="r153 r">n</span>) =&gt; <span class="r150 r">method</span>.<span class="i">DefineParameter</span>(<span class="r152 r">i</span>, <span class="i">ParameterAttributes</span>.<span class="i">None</span>, <span class="r153 r">n</span>));
+            }
+ 
+            <b>private void</b> <a id="a1dc260cff0b4a07" href="../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">DefineConstructor</a>(<a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a> <span id="r154 rd" class="r154 r">ipmp</span>, <span class="i">ReadOnlyCollection</span>&lt;<a href="ast.cs.html#f576d1d6cbb736a0" class="t t">AttributeAst</a>&gt; <span id="r155 rd" class="r155 r">attributeAsts</span>, <b>bool</b> <span id="r156 rd" class="r156 r">isHidden</span>, <span class="i">Reflection</span>.<span class="i">MethodAttributes</span> <span id="r157 rd" class="r157 r">methodAttributes</span>, <span class="i">Type</span>[] <span id="r158 rd" class="r158 r">parameterTypes</span>)
+            {
+                <b>bool</b> <span id="r159 rd" class="r159 r">isStatic</span> = (<span class="r157 r">methodAttributes</span> &amp; <span class="i">Reflection</span>.<span class="i">MethodAttributes</span>.<span class="i">Static</span>) != 0;
+                <b>var</b> <span id="r160 rd" class="r160 r">ctor</span> = <span class="r159 r">isStatic</span>
+                    ? <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineTypeInitializer</span>()
+                    : <a href="#c83d0d0c3e3dc3a9" class="i field">_typeBuilder</a>.<span class="i">DefineConstructor</span>(<span class="r157 r">methodAttributes</span>, <span class="i">CallingConventions</span>.<span class="i">Standard</span>, <span class="r158 r">parameterTypes</span>);
+                <span class="i">DefineCustomAttributes</span>(<span class="r160 r">ctor</span>, <span class="r155 r">attributeAsts</span>, <a href="#193dbe348a3a38d7" class="i field">_parser</a>, <span class="i">AttributeTargets</span>.<span class="i">Constructor</span>);
+                <b>if</b> (<span class="r156 r">isHidden</span>)
+                {
+                    <span class="r160 r">ctor</span>.<span class="i">SetCustomAttribute</span>(<a href="#fb22167000d5ebe3" class="i field">s_hiddenCustomAttributeBuilder</a>);
+                }
+ 
+                <b>var</b> <span id="r161 rd" class="r161 r">ilGenerator</span> = <span class="r160 r">ctor</span>.<span class="i">GetILGenerator</span>();
+ 
+                <b>if</b> (!<span class="r159 r">isStatic</span>)
+                {
+                    <span class="r161 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>); <span class="c">// load &#39;this&#39; on stack for Stfld call</span>
+ 
+                    <span class="r161 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldnull</span>);
+                    <span class="r161 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldfld</span>, <a href="#706fb051f22b3133" class="i field">_sessionStateKeeperField</a>);
+                    <span class="r161 r">ilGenerator</span>.<span class="i">EmitCall</span>(<span class="i">OpCodes</span>.<span class="i">Call</span>, <a href="#a4a5d08c5d441756" class="i field">s_sessionStateKeeper_GetSessionState</a>, <b>null</b>); <span class="c">// load &#39;sessionState&#39; on stack for Stfld call</span>
+ 
+                    <span class="r161 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Stfld</span>, <a href="#3d230eeded31fea2" class="i field">_sessionStateField</a>);
+                }
+ 
+                <span class="i">DefineMethodBody</span>(<span class="r154 r">ipmp</span>, <span class="r161 r">ilGenerator</span>, <span class="i">GetMetaDataName</span>(<span class="r160 r">ctor</span>.<span class="i">Name</span>, <span class="r158 r">parameterTypes</span>.<span class="i">Length</span>), <span class="r159 r">isStatic</span>, <span class="r158 r">parameterTypes</span>, <b>typeof</b>(<b>void</b>),
+                    (<span id="r162 rd" class="r162 r">i</span>, <span id="r163 rd" class="r163 r">n</span>) =&gt; <span class="r160 r">ctor</span>.<span class="i">DefineParameter</span>(<span class="r162 r">i</span>, <span class="i">ParameterAttributes</span>.<span class="i">None</span>, <span class="r163 r">n</span>));
+            }
+ 
+            <b>private static string</b> <a id="da6eae0c525331b4" href="../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">GetMetaDataName</a>(<b>string</b> <span id="r164 rd" class="r164 r">name</span>, <b>int</b> <span id="r165 rd" class="r165 r">numberOfParameters</span>)
+            {
+                <b>int</b> <span id="r166 rd" class="r166 r">currentId</span> = <span class="i">Interlocked</span>.<span class="i">Increment</span>(<b>ref</b> <a href="#2149fe966e47418c" class="i field">s_globalCounter</a>);
+                <b>string</b> <span id="r167 rd" class="r167 r">metaDataName</span> = <span class="r164 r">name</span> + <span class="s">&quot;_&quot;</span> + <span class="r165 r">numberOfParameters</span> + <span class="s">&quot;_&quot;</span> + <span class="r166 r">currentId</span>;
+                <b>return</b> <span class="r167 r">metaDataName</span>;
+            }
+ 
+            <b>private void</b> <a id="776053e931cd7ecb" href="../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">DefineMethodBody</a>(
+                <a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a> <span id="r168 rd" class="r168 r">ipmp</span>,
+                <span class="i">ILGenerator</span> <span id="r169 rd" class="r169 r">ilGenerator</span>,
+                <b>string</b> <span id="r170 rd" class="r170 r">metadataToken</span>,
+                <b>bool</b> <span id="r171 rd" class="r171 r">isStatic</span>,
+                <span class="i">Type</span>[] <span id="r172 rd" class="r172 r">parameterTypes</span>,
+                <span class="i">Type</span> <span id="r173 rd" class="r173 r">returnType</span>,
+                <span class="i">Action</span>&lt;<b>int</b>, <b>string</b>&gt; <span id="r174 rd" class="r174 r">parameterNameSetter</span>)
+            {
+                <b>var</b> <span id="r175 rd" class="r175 r">wrapperFieldName</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;&lt;{0}&gt;&quot;</span>, <span class="r170 r">metadataToken</span>);
+                <b>var</b> <span id="r176 rd" class="r176 r">scriptBlockWrapperField</span> = <a href="#a00e7b1df2e8cfde" class="i field">_staticHelpersTypeBuilder</a>.<span class="i">DefineField</span>(<span class="r175 r">wrapperFieldName</span>,
+                                                                       <b>typeof</b>(<a href="../runtime/Operations/ClassOps.cs.html#89f66d4565154783" class="t t">ScriptBlockMemberMethodWrapper</a>),
+                                                                       <span class="i">FieldAttributes</span>.<span class="i">Assembly</span> | <span class="i">FieldAttributes</span>.<span class="i">Static</span>);
+ 
+                <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldsfld</span>, <span class="r176 r">scriptBlockWrapperField</span>);
+                <b>if</b> (<span class="r171 r">isStatic</span>)
+                {
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldnull</span>);                   <span class="c">// pass null (no this)</span>
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldnull</span>);                   <span class="c">// pass null (no sessionStateInternal)</span>
+                }
+                <b>else</b>
+                {
+                    <a href="#ea83cfcf86cc153e" class="i method">EmitLdarg</a>(<span class="r169 r">ilGenerator</span>, 0);                            <span class="c">// pass this</span>
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>);                    <span class="c">// pass &#39;this&#39; for Ldfld call</span>
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldfld</span>, <a href="#3d230eeded31fea2" class="i field">_sessionStateField</a>);  <span class="c">// pass sessionStateInternal</span>
+                }
+ 
+                <b>int</b> <span id="r177 rd" class="r177 r">parameterCount</span> = <span class="r172 r">parameterTypes</span>.<span class="i">Length</span>;
+                <b>if</b> (<span class="r177 r">parameterCount</span> &gt; 0)
+                {
+                    <b>var</b> <span id="r178 rd" class="r178 r">parameters</span> = <span class="r168 r">ipmp</span>.<a href="ast.cs.html#57fef4bbca7ab95c" class="i property">Parameters</a>;
+                    <b>var</b> <span id="r179 rd" class="r179 r">local</span> = <span class="r169 r">ilGenerator</span>.<span class="i">DeclareLocal</span>(<b>typeof</b>(<b>object</b>[]));
+ 
+                    <a href="#2bc9a6b205fec380" class="i method">EmitLdc</a>(<span class="r169 r">ilGenerator</span>, <span class="r177 r">parameterCount</span>);               <span class="c">// Create an array to hold all</span>
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Newarr</span>, <b>typeof</b>(<b>object</b>));  <span class="c">//     of the parameters</span>
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Stloc</span>, <span class="r179 r">local</span>);             <span class="c">// Save array for repeated use</span>
+                    <b>int</b> <span id="r180 rd" class="r180 r">j</span> = <span class="r171 r">isStatic</span> ? 0 : 1;
+                    <b>for</b> (<b>int</b> <span id="r181 rd" class="r181 r">i</span> = 0; <span class="r181 r">i</span> &lt; <span class="r177 r">parameterCount</span>; <span class="r181 r">i</span>++, <span class="r180 r">j</span>++)
+                    {
+                        <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldloc</span>, <span class="r179 r">local</span>);           <span class="c">// load array</span>
+                        <a href="#2bc9a6b205fec380" class="i method">EmitLdc</a>(<span class="r169 r">ilGenerator</span>, <span class="r181 r">i</span>);                          <span class="c">// index to save at</span>
+                        <a href="#ea83cfcf86cc153e" class="i method">EmitLdarg</a>(<span class="r169 r">ilGenerator</span>, <span class="r180 r">j</span>);                        <span class="c">// load argument (skipping this)</span>
+                        <b>if</b> (<span class="r172 r">parameterTypes</span>[<span class="r181 r">i</span>].<span class="i">IsValueType</span>)  <span class="c">// value types must be boxed</span>
+                        {
+                            <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Box</span>, <span class="r172 r">parameterTypes</span>[<span class="r181 r">i</span>]);
+                        }
+ 
+                        <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Stelem_Ref</span>);           <span class="c">// save the argument in the array</span>
+ 
+                        <span class="c">// Set the parameter name, mostly for Get-Member</span>
+                        <span class="c">// Parameters are indexed beginning with the number 1 for the first parameter</span>
+                        <span class="r174 r">parameterNameSetter</span>(<span class="r181 r">i</span> + 1, <span class="r178 r">parameters</span>[<span class="r181 r">i</span>].<span class="i">Name</span>.<span class="i">VariablePath</span>.<span class="i">UserPath</span>);
+                    }
+ 
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldloc</span>, <span class="r179 r">local</span>);         <span class="c">// load array</span>
+                }
+                <b>else</b>
+                {
+                    <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldsfld</span>, <b>typeof</b>(<a href="../runtime/Operations/ClassOps.cs.html#89f66d4565154783" class="t t">ScriptBlockMemberMethodWrapper</a>).<span class="i">GetField</span>(<span class="s">&quot;_emptyArgumentArray&quot;</span>, <span class="i">BindingFlags</span>.<span class="i">Static</span> | <span class="i">BindingFlags</span>.<span class="i">Public</span>));
+                }
+ 
+                <span class="i">MethodInfo</span> <span id="r182 rd" class="r182 r">invokeHelper</span>;
+                <b>if</b> (<span class="r173 r">returnType</span> == <b>typeof</b>(<b>void</b>))
+                {
+                    <span class="r182 r">invokeHelper</span> = <b>typeof</b>(<a href="../runtime/Operations/ClassOps.cs.html#89f66d4565154783" class="t t">ScriptBlockMemberMethodWrapper</a>).<span class="i">GetMethod</span>(<span class="s">&quot;InvokeHelper&quot;</span>, <span class="i">BindingFlags</span>.<span class="i">Instance</span> | <span class="i">BindingFlags</span>.<span class="i">Public</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r182 r">invokeHelper</span> = <b>typeof</b>(<a href="../runtime/Operations/ClassOps.cs.html#89f66d4565154783" class="t t">ScriptBlockMemberMethodWrapper</a>).<span class="i">GetMethod</span>(<span class="s">&quot;InvokeHelperT&quot;</span>, <span class="i">BindingFlags</span>.<span class="i">Instance</span> | <span class="i">BindingFlags</span>.<span class="i">Public</span>).<span class="i">MakeGenericMethod</span>(<span class="r173 r">returnType</span>);
+                }
+ 
+                <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Tailcall</span>);
+                <span class="r169 r">ilGenerator</span>.<span class="i">EmitCall</span>(<span class="i">OpCodes</span>.<span class="i">Call</span>, <span class="r182 r">invokeHelper</span>, <b>null</b>);
+                <span class="r169 r">ilGenerator</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ret</span>);
+ 
+                <a href="#129c3ed19bef79b2" class="i field">_fieldsToInitForMemberFunctions</a>.<span class="i">Add</span>((<span class="r175 r">wrapperFieldName</span>, <span class="r168 r">ipmp</span>, <span class="r171 r">isStatic</span>));
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="931c80c2b826a7a5" href="../../R/931c80c2b826a7a5.html" target="n" data-glyph="4,1" class="t t">DefineEnumHelper</a>
+        {
+            <b>private readonly</b> <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <a id="4616f38f411b7b80" href="../../R/4616f38f411b7b80.html" target="n" data-glyph="46,2" class="i field">_parser</a>;
+            <b>private readonly</b> <a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <a id="f5ee07b93633bfaf" href="../../R/f5ee07b93633bfaf.html" target="n" data-glyph="46,2" class="i field">_enumDefinitionAst</a>;
+            <b>private readonly</b> <span class="i">ModuleBuilder</span> <a id="0c4f8996c07b514a" href="../../R/0c4f8996c07b514a.html" target="n" data-glyph="46,2" class="i field">_moduleBuilder</a>;
+            <b>private readonly string</b> <a id="6d42d22cfd2e273a" href="../../R/6d42d22cfd2e273a.html" target="n" data-glyph="46,2" class="i field">_typeName</a>;
+ 
+            <b>internal</b> <a id="5f3c828715edd2d7" href="../../R/../../0000000000.html" target="n" data-glyph="74,2" class="t constructor">DefineEnumHelper</a>(<a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r183 rd" class="r183 r">parser</span>, <span class="i">ModuleBuilder</span> <span id="r184 rd" class="r184 r">module</span>, <a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <span id="r185 rd" class="r185 r">enumDefinitionAst</span>, <b>string</b> <span id="r186 rd" class="r186 r">typeName</span>)
+            {
+                <a href="#4616f38f411b7b80" class="i field">_parser</a> = <span class="r183 r">parser</span>;
+                <a href="#f5ee07b93633bfaf" class="i field">_enumDefinitionAst</a> = <span class="r185 r">enumDefinitionAst</span>;
+                <a href="#0c4f8996c07b514a" class="i field">_moduleBuilder</a> = <span class="r184 r">module</span>;
+                <a href="#6d42d22cfd2e273a" class="i field">_typeName</a> = <span class="r186 r">typeName</span>;
+            }
+ 
+            <b>internal static</b> <span class="i">List</span>&lt;<a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>&gt; <a id="b3bce52aa7777271" href="../../R/b3bce52aa7777271.html" target="n" data-glyph="74,2" class="i method">Sort</a>(<span class="i">List</span>&lt;<a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>&gt; <span id="r187 rd" class="r187 r">defineEnumHelpers</span>, <a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r188 rd" class="r188 r">parser</span>)
+            {
+                <span class="c">// This function does a topological sort of the enums to be defined.  This is needed so we</span>
+                <span class="c">// can allow one enum member to use the value of another w/o needing to worry about the order</span>
+                <span class="c">// they are declared in.  For example:</span>
+                <span class="c">//</span>
+                <span class="c">//     enum E1 { e1 = [E2]::e2 }</span>
+                <span class="c">//     enum E2 { e2 = 42 }</span>
+                <span class="c">//</span>
+                <span class="c">// We also want to report an error for recursive expressions, e.g.</span>
+                <span class="c">//</span>
+                <span class="c">//     enum E1 { e1 = [E2]::e2 }</span>
+                <span class="c">//     enum E2 { e2 = [E1]::e1 }</span>
+                <span class="c">//</span>
+                <span class="c">// Note that this code is not as permissive as it could be, e.g. we could (but do not) allow:</span>
+                <span class="c">//</span>
+                <span class="c">//     enum E1 { e1 = [E2]::e2 }</span>
+                <span class="c">//     enum E2 {</span>
+                <span class="c">//         e2 = 42</span>
+                <span class="c">//         e2a = [E1]::e1</span>
+                <span class="c">//     }</span>
+                <span class="c">//</span>
+                <span class="c">// In this case, there is no cycle in the constant values despite E1 referencing E2 and vice versa.</span>
+                <span class="c">//</span>
+                <span class="c">// The basic algorithm is to create a graph where the edges represent a dependency, using this example:</span>
+                <span class="c">//</span>
+                <span class="c">//     enum E1 { e1 = [E2]::e2 }</span>
+                <span class="c">//     enum E2 { e2 = 42 }</span>
+                <span class="c">//</span>
+                <span class="c">// We have an edge E1-&gt;E2.  E2 has no dependencies.</span>
+ 
+                <b>if</b> (<span class="r187 r">defineEnumHelpers</span>.<span class="i">Count</span> == 1)
+                {
+                    <b>return</b> <span class="r187 r">defineEnumHelpers</span>;
+                }
+ 
+                <span class="c">// There won&#39;t be many nodes in our graph, so we just use a dictionary with a list of edges instead</span>
+                <span class="c">// of something cleaner.</span>
+                <b>var</b> <span id="r189 rd" class="r189 r">graph</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>, <span class="i">Tuple</span>&lt;<a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>, <span class="i">List</span>&lt;<a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;&gt;&gt;();
+ 
+                <span class="c">// Add all of our nodes to the graph</span>
+                <b>foreach</b> (<b>var</b> <span id="r190 rd" class="r190 r">helper</span> <b>in</b> <span class="r187 r">defineEnumHelpers</span>)
+                {
+                    <span class="r189 r">graph</span>.<span class="i">Add</span>(<span class="r190 r">helper</span>.<span class="i">_enumDefinitionAst</span>, <span class="i">Tuple</span>.<span class="i">Create</span>(<span class="r190 r">helper</span>, <b>new</b> <span class="i">List</span>&lt;<a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>&gt;()));
+                }
+ 
+                <span class="c">// Now find any edges.</span>
+                <b>foreach</b> (<b>var</b> <span id="r191 rd" class="r191 r">helper</span> <b>in</b> <span class="r187 r">defineEnumHelpers</span>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r192 rd" class="r192 r">enumerator</span> <b>in</b> <span class="r191 r">helper</span>.<span class="i">_enumDefinitionAst</span>.<span class="i">Members</span>)
+                    {
+                        <a href="ast.cs.html#78a833319fe635b4" class="k">var</a> <span id="r193 rd" class="r193 r">initExpr</span> = ((<a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a>)<span class="r192 r">enumerator</span>).<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a>;
+                        <b>if</b> (<span class="r193 r">initExpr</span> == <b>null</b>)
+                        {
+                            <span class="c">// No initializer, so no dependency (this is incorrect assumption if</span>
+                            <span class="c">// we wanted to be more general like C#.)</span>
+                            <b>continue</b>;
+                        }
+ 
+                        <span class="c">// The expression may have multiple member expressions, e.g. [E]::e1 + [E]::e2</span>
+                        <b>foreach</b> (<b>var</b> <span id="r194 rd" class="r194 r">memberExpr</span> <b>in</b> <span class="r193 r">initExpr</span>.<span class="i">FindAll</span>(<b>static</b> <span id="r195 rd" class="r195 r">ast</span> =&gt; <span class="r195 r">ast</span> <b>is</b> <a href="ast.cs.html#a3e8bc64452a67d0" class="t t">MemberExpressionAst</a>, <b>false</b>))
+                        {
+                            <a href="ast.cs.html#bf258955590d49b7" class="k">var</a> <span id="r196 rd" class="r196 r">typeExpr</span> = ((<a href="ast.cs.html#a3e8bc64452a67d0" class="t t">MemberExpressionAst</a>)<span class="r194 r">memberExpr</span>).<a href="ast.cs.html#22340c1f7f19ecba" class="i property">Expression</a> <b>as</b> <a href="ast.cs.html#bf258955590d49b7" class="t t">TypeExpressionAst</a>;
+                            <b>if</b> (<span class="r196 r">typeExpr</span> != <b>null</b>)
+                            {
+                                <span class="c">// We only want to add edges for enums being defined in the current scope.</span>
+                                <span class="c">// We detect this by seeing if the ast is in our graph or not.</span>
+                                <a href="ast.cs.html#83b43c1855a09e15" class="k">var</a> <span id="r197 rd" class="r197 r">typeName</span> = <span class="r196 r">typeExpr</span>.<a href="ast.cs.html#c43447ab6269441a" class="i property">TypeName</a> <b>as</b> <a href="ast.cs.html#83b43c1855a09e15" class="t t">TypeName</a>;
+                                <b>if</b> (<span class="r197 r">typeName</span> != <b>null</b>
+                                    &amp;&amp; <span class="r197 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a> != <b>null</b>
+                                    &amp;&amp; <span class="r197 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a> != <span class="r191 r">helper</span>.<span class="i">_enumDefinitionAst</span>  <span class="c">// Don&#39;t add self edges</span>
+                                    &amp;&amp; <span class="r189 r">graph</span>.<span class="i">ContainsKey</span>(<span class="r197 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a>))
+                                {
+                                    <b>var</b> <span id="r198 rd" class="r198 r">edgeList</span> = <span class="r189 r">graph</span>[<span class="r191 r">helper</span>.<span class="i">_enumDefinitionAst</span>].<span class="i">Item2</span>;
+                                    <b>if</b> (!<span class="r198 r">edgeList</span>.<span class="i">Contains</span>(<span class="r197 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a>))  <span class="c">// Only add 1 edge per enum</span>
+                                    {
+                                        <span class="r198 r">edgeList</span>.<span class="i">Add</span>(<span class="r197 r">typeName</span>.<a href="ast.cs.html#6cfa32d15ba13d9d" class="i field">_typeDefinitionAst</a>);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+ 
+                <span class="c">// Our graph is built.  The ready list will hold nodes that don&#39;t depend on anything not already</span>
+                <span class="c">// in the result list.  We start with a list of nodes with no edges (no dependencies).</span>
+                <b>var</b> <span id="r199 rd" class="r199 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>&gt;(<span class="r187 r">defineEnumHelpers</span>.<span class="i">Count</span>);
+                <b>var</b> <span id="r200 rd" class="r200 r">readyList</span> = <b>new</b> <span class="i">List</span>&lt;<a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>&gt;(<span class="r187 r">defineEnumHelpers</span>.<span class="i">Count</span>);
+                <span class="r200 r">readyList</span>.<span class="i">AddRange</span>(<b>from</b> <span class="i">value</span> <b>in</b> <span class="r189 r">graph</span>.<span class="i">Values</span> <b>where</b> <span class="i">value</span>.<span class="i">Item2</span>.<span class="i">Count</span> == 0 <b>select</b> <span class="i">value</span>.<span class="i">Item1</span>);
+                <b>while</b> (<span class="r200 r">readyList</span>.<span class="i">Count</span> &gt; 0)
+                {
+                    <b>var</b> <span id="r201 rd" class="r201 r">node</span> = <span class="r200 r">readyList</span>[<span class="r200 r">readyList</span>.<span class="i">Count</span> - 1];
+                    <span class="r200 r">readyList</span>.<span class="i">RemoveAt</span>(<span class="r200 r">readyList</span>.<span class="i">Count</span> - 1);
+                    <span class="r199 r">result</span>.<span class="i">Add</span>(<span class="r201 r">node</span>);
+ 
+                    <span class="c">// Remove all edges to this node as it is in our result list now.</span>
+                    <b>foreach</b> (<b>var</b> <span id="r202 rd" class="r202 r">value</span> <b>in</b> <span class="r189 r">graph</span>.<span class="i">Values</span>)
+                    {
+                        <span class="r202 r">value</span>.<span class="i">Item2</span>.<span class="i">Remove</span>(<span class="r201 r">node</span>.<span class="i">_enumDefinitionAst</span>);
+ 
+                        <span class="c">// If we removed the last edge, we can put this node on the ready list (assuming it</span>
+                        <span class="c">// wasn&#39;t already there or in our result list.)</span>
+                        <b>if</b> (<span class="r202 r">value</span>.<span class="i">Item2</span>.<span class="i">Count</span> == 0 &amp;&amp; !<span class="r199 r">result</span>.<span class="i">Contains</span>(<span class="r202 r">value</span>.<span class="i">Item1</span>) &amp;&amp; !<span class="r200 r">readyList</span>.<span class="i">Contains</span>(<span class="r202 r">value</span>.<span class="i">Item1</span>))
+                        {
+                            <span class="r200 r">readyList</span>.<span class="i">Add</span>(<span class="r202 r">value</span>.<span class="i">Item1</span>);
+                        }
+                    }
+                }
+ 
+                <b>if</b> (<span class="r199 r">result</span>.<span class="i">Count</span> &lt; <span class="r187 r">defineEnumHelpers</span>.<span class="i">Count</span>)
+                {
+                    <span class="c">// There was a cycle, report an error on each enum.</span>
+                    <b>foreach</b> (<b>var</b> <span id="r203 rd" class="r203 r">helper</span> <b>in</b> <span class="r187 r">defineEnumHelpers</span>)
+                    {
+                        <b>if</b> (!<span class="r199 r">result</span>.<span class="i">Contains</span>(<span class="r203 r">helper</span>))
+                        {
+                            <span class="r188 r">parser</span>.<span class="i">ReportError</span>(<span class="r203 r">helper</span>.<span class="i">_enumDefinitionAst</span>.<span class="i">Extent</span>,
+                                <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">CycleInEnumInitializers</span>),
+                                <span class="i">ParserStrings</span>.<span class="i">CycleInEnumInitializers</span>);
+                        }
+                    }
+                }
+                <b>else</b>
+                {
+                    <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r199 r">result</span>.<span class="i">Count</span> == <span class="r187 r">defineEnumHelpers</span>.<span class="i">Count</span>, <span class="s">&quot;Logic error if we have more outgoing results than incoming&quot;</span>);
+                }
+ 
+                <b>return</b> <span class="r199 r">result</span>;
+            }
+ 
+            <b>internal void</b> <a id="cfff2c6b1f1fca41" href="../../R/../../0000000000.html" target="n" data-glyph="74,2" class="i method">DefineEnum</a>()
+            {
+                <b>var</b> <span id="r204 rd" class="r204 r">typeConstraintAst</span> = <a href="#f5ee07b93633bfaf" class="i field">_enumDefinitionAst</a>.<a href="ast.cs.html#10a87071659a5887" class="i property">BaseTypes</a>.<span class="i">FirstOrDefault</span>();
+                <b>var</b> <span id="r205 rd" class="r205 r">underlyingType</span> = <span class="r204 r">typeConstraintAst</span> == <b>null</b> ? <b>typeof</b>(<b>int</b>) : <span class="r204 r">typeConstraintAst</span>.<span class="i">TypeName</span>.<span class="i">GetReflectionType</span>();
+ 
+                <b>var</b> <span id="r206 rd" class="r206 r">definedEnumerators</span> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <b>var</b> <span id="r207 rd" class="r207 r">enumBuilder</span> = <a href="#0c4f8996c07b514a" class="i field">_moduleBuilder</a>.<span class="i">DefineEnum</span>(<a href="#6d42d22cfd2e273a" class="i field">_typeName</a>, <span class="i">Reflection</span>.<span class="i">TypeAttributes</span>.<span class="i">Public</span>, <span class="r205 r">underlyingType</span>);
+                <span class="i">DefineCustomAttributes</span>(<span class="r207 r">enumBuilder</span>, <a href="#f5ee07b93633bfaf" class="i field">_enumDefinitionAst</a>.<a href="ast.cs.html#9bd8b4fdfddab8c7" class="i property">Attributes</a>, <a href="#4616f38f411b7b80" class="i field">_parser</a>, <span class="i">AttributeTargets</span>.<span class="i">Enum</span>);
+ 
+                <b>dynamic</b> <span id="r208 rd" class="r208 r">value</span> = 0;
+                <b>dynamic</b> <span id="r209 rd" class="r209 r">maxValue</span> = 0;
+                <b>switch</b> (<span class="i">Type</span>.<span class="i">GetTypeCode</span>(<span class="r205 r">underlyingType</span>))
+                {
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">Byte</span>:
+                        <span class="r209 r">maxValue</span> = <b>byte</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">Int16</span>:
+                        <span class="r209 r">maxValue</span> = <b>short</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">Int32</span>:
+                        <span class="r209 r">maxValue</span> = <b>int</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">Int64</span>:
+                        <span class="r209 r">maxValue</span> = <b>long</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">SByte</span>:
+                        <span class="r209 r">maxValue</span> = <b>sbyte</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">UInt16</span>:
+                        <span class="r209 r">maxValue</span> = <b>ushort</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">UInt32</span>:
+                        <span class="r209 r">maxValue</span> = <b>uint</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>case</b> <span class="i">TypeCode</span>.<span class="i">UInt64</span>:
+                        <span class="r209 r">maxValue</span> = <b>ulong</b>.<span class="i">MaxValue</span>;
+                        <b>break</b>;
+                    <b>default</b>:
+                        <a href="#4616f38f411b7b80" class="i field">_parser</a>.<span class="i">ReportError</span>(
+                            <span class="r204 r">typeConstraintAst</span>.<span class="i">Extent</span>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">InvalidUnderlyingType</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">InvalidUnderlyingType</span>,
+                            <span class="r205 r">underlyingType</span>);
+                        <b>break</b>;
+                }
+ 
+                <b>bool</b> <span id="r210 rd" class="r210 r">valueTooBig</span> = <b>false</b>;
+ 
+                <b>foreach</b> (<b>var</b> <span id="r211 rd" class="r211 r">member</span> <b>in</b> <a href="#f5ee07b93633bfaf" class="i field">_enumDefinitionAst</a>.<a href="ast.cs.html#9f439131b4d83a32" class="i property">Members</a>)
+                {
+                    <a href="ast.cs.html#88ad8abafd061e97" class="k">var</a> <span id="r212 rd" class="r212 r">enumerator</span> = (<a href="ast.cs.html#88ad8abafd061e97" class="t t">PropertyMemberAst</a>)<span class="r211 r">member</span>;
+                    <b>if</b> (<span class="r212 r">enumerator</span>.<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a> != <b>null</b>)
+                    {
+                        <b>object</b> <span id="r213 rd" class="r213 r">constValue</span>;
+                        <b>if</b> (<a href="ConstantValues.cs.html#763a3f726666bcfe" class="t t">IsConstantValueVisitor</a>.<a href="ConstantValues.cs.html#594e7e13f898b0a1" class="i method">IsConstant</a>(<span class="r212 r">enumerator</span>.<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a>, <b>out</b> <span class="r213 r">constValue</span>, <b>false</b>, <b>false</b>))
+                        {
+                            <b>if</b> (!<a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<span class="i">TryConvertTo</span>(<span class="r213 r">constValue</span>, <span class="r205 r">underlyingType</span>, <b>out</b> <span class="r208 r">value</span>))
+                            {
+                                <b>if</b> (<span class="r213 r">constValue</span> != <b>null</b> &amp;&amp;
+                                    <a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../LanguagePrimitives.cs.html#e25b1c6d235a82c5" class="i method">IsNumeric</a>(<a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<span class="i">GetTypeCode</span>(<span class="r213 r">constValue</span>.<span class="i">GetType</span>())))
+                                {
+                                    <a href="#4616f38f411b7b80" class="i field">_parser</a>.<span class="i">ReportError</span>(
+                                        <span class="r212 r">enumerator</span>.<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                                        <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">EnumeratorValueOutOfBounds</span>),
+                                        <span class="i">ParserStrings</span>.<span class="i">EnumeratorValueOutOfBounds</span>,
+                                        <a href="../../P/6fbe6ac0a6a7f8d2.html#6fbe6ac0a6a7f8d2" class="t t">ToStringCodeMethods</a>.<span class="i">Type</span>(<span class="r205 r">underlyingType</span>));
+                                }
+                                <b>else</b>
+                                {
+                                    <a href="#4616f38f411b7b80" class="i field">_parser</a>.<span class="i">ReportError</span>(
+                                        <span class="r212 r">enumerator</span>.<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                                        <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">CannotConvertValue</span>),
+                                        <span class="i">ParserStrings</span>.<span class="i">CannotConvertValue</span>,
+                                        <a href="../../P/6fbe6ac0a6a7f8d2.html#6fbe6ac0a6a7f8d2" class="t t">ToStringCodeMethods</a>.<span class="i">Type</span>(<span class="r205 r">underlyingType</span>));
+                                }
+                            }
+                        }
+                        <b>else</b>
+                        {
+                            <a href="#4616f38f411b7b80" class="i field">_parser</a>.<span class="i">ReportError</span>(
+                                <span class="r212 r">enumerator</span>.<a href="ast.cs.html#aed4bc0cb0136a95" class="i property">InitialValue</a>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                                <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">EnumeratorValueMustBeConstant</span>),
+                                <span class="i">ParserStrings</span>.<span class="i">EnumeratorValueMustBeConstant</span>);
+                        }
+ 
+                        <span class="r210 r">valueTooBig</span> = <span class="r208 r">value</span> &gt; <span class="r209 r">maxValue</span>;
+                    }
+ 
+                    <b>if</b> (<span class="r210 r">valueTooBig</span>)
+                    {
+                        <a href="#4616f38f411b7b80" class="i field">_parser</a>.<span class="i">ReportError</span>(
+                            <span class="r212 r">enumerator</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">EnumeratorValueOutOfBounds</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">EnumeratorValueOutOfBounds</span>,
+                            <a href="../../P/6fbe6ac0a6a7f8d2.html#6fbe6ac0a6a7f8d2" class="t t">ToStringCodeMethods</a>.<span class="i">Type</span>(<span class="r205 r">underlyingType</span>));
+                    }
+ 
+                    <b>if</b> (<span class="r206 r">definedEnumerators</span>.<span class="i">Contains</span>(<span class="r212 r">enumerator</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>))
+                    {
+                        <a href="#4616f38f411b7b80" class="i field">_parser</a>.<span class="i">ReportError</span>(
+                            <span class="r212 r">enumerator</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">MemberAlreadyDefined</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">MemberAlreadyDefined</span>,
+                            <span class="r212 r">enumerator</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>);
+                    }
+                    <b>else</b> <b>if</b> (<span class="r208 r">value</span> != <b>null</b>)
+                    {
+                        <span class="r208 r">value</span> = <span class="i">Convert</span>.<span class="i">ChangeType</span>(<span class="r208 r">value</span>, <span class="r205 r">underlyingType</span>);
+                        <span class="r206 r">definedEnumerators</span>.<span class="i">Add</span>(<span class="r212 r">enumerator</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>);
+                        <span class="r207 r">enumBuilder</span>.<span class="i">DefineLiteral</span>(<span class="r212 r">enumerator</span>.<a href="ast.cs.html#d93cd0c92947c0b5" class="i property">Name</a>, <span class="r208 r">value</span>);
+                    }
+ 
+                    <b>if</b> (<span class="r208 r">value</span> &lt; <span class="r209 r">maxValue</span>)
+                    {
+                        <span class="r208 r">value</span> += 1;
+                        <span class="r210 r">valueTooBig</span> = <b>false</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r210 r">valueTooBig</span> = <b>true</b>;
+                    }
+                }
+ 
+                <a href="#f5ee07b93633bfaf" class="i field">_enumDefinitionAst</a>.<a href="ast.cs.html#238185060b3af590" class="i property">Type</a> = <span class="r207 r">enumBuilder</span>.<span class="i">CreateTypeInfo</span>().<span class="i">AsType</span>();
+            }
+        }
+ 
+        <b>private static</b> <span class="i">IEnumerable</span>&lt;<span class="i">CustomAttributeBuilder</span>&gt; <a id="e711a8966bb0691b" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetAssemblyAttributeBuilders</a>(<b>string</b> <span id="r214 rd" class="r214 r">scriptFile</span>)
+        {
+            <b>var</b> <span id="r215 rd" class="r215 r">ctor</span> = <b>typeof</b>(<a href="../Attributes.cs.html#fab2ad862be5707e" class="t t">DynamicClassImplementationAssemblyAttribute</a>).<span class="i">GetConstructor</span>(<span class="i">Type</span>.<span class="i">EmptyTypes</span>);
+            <b>var</b> <span id="r216 rd" class="r216 r">emptyArgs</span> = <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>object</b>&gt;();
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r214 r">scriptFile</span>))
+            {
+                <b>yield</b> <b>return</b> <b>new</b> <span class="i">CustomAttributeBuilder</span>(<span class="r215 r">ctor</span>, <span class="r216 r">emptyArgs</span>);
+                <b>yield</b> <b>break</b>;
+            }
+ 
+            <b>var</b> <span id="r217 rd" class="r217 r">propertyInfo</span> = <b>new</b> <span class="i">PropertyInfo</span>[] {
+                <b>typeof</b>(<a href="../Attributes.cs.html#fab2ad862be5707e" class="t t">DynamicClassImplementationAssemblyAttribute</a>).<span class="i">GetProperty</span>(<b>nameof</b>(<a href="../Attributes.cs.html#fab2ad862be5707e" class="t t">DynamicClassImplementationAssemblyAttribute</a>.<a href="../Attributes.cs.html#0aa903f53a89be62" class="i property">ScriptFile</a>)) };
+            <b>var</b> <span id="r218 rd" class="r218 r">propertyArgs</span> = <b>new</b> <b>object</b>[] { <span class="r214 r">scriptFile</span> };
+ 
+            <b>yield</b> <b>return</b> <b>new</b> <span class="i">CustomAttributeBuilder</span>(<span class="r215 r">ctor</span>, <span class="r216 r">emptyArgs</span>,
+                <span class="r217 r">propertyInfo</span>, <span class="r218 r">propertyArgs</span>, <span class="i">Array</span>.<span class="i">Empty</span>&lt;<span class="i">FieldInfo</span>&gt;(), <span class="r216 r">emptyArgs</span>);
+        }
+ 
+        <b>private static int</b> <a id="884cc36b99a3b685" href="../../R/884cc36b99a3b685.html" target="n" data-glyph="46,1" class="i field">counter</a> = 0;
+ 
+        <b>internal static</b> <span class="i">Assembly</span> <a id="aafd472f58bb18cc" href="../../R/aafd472f58bb18cc.html" target="n" data-glyph="74,1" class="i method">DefineTypes</a>(<a href="Parser.cs.html#bbf5e856fb3215c5" class="t t">Parser</a> <span id="r219 rd" class="r219 r">parser</span>, <a href="ast.cs.html#d47621d83efd14de" class="t t">Ast</a> <span id="r220 rd" class="r220 r">rootAst</span>, <a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a>[] <span id="r221 rd" class="r221 r">typeDefinitions</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r220 r">rootAst</span>.<a href="ast.cs.html#faf9ad7a55f1cc57" class="i property">Parent</a> == <b>null</b>, <span class="s">&quot;Caller should only define types from the root ast&quot;</span>);
+ 
+            <b>var</b> <span id="r222 rd" class="r222 r">definedTypes</span> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+            <b>var</b> <span id="r223 rd" class="r223 r">assemblyName</span> = <b>new</b> <span class="i">AssemblyName</span>(<a href="#02a7dfd3fb579de9" class="i field">DynamicClassAssemblyName</a>)
+            {
+                <span class="c">// We could generate a unique name, but a unique version works too.</span>
+                <span class="i">Version</span> = <b>new</b> <span class="i">Version</span>(1, 0, 0, <span class="i">Interlocked</span>.<span class="i">Increment</span>(<b>ref</b> <a href="#884cc36b99a3b685" class="i field">counter</a>))
+            };
+            <b>var</b> <span id="r224 rd" class="r224 r">assembly</span> = <span class="i">AssemblyBuilder</span>.<span class="i">DefineDynamicAssembly</span>(<span class="r223 r">assemblyName</span>,
+                <span class="i">AssemblyBuilderAccess</span>.<span class="i">RunAndCollect</span>, <span class="i">GetAssemblyAttributeBuilders</span>(<span class="r220 r">rootAst</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>.<a href="Position.cs.html#e933edecd2b0cc1d" class="i property">File</a>));
+            <b>var</b> <span id="r225 rd" class="r225 r">module</span> = <span class="r224 r">assembly</span>.<span class="i">DefineDynamicModule</span>(<a href="#02a7dfd3fb579de9" class="i field">DynamicClassAssemblyName</a>);
+ 
+            <b>var</b> <span id="r226 rd" class="r226 r">defineTypeHelpers</span> = <b>new</b> <span class="i">List</span>&lt;<a href="#370c15e1c633239b" class="t t">DefineTypeHelper</a>&gt;();
+            <b>var</b> <span id="r227 rd" class="r227 r">defineEnumHelpers</span> = <b>new</b> <span class="i">List</span>&lt;<a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>&gt;();
+ 
+            <b>foreach</b> (<a href="ast.cs.html#d7f0bc21c0f10879" class="k">var</a> <span id="r228 rd" class="r228 r">typeDefinitionAst</span> <b>in</b> <span class="r221 r">typeDefinitions</span>)
+            {
+                <b>var</b> <span id="r229 rd" class="r229 r">typeName</span> = <a href="#23e82bbde703acd8" class="i method">GetClassNameInAssembly</a>(<span class="r228 r">typeDefinitionAst</span>);
+                <b>if</b> (!<span class="r222 r">definedTypes</span>.<span class="i">Contains</span>(<span class="r229 r">typeName</span>))
+                {
+                    <span class="r222 r">definedTypes</span>.<span class="i">Add</span>(<span class="r229 r">typeName</span>);
+                    <b>if</b> ((<span class="r228 r">typeDefinitionAst</span>.<a href="ast.cs.html#ee5b02a57d7f836d" class="i property">TypeAttributes</a> &amp; <a href="ast.cs.html#b246aec2982cbe0e" class="t t">TypeAttributes</a>.<a href="ast.cs.html#d60e921be64513ed" class="i field">Class</a>) == <a href="ast.cs.html#b246aec2982cbe0e" class="t t">TypeAttributes</a>.<a href="ast.cs.html#d60e921be64513ed" class="i field">Class</a>)
+                    {
+                        <span class="r226 r">defineTypeHelpers</span>.<span class="i">Add</span>(<b>new</b> <span class="t">DefineTypeHelper</span>(<span class="r219 r">parser</span>, <span class="r225 r">module</span>, <span class="r228 r">typeDefinitionAst</span>, <span class="r229 r">typeName</span>));
+                    }
+                    <b>else</b> <b>if</b> ((<span class="r228 r">typeDefinitionAst</span>.<a href="ast.cs.html#ee5b02a57d7f836d" class="i property">TypeAttributes</a> &amp; <a href="ast.cs.html#b246aec2982cbe0e" class="t t">TypeAttributes</a>.<a href="ast.cs.html#ed298c43d5bc1d4b" class="i field">Enum</a>) == <a href="ast.cs.html#b246aec2982cbe0e" class="t t">TypeAttributes</a>.<a href="ast.cs.html#ed298c43d5bc1d4b" class="i field">Enum</a>)
+                    {
+                        <span class="r227 r">defineEnumHelpers</span>.<span class="i">Add</span>(<b>new</b> <span class="t">DefineEnumHelper</span>(<span class="r219 r">parser</span>, <span class="r225 r">module</span>, <span class="r228 r">typeDefinitionAst</span>, <span class="r229 r">typeName</span>));
+                    }
+                }
+            }
+ 
+            <span class="c">// Define enums before classes so members of classes can use these enum types.</span>
+            <span class="r227 r">defineEnumHelpers</span> = <a href="#931c80c2b826a7a5" class="t t">DefineEnumHelper</a>.<a href="#b3bce52aa7777271" class="i method">Sort</a>(<span class="r227 r">defineEnumHelpers</span>, <span class="r219 r">parser</span>);
+            <b>foreach</b> (<b>var</b> <span id="r230 rd" class="r230 r">helper</span> <b>in</b> <span class="r227 r">defineEnumHelpers</span>)
+            {
+                <span class="r230 r">helper</span>.<span class="i">DefineEnum</span>();
+            }
+ 
+            <b>foreach</b> (<b>var</b> <span id="r231 rd" class="r231 r">helper</span> <b>in</b> <span class="r226 r">defineTypeHelpers</span>)
+            {
+                <span class="r231 r">helper</span>.<span class="i">DefineMembers</span>();
+            }
+ 
+            <b>foreach</b> (<b>var</b> <span id="r232 rd" class="r232 r">helper</span> <b>in</b> <span class="r226 r">defineTypeHelpers</span>)
+            {
+                <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r232 r">helper</span>.<span class="i">_typeDefinitionAst</span>.<span class="i">Type</span> <b>is</b> <span class="i">TypeBuilder</span>, <span class="s">&quot;Type should be the TypeBuilder&quot;</span>);
+                <b>bool</b> <span id="r233 rd" class="r233 r">runtimeTypeAssigned</span> = <b>false</b>;
+                <b>if</b> (!<span class="r232 r">helper</span>.<span class="i">HasFatalErrors</span>)
+                {
+                    <b>try</b>
+                    {
+                        <b>var</b> <span id="r234 rd" class="r234 r">type</span> = <span class="r232 r">helper</span>.<span class="i">_typeBuilder</span>.<span class="i">CreateType</span>();
+                        <span class="r232 r">helper</span>.<span class="i">_typeDefinitionAst</span>.<span class="i">Type</span> = <span class="r234 r">type</span>;
+                        <span class="r233 r">runtimeTypeAssigned</span> = <b>true</b>;
+                        <b>var</b> <span id="r235 rd" class="r235 r">helperType</span> = <span class="r232 r">helper</span>.<span class="i">_staticHelpersTypeBuilder</span>.<span class="i">CreateType</span>();
+ 
+                        <a href="../runtime/Operations/ClassOps.cs.html#af827321341eaffb" class="t t">SessionStateKeeper</a> <span id="r236 rd" class="r236 r">sessionStateKeeper</span> = <b>new</b> <a href="../runtime/Operations/ClassOps.cs.html#b2354655d2640b11" class="t constructor">SessionStateKeeper</a>();
+                        <span class="r235 r">helperType</span>.<span class="i">GetField</span>(<a href="#b3b470d9c8ca1c23" class="i field">s_sessionStateKeeperFieldName</a>, <span class="i">BindingFlags</span>.<span class="i">NonPublic</span> | <span class="i">BindingFlags</span>.<span class="i">Static</span>).<span class="i">SetValue</span>(<b>null</b>, <span class="r236 r">sessionStateKeeper</span>);
+ 
+                        <b>if</b> (<span class="r232 r">helper</span>.<span class="i">_fieldsToInitForMemberFunctions</span> != <b>null</b>)
+                        {
+                            <b>foreach</b> (<b>var</b> <span id="r237 rd" class="r237 r">tuple</span> <b>in</b> <span class="r232 r">helper</span>.<span class="i">_fieldsToInitForMemberFunctions</span>)
+                            {
+                                <span class="c">// If the wrapper is for a static method, we need the sessionStateKeeper to determine the right SessionState to run.</span>
+                                <span class="c">// If the wrapper is for an instance method, we use the SessionState that the instance is bound to, and thus don&#39;t need sessionStateKeeper.</span>
+                                <b>var</b> <span id="r238 rd" class="r238 r">methodWrapper</span> = <span class="r237 r">tuple</span>.<span class="i">isStatic</span>
+                                    ? <b>new</b> <span class="t">ScriptBlockMemberMethodWrapper</span>(<span class="r237 r">tuple</span>.<span class="i">bodyAst</span>, <span class="r236 r">sessionStateKeeper</span>)
+                                    : <b>new</b> <span class="t">ScriptBlockMemberMethodWrapper</span>(<span class="r237 r">tuple</span>.<span class="i">bodyAst</span>);
+                                <span class="r235 r">helperType</span>.<span class="i">GetField</span>(<span class="r237 r">tuple</span>.<span class="i">fieldName</span>, <span class="i">BindingFlags</span>.<span class="i">NonPublic</span> | <span class="i">BindingFlags</span>.<span class="i">Static</span>)
+                                    .<span class="i">SetValue</span>(<b>null</b>, <span class="r238 r">methodWrapper</span>);
+                            }
+                        }
+                    }
+                    <b>catch</b> (<span class="i">TypeLoadException</span> <span id="r239 rd" class="r239 r">e</span>)
+                    {
+                        <span class="c">// This is a cheap way to get error messages about non-implemented abstract/interface methods (and maybe some other errors).</span>
+                        <span class="c">// We use .NET API to perform this check during type creation.</span>
+                        <span class="c">//</span>
+                        <span class="c">// Presumably this catch could go away when we will not create Type at parse time.</span>
+                        <span class="c">// Error checking should be moved/added to semantic checks.</span>
+                        <span class="r219 r">parser</span>.<span class="i">ReportError</span>(<span class="r232 r">helper</span>.<span class="i">_typeDefinitionAst</span>.<span class="i">Extent</span>,
+                            <b>nameof</b>(<span class="i">ParserStrings</span>.<span class="i">TypeCreationError</span>),
+                            <span class="i">ParserStrings</span>.<span class="i">TypeCreationError</span>,
+                            <span class="r232 r">helper</span>.<span class="i">_typeBuilder</span>.<span class="i">Name</span>,
+                            <span class="r239 r">e</span>.<span class="i">Message</span>);
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r233 r">runtimeTypeAssigned</span>)
+                {
+                    <span class="c">// Clean up ast</span>
+                    <span class="r232 r">helper</span>.<span class="i">_typeDefinitionAst</span>.<span class="i">Type</span> = <b>null</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r224 r">assembly</span>;
+        }
+ 
+        <b>private static string</b> <a id="23e82bbde703acd8" href="../../R/23e82bbde703acd8.html" target="n" data-glyph="76,1" class="i method">GetClassNameInAssembly</a>(<a href="ast.cs.html#d7f0bc21c0f10879" class="t t">TypeDefinitionAst</a> <span id="r240 rd" class="r240 r">typeDefinitionAst</span>)
+        {
+            <span class="c">// Only allocate a list if necessary - in the most common case, we don&#39;t need it.</span>
+            <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r241 rd" class="r241 r">nameParts</span> = <b>null</b>;
+            <a href="ast.cs.html#d47621d83efd14de" class="k">var</a> <span id="r242 rd" class="r242 r">parent</span> = <span class="r240 r">typeDefinitionAst</span>.<a href="ast.cs.html#faf9ad7a55f1cc57" class="i property">Parent</a>;
+            <b>while</b> (<span class="r242 r">parent</span>.<a href="ast.cs.html#faf9ad7a55f1cc57" class="i property">Parent</a> != <b>null</b>)
+            {
+                <b>if</b> (<span class="r242 r">parent</span> <b>is</b> <a href="ast.cs.html#063cc8bbea9e10f2" class="t t">IParameterMetadataProvider</a>)
+                {
+                    <span class="r241 r">nameParts</span> ??= <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+                    <a href="ast.cs.html#dd61b2a7b388405b" class="k">var</a> <span id="r243 rd" class="r243 r">fnDefn</span> = <span class="r242 r">parent</span>.<a href="ast.cs.html#faf9ad7a55f1cc57" class="i property">Parent</a> <b>as</b> <a href="ast.cs.html#dd61b2a7b388405b" class="t t">FunctionDefinitionAst</a>;
+                    <b>if</b> (<span class="r243 r">fnDefn</span> != <b>null</b>)
+                    {
+                        <span class="r242 r">parent</span> = <span class="r243 r">fnDefn</span>;
+                        <span class="r241 r">nameParts</span>.<span class="i">Add</span>(<span class="r243 r">fnDefn</span>.<a href="ast.cs.html#951cc91108156df0" class="i property">Name</a>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r241 r">nameParts</span>.<span class="i">Add</span>(<span class="s">&quot;&lt;&quot;</span> + <span class="r242 r">parent</span>.<a href="ast.cs.html#d9d5cd324ee61136" class="i property">Extent</a>.<a href="Position.cs.html#43ce932d9225bc9c" class="i property">Text</a>.<span class="i">GetHashCode</span>().<span class="i">ToString</span>(<span class="s">&quot;x&quot;</span>, <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>) + <span class="s">&quot;&gt;&quot;</span>);
+                    }
+                }
+ 
+                <span class="r242 r">parent</span> = <span class="r242 r">parent</span>.<a href="ast.cs.html#faf9ad7a55f1cc57" class="i property">Parent</a>;
+            }
+ 
+            <b>if</b> (<span class="r241 r">nameParts</span> == <b>null</b>)
+            {
+                <b>return</b> <span class="r240 r">typeDefinitionAst</span>.<a href="ast.cs.html#b2edb6e99afb6054" class="i property">Name</a>;
+            }
+ 
+            <span class="r241 r">nameParts</span>.<span class="i">Reverse</span>();
+            <span class="r241 r">nameParts</span>.<span class="i">Add</span>(<span class="r240 r">typeDefinitionAst</span>.<a href="ast.cs.html#b2edb6e99afb6054" class="i property">Name</a>);
+            <b>return</b> <b>string</b>.<span class="i">Join</span>(<span class="s">&quot;.&quot;</span>, <span class="r241 r">nameParts</span>);
+        }
+ 
+        <b>private static readonly</b> <span class="i">OpCode</span>[] <a id="df1dbb3bd1af69c9" href="../../R/df1dbb3bd1af69c9.html" target="n" data-glyph="46,1" class="i field">s_ldc</a> =
+        {
+            <span class="i">OpCodes</span>.<span class="i">Ldc_I4_0</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_1</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_2</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_3</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_4</span>,
+            <span class="i">OpCodes</span>.<span class="i">Ldc_I4_5</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_6</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_7</span>, <span class="i">OpCodes</span>.<span class="i">Ldc_I4_8</span>
+        };
+ 
+        <b>private static void</b> <a id="2bc9a6b205fec380" href="../../R/2bc9a6b205fec380.html" target="n" data-glyph="76,1" class="i method">EmitLdc</a>(<span class="i">ILGenerator</span> <span id="r244 rd" class="r244 r">emitter</span>, <b>int</b> <span id="r245 rd" class="r245 r">c</span>)
+        {
+            <b>if</b> (<span class="r245 r">c</span> &lt; <a href="#df1dbb3bd1af69c9" class="i field">s_ldc</a>.<span class="i">Length</span>)
+            {
+                <span class="r244 r">emitter</span>.<span class="i">Emit</span>(<a href="#df1dbb3bd1af69c9" class="i field">s_ldc</a>[<span class="r245 r">c</span>]);
+            }
+            <b>else</b>
+            {
+                <span class="r244 r">emitter</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldc_I4</span>, <span class="r245 r">c</span>);
+            }
+        }
+ 
+        <b>private static readonly</b> <span class="i">OpCode</span>[] <a id="eedc64c50ceffa3b" href="../../R/eedc64c50ceffa3b.html" target="n" data-glyph="46,1" class="i field">s_ldarg</a> =
+        {
+            <span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>, <span class="i">OpCodes</span>.<span class="i">Ldarg_1</span>, <span class="i">OpCodes</span>.<span class="i">Ldarg_2</span>, <span class="i">OpCodes</span>.<span class="i">Ldarg_3</span>
+        };
+ 
+        <b>private static void</b> <a id="ea83cfcf86cc153e" href="../../R/ea83cfcf86cc153e.html" target="n" data-glyph="76,1" class="i method">EmitLdarg</a>(<span class="i">ILGenerator</span> <span id="r246 rd" class="r246 r">emitter</span>, <b>int</b> <span id="r247 rd" class="r247 r">c</span>)
+        {
+            <b>if</b> (<span class="r247 r">c</span> &lt; <a href="#eedc64c50ceffa3b" class="i field">s_ldarg</a>.<span class="i">Length</span>)
+            {
+                <span class="r246 r">emitter</span>.<span class="i">Emit</span>(<a href="#eedc64c50ceffa3b" class="i field">s_ldarg</a>[<span class="r247 r">c</span>]);
+            }
+            <b>else</b>
+            {
+                <span class="r246 r">emitter</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg</span>, <span class="r247 r">c</span>);
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

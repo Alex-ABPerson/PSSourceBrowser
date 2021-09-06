@@ -1,0 +1,1474 @@
+﻿<!DOCTYPE html>
+<html><head><title>scriptblock.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(1465);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/lang/scriptblock.cs" target="_top">engine\lang\scriptblock.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Language</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">ExceptionServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">Serialization</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> An object representing a pre-compiled block of powershell script.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class track a block of script in a compiled form. It is also</span>
+    <span class="c">///</span><span class="c"> used for direct invocation of the script block.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> 1. Overview</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Script block comes in two forms,</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> a. Full form (cmdlet form)</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This comes in following format</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> {</span>
+    <span class="c">///</span><span class="c">     begin</span>
+    <span class="c">///</span><span class="c">     {</span>
+    <span class="c">///</span><span class="c">         statementlist;</span>
+    <span class="c">///</span><span class="c">     }</span>
+    <span class="c">///</span><span class="c">     process</span>
+    <span class="c">///</span><span class="c">     {</span>
+    <span class="c">///</span><span class="c">         statementlist;</span>
+    <span class="c">///</span><span class="c">     }</span>
+    <span class="c">///</span><span class="c">     end</span>
+    <span class="c">///</span><span class="c">     {</span>
+    <span class="c">///</span><span class="c">         statementlist;</span>
+    <span class="c">///</span><span class="c">     }</span>
+    <span class="c">///</span><span class="c"> }</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This form is used for running the script in a pipeline like</span>
+    <span class="c">///</span><span class="c"> a cmdlet.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> b. Simple form</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This comes in following format</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> {</span>
+    <span class="c">///</span><span class="c">     statementlist;</span>
+    <span class="c">///</span><span class="c"> }</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> 2. Script block execution</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> For the full form (or cmdlet form) of script block, the script</span>
+    <span class="c">///</span><span class="c"> block itself is part of a pipeline. Its execution is handled through</span>
+    <span class="c">///</span><span class="c"> ScriptCommandProcessor, which involves execution of begin/process/end</span>
+    <span class="c">///</span><span class="c"> blocks like a cmdlet. If a scriptblock in simple form is used in</span>
+    <span class="c">///</span><span class="c"> a pipeline, its execution is done through ScriptCommandProcessor</span>
+    <span class="c">///</span><span class="c"> also, with some of begin/process/end blocks default to be empty.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> A script block in simple form can be directly invoked (outside</span>
+    <span class="c">///</span><span class="c"> of a pipeline context). For example,</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">     {&quot;text&quot;}.Invoke()</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> A scriptblock can be directly invoked internally or externally through</span>
+    <span class="c">///</span><span class="c"> runspace API.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This class will handle the logic for direct invocation of script blocks.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>public</b> <a href="../../P/eea83b421baeaca4.html" target="s" class="k">partial</a> <b>class</b> <a id="eea83b421baeaca4" href="../../R/eea83b421baeaca4.html" target="n" data-glyph="0,0" class="t t">ScriptBlock</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a script block object based on a script string to be parsed immediately.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Engine context for this script block.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">script</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The string to compile.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="7001f03560eb84f2" href="../../R/7001f03560eb84f2.html" target="n" data-glyph="74,1" class="i method">Create</a>(<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r0 rd" class="r0 r">context</span>, <b>string</b> <span id="r1 rd" class="r1 r">script</span>)
+        {
+            <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r2 rd" class="r2 r">sb</span> = <a href="../runtime/CompiledScriptBlock.cs.html#7dc3df5a13c2e779" class="i method">Create</a>(<span class="r0 r">context</span>.<a href="../ExecutionContext.cs.html#7b897dde7067af78" class="i property">Engine</a>.<a href="../AutomationEngine.cs.html#ceed5f2c3fd0e6be" class="i field">EngineParser</a>, <b>null</b>, <span class="r1 r">script</span>);
+            <b>if</b> (<span class="r0 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a> != <b>null</b> &amp;&amp; <span class="r0 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionState.cs.html#1900efdc2f293d5a" class="i property">Module</a> != <b>null</b>)
+            {
+                <span class="r2 r">sb</span>.<a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a> = <span class="r0 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>;
+            }
+ 
+            <b>return</b> <span class="r2 r">sb</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a script block based on a script to be parsed when execution</span>
+        <span class="c">///</span><span class="c"> context is provided.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">script</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The string to compile.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="adfac0fa7bf5725f" href="../../R/adfac0fa7bf5725f.html" target="n" data-glyph="72,1" class="i method">Create</a>(<b>string</b> <span id="r3 rd" class="r3 r">script</span>) =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#7dc3df5a13c2e779" class="i method">Create</a>(
+            <span class="r4 r">parser</span>: <b>new</b> <span class="i n">Language</span>.<a href="../parser/Parser.cs.html#aee2c3138d83ea53" class="t constructor">Parser</a>(),
+            <span class="r5 r">fileName</span>: <b>null</b>,
+            <span class="r6 r">fileContents</span>: <span class="r3 r">script</span>);
+ 
+        <b>internal static</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="5855871887dc8453" href="../../R/5855871887dc8453.html" target="n" data-glyph="74,1" class="i method">CreateDelayParsedScriptBlock</a>(<b>string</b> <span id="r7 rd" class="r7 r">script</span>, <b>bool</b> <span id="r8 rd" class="r8 r">isProductCode</span>)
+            =&gt; <b>new</b> <a href="../runtime/CompiledScriptBlock.cs.html#cf87a3188da993bd" class="t constructor">ScriptBlock</a>(<b>new</b> <a href="../runtime/CompiledScriptBlock.cs.html#1ccf5a6ae2cd2e05" class="t constructor">CompiledScriptBlockData</a>(<span class="r7 r">script</span>, <span class="r8 r">isProductCode</span>)) { <a href="../runtime/CompiledScriptBlock.cs.html#6bbac4f67f789407" class="i property">DebuggerHidden</a> = <b>true</b> };
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns a new scriptblock bound to a module. Any local variables in the</span>
+        <span class="c">///</span><span class="c"> callers context will be copied into the module.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="6f3bdb602b7bca08" href="../../R/6f3bdb602b7bca08.html" target="n" data-glyph="72,1" class="i method">GetNewClosure</a>()
+        {
+            <a href="../Modules/PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r9 rd" class="r9 r">m</span> = <b>new</b> <a href="../Modules/PSModuleInfo.cs.html#939468f9df565a07" class="t constructor">PSModuleInfo</a>(<b>true</b>);
+            <span class="r9 r">m</span>.<a href="../Modules/PSModuleInfo.cs.html#351eaa517032c88c" class="i method">CaptureLocals</a>();
+            <b>return</b> <span class="r9 r">m</span>.<a href="../Modules/PSModuleInfo.cs.html#a8f909982f5b4b9e" class="i method">NewBoundScriptBlock</a>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns PowerShell object representing the pipeline contained in this ScriptBlock.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Some ScriptBlocks are too complicated to be converted into a PowerShell object.</span>
+        <span class="c">///</span><span class="c"> For those ScriptBlocks a </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is thrown.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> ScriptBlock cannot be converted into a PowerShell object if</span>
+        <span class="c">///</span><span class="c"> - It contains more than one statement</span>
+        <span class="c">///</span><span class="c"> - It references variables undeclared in </span><span class="c">&lt;</span><span class="c">c</span><span class="c">&gt;</span><span class="c">param(...)</span><span class="c">&lt;/</span><span class="c">c</span><span class="c">&gt;</span><span class="c"> block</span>
+        <span class="c">///</span><span class="c"> - It uses redirection to a file</span>
+        <span class="c">///</span><span class="c"> - It uses dot sourcing</span>
+        <span class="c">///</span><span class="c"> - Command names can&#39;t be resolved (i.e. if an element of a pipeline is another scriptblock)</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Declaration of variables in a </span><span class="c">&lt;</span><span class="c">c</span><span class="c">&gt;</span><span class="c">param(...)</span><span class="c">&lt;/</span><span class="c">c</span><span class="c">&gt;</span><span class="c"> block is enforced,</span>
+        <span class="c">///</span><span class="c"> because undeclared variables are assumed to be variables from a remoting server.</span>
+        <span class="c">///</span><span class="c"> Since we need to fully evaluate parameters of commands of a PowerShell object&#39;s</span>
+        <span class="c">///</span><span class="c"> we reject all variables references that refer to a variable from a remoting server.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> arguments for the ScriptBlock (providing values for variables used within the ScriptBlock);</span>
+        <span class="c">///</span><span class="c"> can be null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell object representing the pipeline contained in this ScriptBlock</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when this ScriptBlock cannot be expressed as a PowerShell object.</span>
+        <span class="c">///</span><span class="c"> For example thrown when there is more than one statement, if there</span>
+        <span class="c">///</span><span class="c"> are undeclared variables, if redirection to a file is used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when evaluation of command arguments results in an exception.</span>
+        <span class="c">///</span><span class="c"> Might depend on the value of $errorActionPreference variable.</span>
+        <span class="c">///</span><span class="c"> For example trying to translate the following ScriptBlock will result in this exception:</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">c</span><span class="c">&gt;</span><span class="c">$errorActionPreference = &quot;stop&quot;; $sb = { get-foo $( throw ) }; $sb.GetPowerShell()</span><span class="c">&lt;/</span><span class="c">c</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when there is no ExecutionContext associated with this ScriptBlock object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="b40ee1adbffb9303" href="../../R/b40ee1adbffb9303.html" target="n" data-glyph="72,1" class="i method">GetPowerShell</a>(<b>params object</b>[] <span id="r10 rd" class="r10 r">args</span>) =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#4904fe35fcc2ecfc" class="i method">GetPowerShellImpl</a>(
+            <span class="r11 r">context</span>: <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>(),
+            <span class="r12 r">variables</span>: <b>null</b>,
+            <span class="r13 r">isTrustedInput</span>: <b>false</b>,
+            <span class="r14 r">filterNonUsingVariables</span>: <b>false</b>,
+            <span class="r15 r">createLocalScope</span>: <b>null</b>,
+            <span class="r10 r">args</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns PowerShell object representing the pipeline contained in this ScriptBlock,</span>
+        <span class="c">///</span><span class="c"> similar to the GetPowerShell() method. If the &#39;isTrustedInput&#39; flag parameter is set</span>
+        <span class="c">///</span><span class="c"> to True, then the GetPowerShell() implementation supports extended conversion operations</span>
+        <span class="c">///</span><span class="c"> (such as replacing variable values with their current values) that might otherwise</span>
+        <span class="c">///</span><span class="c"> be unsafe if applied to untrusted input.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">isTrustedInput</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Specifies whether the scriptblock being converted comes from a trusted source.</span>
+        <span class="c">///</span><span class="c"> The default is False.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> arguments for the ScriptBlock (providing values for variables used within the ScriptBlock);</span>
+        <span class="c">///</span><span class="c"> can be null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="6f0e368497931950" href="../../R/6f0e368497931950.html" target="n" data-glyph="72,1" class="i method">GetPowerShell</a>(<b>bool</b> <span id="r16 rd" class="r16 r">isTrustedInput</span>, <b>params object</b>[] <span id="r17 rd" class="r17 r">args</span>)
+            =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#4904fe35fcc2ecfc" class="i method">GetPowerShellImpl</a>(
+                <span class="r11 r">context</span>: <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>(),
+                <span class="r12 r">variables</span>: <b>null</b>,
+                <span class="r16 r">isTrustedInput</span>,
+                <span class="r14 r">filterNonUsingVariables</span>: <b>false</b>,
+                <span class="r15 r">createLocalScope</span>: <b>null</b>,
+                <span class="r17 r">args</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns PowerShell object representing the pipeline contained in this ScriptBlock, using variables</span>
+        <span class="c">///</span><span class="c"> supplied in the dictionary.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">variables</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> variables to be supplied as context to the ScriptBlock (providing values for variables explicitly</span>
+        <span class="c">///</span><span class="c"> requested by the &#39;using:&#39; prefix.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> arguments for the ScriptBlock (providing values for variables used within the ScriptBlock);</span>
+        <span class="c">///</span><span class="c"> can be null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell object representing the pipeline contained in this ScriptBlock</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when this ScriptBlock cannot be expressed as a PowerShell object.</span>
+        <span class="c">///</span><span class="c"> For example thrown when there is more than one statement, if there</span>
+        <span class="c">///</span><span class="c"> are undeclared variables, if redirection to a file is used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when evaluation of command arguments results in an exception.</span>
+        <span class="c">///</span><span class="c"> Might depend on the value of $errorActionPreference variable.</span>
+        <span class="c">///</span><span class="c"> For example trying to translate the following ScriptBlock will result in this exception:</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">c</span><span class="c">&gt;</span><span class="c">$errorActionPreference = &quot;stop&quot;; $sb = { get-foo $( throw ) }; $sb.GetPowerShell()</span><span class="c">&lt;/</span><span class="c">c</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when there is no ExecutionContext associated with this ScriptBlock object and no</span>
+        <span class="c">///</span><span class="c"> variables are supplied.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="353ca9e50e15b6a9" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetPowerShell</a>(<span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r18 rd" class="r18 r">variables</span>, <b>params object</b>[] <span id="r19 rd" class="r19 r">args</span>)
+        {
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r20 rd" class="r20 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r21 rd" class="r21 r">suppliedVariables</span> = <b>null</b>;
+ 
+            <b>if</b> (<span class="r18 r">variables</span> != <b>null</b>)
+            {
+                <span class="r21 r">suppliedVariables</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt;(<span class="r18 r">variables</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <span class="r20 r">context</span> = <b>null</b>;
+            }
+ 
+            <b>return</b> <a href="../runtime/CompiledScriptBlock.cs.html#4904fe35fcc2ecfc" class="i method">GetPowerShellImpl</a>(<span class="r20 r">context</span>, <span class="r21 r">suppliedVariables</span>, <b>false</b>, <b>false</b>, <b>null</b>, <span class="r19 r">args</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns PowerShell object representing the pipeline contained in this ScriptBlock, using variables</span>
+        <span class="c">///</span><span class="c"> supplied in the dictionary.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">variables</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> variables to be supplied as context to the ScriptBlock (providing values for variables explicitly</span>
+        <span class="c">///</span><span class="c"> requested by the &#39;using:&#39; prefix.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">usingVariables</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> key-value pairs from the </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span><span class="c">variables</span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span><span class="c"> that actually get used by the &#39;using:&#39; prefix variables</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> arguments for the ScriptBlock (providing values for variables used within the ScriptBlock);</span>
+        <span class="c">///</span><span class="c"> can be null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell object representing the pipeline contained in this ScriptBlock</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when this ScriptBlock cannot be expressed as a PowerShell object.</span>
+        <span class="c">///</span><span class="c"> For example thrown when there is more than one statement, if there</span>
+        <span class="c">///</span><span class="c"> are undeclared variables, if redirection to a file is used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when evaluation of command arguments results in an exception.</span>
+        <span class="c">///</span><span class="c"> Might depend on the value of $errorActionPreference variable.</span>
+        <span class="c">///</span><span class="c"> For example trying to translate the following ScriptBlock will result in this exception:</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">c</span><span class="c">&gt;</span><span class="c">$errorActionPreference = &quot;stop&quot;; $sb = { get-foo $( throw ) }; $sb.GetPowerShell()</span><span class="c">&lt;/</span><span class="c">c</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when there is no ExecutionContext associated with this ScriptBlock object and no</span>
+        <span class="c">///</span><span class="c"> variables are supplied.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="a79cc7311f04f2ac" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetPowerShell</a>(
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r22 rd" class="r22 r">variables</span>,
+            <b>out</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r23 rd" class="r23 r">usingVariables</span>,
+            <b>params object</b>[] <span id="r24 rd" class="r24 r">args</span>)
+            =&gt; <a href="#dfbcec20ca3ad558" class="i method">GetPowerShell</a>(<span class="r22 r">variables</span>, <b>out</b> <span class="r23 r">usingVariables</span>, <span class="r25 r">isTrustedInput</span>: <b>false</b>, <span class="r24 r">args</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns PowerShell object representing the pipeline contained in this ScriptBlock, using variables</span>
+        <span class="c">///</span><span class="c"> supplied in the dictionary.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">variables</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> variables to be supplied as context to the ScriptBlock (providing values for variables explicitly</span>
+        <span class="c">///</span><span class="c"> requested by the &#39;using:&#39; prefix.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">usingVariables</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> key-value pairs from the </span><span class="c">&lt;</span><span class="c">para</span><span class="c">&gt;</span><span class="c">variables</span><span class="c">&lt;/</span><span class="c">para</span><span class="c">&gt;</span><span class="c"> that actually get used by the &#39;using:&#39; prefix variables</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> arguments for the ScriptBlock (providing values for variables used within the ScriptBlock);</span>
+        <span class="c">///</span><span class="c"> can be null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">isTrustedInput</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Specifies whether the scriptblock being converted comes from a trusted source.</span>
+        <span class="c">///</span><span class="c"> The default is False.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PowerShell object representing the pipeline contained in this ScriptBlock</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when this ScriptBlock cannot be expressed as a PowerShell object.</span>
+        <span class="c">///</span><span class="c"> For example thrown when there is more than one statement, if there</span>
+        <span class="c">///</span><span class="c"> are undeclared variables, if redirection to a file is used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when evaluation of command arguments results in an exception.</span>
+        <span class="c">///</span><span class="c"> Might depend on the value of $errorActionPreference variable.</span>
+        <span class="c">///</span><span class="c"> For example trying to translate the following ScriptBlock will result in this exception:</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">c</span><span class="c">&gt;</span><span class="c">$errorActionPreference = &quot;stop&quot;; $sb = { get-foo $( throw ) }; $sb.GetPowerShell()</span><span class="c">&lt;/</span><span class="c">c</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when there is no ExecutionContext associated with this ScriptBlock object and no</span>
+        <span class="c">///</span><span class="c"> variables are supplied.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="dfbcec20ca3ad558" href="../../R/dfbcec20ca3ad558.html" target="n" data-glyph="72,1" class="i method">GetPowerShell</a>(
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r26 rd" class="r26 r">variables</span>,
+            <b>out</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r27 rd" class="r27 r">usingVariables</span>,
+            <b>bool</b> <span id="r25 rd" class="r25 r">isTrustedInput</span>,
+            <b>params object</b>[] <span id="r28 rd" class="r28 r">args</span>)
+        {
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r29 rd" class="r29 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt; <span id="r30 rd" class="r30 r">suppliedVariables</span> = <b>null</b>;
+ 
+            <b>if</b> (<span class="r26 r">variables</span> != <b>null</b>)
+            {
+                <span class="r30 r">suppliedVariables</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>object</b>&gt;(<span class="r26 r">variables</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+                <span class="r29 r">context</span> = <b>null</b>;
+            }
+ 
+            <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r31 rd" class="r31 r">powershell</span> = <a href="../runtime/CompiledScriptBlock.cs.html#4904fe35fcc2ecfc" class="i method">GetPowerShellImpl</a>(<span class="r29 r">context</span>, <span class="r30 r">suppliedVariables</span>, <span class="r25 r">isTrustedInput</span>, <b>true</b>, <b>null</b>, <span class="r28 r">args</span>);
+            <span class="r27 r">usingVariables</span> = <span class="r30 r">suppliedVariables</span>;
+ 
+            <b>return</b> <span class="r31 r">powershell</span>;
+        }
+ 
+        <b>internal</b> <a href="../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="4e20741f85928323" href="../../R/4e20741f85928323.html" target="n" data-glyph="74,1" class="i method">GetPowerShell</a>(
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r32 rd" class="r32 r">context</span>,
+            <b>bool</b> <span id="r33 rd" class="r33 r">isTrustedInput</span>,
+            <b>bool</b>? <span id="r34 rd" class="r34 r">useLocalScope</span>,
+            <b>object</b>[] <span id="r35 rd" class="r35 r">args</span>)
+            =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#4904fe35fcc2ecfc" class="i method">GetPowerShellImpl</a>(
+                <span class="r32 r">context</span>,
+                <span class="r12 r">variables</span>: <b>null</b>,
+                <span class="r33 r">isTrustedInput</span>,
+                <span class="r14 r">filterNonUsingVariables</span>: <b>false</b>,
+                <span class="r34 r">useLocalScope</span>,
+                <span class="r35 r">args</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get a steppable pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A steppable pipeline object.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(
+            <span class="s">&quot;Microsoft.Naming&quot;</span>,
+            <span class="s">&quot;CA1704:IdentifiersShouldBeSpelledCorrectly&quot;</span>,
+            <span class="i">MessageId</span> = <span class="s">&quot;Steppable&quot;</span>,
+            <span class="i">Justification</span> = <span class="s">&quot;Review this during API naming&quot;</span>)]
+        <b>public</b> <a href="#5e20a8a88cfbe6cb" class="t t">SteppablePipeline</a> <a id="4c228a80a3ac8bbd" href="../../R/4c228a80a3ac8bbd.html" target="n" data-glyph="72,1" class="i method">GetSteppablePipeline</a>()
+            =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#7755d861f33d4515" class="i method">GetSteppablePipelineImpl</a>(<span class="r36 r">commandOrigin</span>: <a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a>.<a href="../SecurityManagerBase.cs.html#946d8e7ca02acec6" class="i field">Internal</a>, <span class="r37 r">args</span>: <b>null</b>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get a steppable pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A steppable pipeline object.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(
+            <span class="s">&quot;Microsoft.Naming&quot;</span>,
+            <span class="s">&quot;CA1704:IdentifiersShouldBeSpelledCorrectly&quot;</span>,
+            <span class="i">MessageId</span> = <span class="s">&quot;Steppable&quot;</span>,
+            <span class="i">Justification</span> = <span class="s">&quot;Review this during API naming&quot;</span>)]
+        <b>public</b> <a href="#5e20a8a88cfbe6cb" class="t t">SteppablePipeline</a> <a id="dfbaca2baf0a866a" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetSteppablePipeline</a>(<a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a> <span id="r38 rd" class="r38 r">commandOrigin</span>)
+            =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#7755d861f33d4515" class="i method">GetSteppablePipelineImpl</a>(<span class="r38 r">commandOrigin</span>, <span class="r37 r">args</span>: <b>null</b>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get a steppable pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A steppable pipeline object.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(
+            <span class="s">&quot;Microsoft.Naming&quot;</span>,
+            <span class="s">&quot;CA1704:IdentifiersShouldBeSpelledCorrectly&quot;</span>,
+            <span class="i">MessageId</span> = <span class="s">&quot;Steppable&quot;</span>,
+            <span class="i">Justification</span> = <span class="s">&quot;Review this during API naming&quot;</span>)]
+        <b>public</b> <a href="#5e20a8a88cfbe6cb" class="t t">SteppablePipeline</a> <a id="e56cc71ed9995acd" href="../../R/e56cc71ed9995acd.html" target="n" data-glyph="72,1" class="i method">GetSteppablePipeline</a>(<a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a> <span id="r39 rd" class="r39 r">commandOrigin</span>, <b>object</b>[] <span id="r40 rd" class="r40 r">args</span>)
+            =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#7755d861f33d4515" class="i method">GetSteppablePipelineImpl</a>(<span class="r39 r">commandOrigin</span>, <span class="r40 r">args</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Execute this node with the specified arguments. The arguments show</span>
+        <span class="c">///</span><span class="c"> up in the script as $args with $_ being the first argument.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to this script.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The object(s) generated during the execution of</span>
+        <span class="c">///</span><span class="c"> the script block returned as a collection of PSObjects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Thrown if a script runtime exceptionexception occurred.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="parserutils.cs.html#a3a2a71cfea9c3b1" class="t t">FlowControlException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">An internal (non-public) exception from a flow control statement.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="3f6b9284eb08b880" href="../../R/3f6b9284eb08b880.html" target="n" data-glyph="72,1" class="i method">Invoke</a>(<b>params object</b>[] <span id="r41 rd" class="r41 r">args</span>) =&gt;
+            <a href="#2b65414bd51c2666" class="i method">DoInvoke</a>(<span class="r42 r">dollarUnder</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>, <span class="r43 r">input</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>, <span class="r41 r">args</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A method that allows a scriptblock to be invoked with additional context in the form of a</span>
+        <span class="c">///</span><span class="c"> set of local functions and variables to be defined in the scriptblock&#39;s scope. The list of</span>
+        <span class="c">///</span><span class="c"> variables may include the special variables $input, $_ and $this.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This overload of the function takes a hashtable and converts it to the</span>
+        <span class="c">///</span><span class="c"> required dictionary which makes the API easier to use from within a PowerShell script.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">functionsToDefine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A dictionary of functions to define.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">variablesToDefine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A list of variables to define.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to the actual scriptblock.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="904dc02032f3493b" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">InvokeWithContext</a>(
+            <span class="i">IDictionary</span> <span id="r44 rd" class="r44 r">functionsToDefine</span>,
+            <span class="i">List</span>&lt;<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <span id="r45 rd" class="r45 r">variablesToDefine</span>,
+            <b>params object</b>[] <span id="r46 rd" class="r46 r">args</span>)
+        {
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt; <span id="r47 rd" class="r47 r">functionsToDefineDictionary</span> = <b>null</b>;
+            <b>if</b> (<span class="r44 r">functionsToDefine</span> != <b>null</b>)
+            {
+                <span class="r47 r">functionsToDefineDictionary</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt;();
+                <b>foreach</b> (<span class="i">DictionaryEntry</span> <span id="r48 rd" class="r48 r">pair</span> <b>in</b> <span class="r44 r">functionsToDefine</span>)
+                {
+                    <b>string</b> <span id="r49 rd" class="r49 r">functionName</span> = <span class="r48 r">pair</span>.<span class="i">Key</span> <b>as string</b>;
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrWhiteSpace</span>(<span class="r49 r">functionName</span>))
+                    {
+                        <a href="../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a> <span id="r50 rd" class="r50 r">e</span> = <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                            <span class="i">ParserStrings</span>.<span class="i">EmptyFunctionNameInFunctionDefinitionDictionary</span>);
+ 
+                        <span class="r50 r">e</span>.<a href="../../utils/MshInvalidOperationException.cs.html#06b019caca30c7ed" class="i method">SetErrorId</a>(<span class="s">&quot;EmptyFunctionNameInFunctionDefinitionDictionary&quot;</span>);
+                        <b>throw</b> <span class="r50 r">e</span>;
+                    }
+ 
+                    <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r51 rd" class="r51 r">functionBody</span> = <span class="r48 r">pair</span>.<span class="i">Value</span> <b>as</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>;
+                    <span class="c">// null check for functionBody is done at the lower layer.</span>
+                    <span class="r47 r">functionsToDefineDictionary</span>.<span class="i">Add</span>(<span class="r49 r">functionName</span>, <span class="r51 r">functionBody</span>);
+                }
+            }
+ 
+            <b>return</b> <a href="#2a3223d248ebfed8" class="i method">InvokeWithContext</a>(
+                <span class="r47 r">functionsToDefineDictionary</span>,
+                <span class="r45 r">variablesToDefine</span>,
+                <span class="r46 r">args</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A method that allows a scriptblock to be invoked with additional context in the form of a</span>
+        <span class="c">///</span><span class="c"> set of local functions and variables to be defined in the scriptblock&#39;s scope. The list of</span>
+        <span class="c">///</span><span class="c"> variables may include the special variables $input, $_ and $this.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r52 r">functionsToDefine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A dictionary of functions to define.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r53 r">variablesToDefine</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A list of variables to define.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r54 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to the actual scriptblock.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="2a3223d248ebfed8" href="../../R/2a3223d248ebfed8.html" target="n" data-glyph="72,1" class="i method">InvokeWithContext</a>(
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt; <span id="r52 rd" class="r52 r">functionsToDefine</span>,
+            <span class="i">List</span>&lt;<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <span id="r53 rd" class="r53 r">variablesToDefine</span>,
+            <b>params object</b>[] <span id="r54 rd" class="r54 r">args</span>)
+        {
+            <b>object</b> <span id="r55 rd" class="r55 r">input</span> = <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>;
+            <b>object</b> <span id="r56 rd" class="r56 r">dollarUnder</span> = <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>;
+            <b>object</b> <span id="r57 rd" class="r57 r">scriptThis</span> = <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>;
+ 
+            <b>if</b> (<span class="r53 r">variablesToDefine</span> != <b>null</b>)
+            {
+                <span class="c">// Extract the special variables &quot;this&quot;, &quot;input&quot; and &quot;_&quot;</span>
+                <a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a> <span id="r58 rd" class="r58 r">located</span> = <span class="r53 r">variablesToDefine</span>.<span class="i">Find</span>(
+                    <span id="r59 rd" class="r59 r">v</span> =&gt; <b>string</b>.<span class="i">Equals</span>(<span class="r59 r">v</span>.<span class="i">Name</span>, <span class="s">&quot;this&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>));
+                <b>if</b> (<span class="r58 r">located</span> != <b>null</b>)
+                {
+                    <span class="r57 r">scriptThis</span> = <span class="r58 r">located</span>.<a href="../ShellVariable.cs.html#8b1105722178c660" class="i property">Value</a>;
+                    <span class="r53 r">variablesToDefine</span>.<span class="i">Remove</span>(<span class="r58 r">located</span>);
+                }
+ 
+                <span class="r58 r">located</span> = <span class="r53 r">variablesToDefine</span>.<span class="i">Find</span>(
+                    <span id="r60 rd" class="r60 r">v</span> =&gt; <b>string</b>.<span class="i">Equals</span>(<span class="r60 r">v</span>.<span class="i">Name</span>, <span class="s">&quot;_&quot;</span>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>));
+                <b>if</b> (<span class="r58 r">located</span> != <b>null</b>)
+                {
+                    <span class="r56 r">dollarUnder</span> = <span class="r58 r">located</span>.<a href="../ShellVariable.cs.html#8b1105722178c660" class="i property">Value</a>;
+                    <span class="r53 r">variablesToDefine</span>.<span class="i">Remove</span>(<span class="r58 r">located</span>);
+                }
+ 
+                <span class="r58 r">located</span> = <span class="r53 r">variablesToDefine</span>.<span class="i">Find</span>(
+                    <span id="r61 rd" class="r61 r">v</span> =&gt; <b>string</b>.<span class="i">Equals</span>(<span class="r61 r">v</span>.<span class="i">Name</span>, <span class="s">&quot;input&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>));
+                <b>if</b> (<span class="r58 r">located</span> != <b>null</b>)
+                {
+                    <span class="r55 r">input</span> = <span class="r58 r">located</span>.<a href="../ShellVariable.cs.html#8b1105722178c660" class="i property">Value</a>;
+                    <span class="r53 r">variablesToDefine</span>.<span class="i">Remove</span>(<span class="r58 r">located</span>);
+                }
+            }
+ 
+            <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r62 rd" class="r62 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r63 rd" class="r63 r">outputPipe</span> = <b>new</b> <a href="../Pipe.cs.html#99288ee09b9642bb" class="t constructor">Pipe</a>(<span class="r62 r">result</span>);
+ 
+            <a href="#79e4a92eda3f9883" class="i method">InvokeWithPipe</a>(
+                <span class="r64 r">useLocalScope</span>: <b>true</b>,
+                <span class="r65 r">functionsToDefine</span>: <span class="r52 r">functionsToDefine</span>,
+                <span class="r66 r">variablesToDefine</span>: <span class="r53 r">variablesToDefine</span>,
+                <span class="r67 r">errorHandlingBehavior</span>: <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="#5e78734ffe1c6ed3" class="i field">WriteToCurrentErrorPipe</a>,
+                <span class="r68 r">dollarUnder</span>: <span class="r56 r">dollarUnder</span>,
+                <span class="r69 r">input</span>: <span class="r55 r">input</span>,
+                <span class="r70 r">scriptThis</span>: <span class="r57 r">scriptThis</span>,
+                <span class="r71 r">outputPipe</span>: <span class="r63 r">outputPipe</span>,
+                <span class="r72 r">invocationInfo</span>: <b>null</b>,
+                <span class="r73 r">args</span>: <span class="r54 r">args</span>);
+            <b>return</b> <a href="#fe49e30a87096e2c" class="i method">GetWrappedResult</a>(<span class="r62 r">result</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Execute this node with the specified arguments. The arguments show</span>
+        <span class="c">///</span><span class="c"> up in the script as $args. This overload return the raw (unwrapped) result</span>
+        <span class="c">///</span><span class="c"> so it can be more efficient.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r74 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to pass to this scriptblock.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The object(s) generated during the execution of the</span>
+        <span class="c">///</span><span class="c"> script block. They may or may not be wrapped in PSObject. It&#39;s up to the caller to check.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Thrown if a script runtime exceptionexception occurred.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="parserutils.cs.html#a3a2a71cfea9c3b1" class="t t">FlowControlException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">An internal (non-public) exception from a flow control statement.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public object</b> <a id="1a7b06a284505bc5" href="../../R/1a7b06a284505bc5.html" target="n" data-glyph="72,1" class="i method">InvokeReturnAsIs</a>(<b>params object</b>[] <span id="r74 rd" class="r74 r">args</span>)
+            =&gt; <a href="#c9191394af92013a" class="i method">DoInvokeReturnAsIs</a>(
+                <span class="r75 r">useLocalScope</span>: <b>true</b>,
+                <span class="r76 r">errorHandlingBehavior</span>: <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="#df0061919fb37a15" class="i field">WriteToExternalErrorPipe</a>,
+                <span class="r77 r">dollarUnder</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="r78 r">input</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="r79 r">scriptThis</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="r80 r">args</span>: <span class="r74 r">args</span>);
+ 
+        <b>internal</b> <span class="r81 r t">T</span> <a id="b152d1144deda2c8" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">InvokeAsMemberFunctionT</a>&lt;<span id="r81 rd t" class="r81 r t">T</span>&gt;(<b>object</b> <span id="r82 rd" class="r82 r">instance</span>, <b>object</b>[] <span id="r83 rd" class="r83 r">args</span>)
+        {
+            <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r84 rd" class="r84 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r85 rd" class="r85 r">pipe</span> = <b>new</b> <a href="../Pipe.cs.html#99288ee09b9642bb" class="t constructor">Pipe</a>(<span class="r84 r">result</span>);
+ 
+            <span class="i">InvokeWithPipe</span>(
+                <span class="i">useLocalScope</span>: <b>true</b>,
+                <span class="i">errorHandlingBehavior</span>: <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="#df0061919fb37a15" class="i field">WriteToExternalErrorPipe</a>,
+                <span class="i">dollarUnder</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="i">input</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="i">scriptThis</span>: <span class="r82 r">instance</span> ?? <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="i">outputPipe</span>: <span class="r85 r">pipe</span>,
+                <span class="i">invocationInfo</span>: <b>null</b>,
+                <span class="i">propagateAllExceptionsToTop</span>: <b>true</b>,
+                <span class="i">args</span>: <span class="r83 r">args</span>);
+ 
+            <span class="c">// This is needed only for the case where the</span>
+            <span class="c">// method returns [object]. If the argument to &#39;return&#39;</span>
+            <span class="c">// is a pipeline that emits nothing then result.Count will</span>
+            <span class="c">// be zero so we catch that and &quot;convert&quot; it to null. Note that</span>
+            <span class="c">// the return statement is still required in the method, it</span>
+            <span class="c">// just recieves nothing from it&#39;s argument.</span>
+            <b>if</b> (<span class="r84 r">result</span>.<span class="i">Count</span> == 0)
+            {
+                <b>return</b> <b>default</b>(<span class="r81 r t">T</span>);
+            }
+ 
+            <b>return</b> (<span class="r81 r t">T</span>)<span class="r84 r">result</span>[0];
+        }
+ 
+        <b>internal void</b> <a id="3de6e18eade4324b" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">InvokeAsMemberFunction</a>(<b>object</b> <span id="r86 rd" class="r86 r">instance</span>, <b>object</b>[] <span id="r87 rd" class="r87 r">args</span>)
+        {
+            <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r88 rd" class="r88 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r89 rd" class="r89 r">pipe</span> = <b>new</b> <a href="../Pipe.cs.html#99288ee09b9642bb" class="t constructor">Pipe</a>(<span class="r88 r">result</span>);
+ 
+            <span class="i">InvokeWithPipe</span>(
+                <span class="i">useLocalScope</span>: <b>true</b>,
+                <span class="i">errorHandlingBehavior</span>: <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="#5e78734ffe1c6ed3" class="i field">WriteToCurrentErrorPipe</a>,
+                <span class="i">dollarUnder</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="i">input</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="i">scriptThis</span>: <span class="r86 r">instance</span> ?? <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="i">outputPipe</span>: <span class="r89 r">pipe</span>,
+                <span class="i">invocationInfo</span>: <b>null</b>,
+                <span class="i">propagateAllExceptionsToTop</span>: <b>true</b>,
+                <span class="i">args</span>: <span class="r87 r">args</span>);
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r88 r">result</span>.<span class="i">Count</span> == 0, <span class="s">&quot;Code generation ensures we return the correct type&quot;</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return all attributes on a script block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">List</span>&lt;<span class="i">Attribute</span>&gt; <a id="744124eafe8115ab" href="../../R/744124eafe8115ab.html" target="n" data-glyph="102,1" class="i property">Attributes</a> { <b>get</b> =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#4d049ecd74717744" class="i method">GetAttributes</a>(); }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The script file that defined this script block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="20772981d01b9078" href="../../R/20772981d01b9078.html" target="n" data-glyph="102,1" class="i property">File</a> { <b>get</b> =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#0d05bf065e4a0270" class="i method">GetFileName</a>(); }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get/set whether this scriptblock is a filter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="d359ea5ab7ca7a34" href="../../R/d359ea5ab7ca7a34.html" target="n" data-glyph="102,1" class="i property">IsFilter</a> { <b>get</b> =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#93a1a6c2d4f99ed6" class="i field">_scriptBlockData</a>.<a href="../runtime/CompiledScriptBlock.cs.html#20d44dfc1b215b74" class="i property">IsFilter</a>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get/set whether this scriptblock is a Configuration.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="9e62a6d46071d521" href="../../R/9e62a6d46071d521.html" target="n" data-glyph="102,1" class="i property">IsConfiguration</a> { <b>get</b> =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#93a1a6c2d4f99ed6" class="i field">_scriptBlockData</a>.<a href="../runtime/CompiledScriptBlock.cs.html#e0447ec54dcc5e85" class="i method">GetIsConfiguration</a>(); }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the PSModuleInfo object for the module that defined this</span>
+        <span class="c">///</span><span class="c"> scriptblock.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="../Modules/PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <a id="da67b7d69aadb962" href="../../R/da67b7d69aadb962.html" target="n" data-glyph="102,1" class="i property">Module</a> { <b>get</b> =&gt; <a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a>?.<a href="../SessionState.cs.html#1900efdc2f293d5a" class="i property">Module</a>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Return the PSToken object for this function definition...</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="interface/PSToken.cs.html#3bec645a477d668a" class="t t">PSToken</a> <a id="f61b88035570296e" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">StartPosition</a> { <b>get</b> =&gt; <a href="../runtime/CompiledScriptBlock.cs.html#b85cdcd56f3f4eb2" class="i method">GetStartPosition</a>(); }
+ 
+        <span class="c">// LanguageMode is a nullable PSLanguageMode enumeration because script blocks</span>
+        <span class="c">// need to inherit the language mode from the context in which they are executing.</span>
+        <span class="c">// We can&#39;t assume FullLanguage by default when there is no context, as there are</span>
+        <span class="c">// script blocks (such as the script blocks used in Workflow activities) that are</span>
+        <span class="c">// created by the host without a &quot;current language mode&quot; to inherit. They ultimately</span>
+        <span class="c">// get their language mode set when they are finally invoked in a constrained</span>
+        <span class="c">// language runspace.</span>
+        <span class="c">// Script blocks that should always be run under FullLanguage mode (i.e.: set in</span>
+        <span class="c">// InitialSessionState, etc.) should explicitly set the LanguageMode to FullLanguage</span>
+        <span class="c">// when they are created.</span>
+        <b>internal</b> <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>? <a id="5e76a9fb0d1a7f12" href="../../R/5e76a9fb0d1a7f12.html" target="n" data-glyph="104,1" class="i property">LanguageMode</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal enum</b> <a id="10c045824f712272" href="../../R/10c045824f712272.html" target="n" data-glyph="20,1" class="t t"><span id="50c1de6d06cb27b8">ErrorHandlingBehavior</span></a>
+        {
+            <a id="5e78734ffe1c6ed3" href="../../R/5e78734ffe1c6ed3.html" target="n" data-glyph="24,2" class="i field">WriteToCurrentErrorPipe</a> = 1,
+            <a id="df0061919fb37a15" href="../../R/df0061919fb37a15.html" target="n" data-glyph="24,2" class="i field">WriteToExternalErrorPipe</a> = 2,
+            <a id="8df8eb772a66da9e" href="../../R/8df8eb772a66da9e.html" target="n" data-glyph="24,2" class="i field">SwallowErrors</a> = 3,
+        }
+ 
+        <b>internal</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="../CommandInfo.cs.html#c3ad7c327ac93d6b" class="t t">PSTypeName</a>&gt; <a id="6ef5d873a3466288" href="../../R/6ef5d873a3466288.html" target="n" data-glyph="104,1" class="i property">OutputType</a>
+        {
+            <b>get</b>
+            {
+                <span class="i">List</span>&lt;<a href="../CommandInfo.cs.html#c3ad7c327ac93d6b" class="t t">PSTypeName</a>&gt; <span id="r90 rd" class="r90 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../CommandInfo.cs.html#c3ad7c327ac93d6b" class="t t">PSTypeName</a>&gt;();
+                <b>foreach</b> (<span class="i">Attribute</span> <span id="r91 rd" class="r91 r">attribute</span> <b>in</b> <a href="#744124eafe8115ab" class="i property">Attributes</a>)
+                {
+                    <a href="../Attributes.cs.html#c50a02cd2178a292" class="t t">OutputTypeAttribute</a> <span id="r92 rd" class="r92 r">outputType</span> = <span class="r91 r">attribute</span> <b>as</b> <a href="../Attributes.cs.html#c50a02cd2178a292" class="t t">OutputTypeAttribute</a>;
+                    <b>if</b> (<span class="r92 r">outputType</span> != <b>null</b>)
+                    {
+                        <span class="r90 r">result</span>.<span class="i">AddRange</span>(<span class="r92 r">outputType</span>.<a href="../Attributes.cs.html#4a3244e8e3eaf9c9" class="i property">Type</a>);
+                    }
+                }
+ 
+                <b>return</b> <b>new</b> <span class="i">ReadOnlyCollection</span>&lt;<a href="../CommandInfo.cs.html#c3ad7c327ac93d6b" class="t t">PSTypeName</a>&gt;(<span class="r90 r">result</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a helper function to process script invocation result.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This does normal array reduction in the case of a one-element array.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>internal static object</b> <a id="3f4283693692b13c" href="../../R/3f4283693692b13c.html" target="n" data-glyph="74,1" class="i method">GetRawResult</a>(<span class="i">List</span>&lt;<b>object</b>&gt; <span id="r93 rd" class="r93 r">result</span>, <b>bool</b> <span id="r94 rd" class="r94 r">wrapToPSObject</span>)
+        {
+            <b>switch</b> (<span class="r93 r">result</span>.<span class="i">Count</span>)
+            {
+                <b>case</b> 0:
+                    <b>return</b> <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>;
+                <b>case</b> 1:
+                    <b>return</b> <span class="r94 r">wrapToPSObject</span> ? <a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<span class="i">AsPSObjectOrNull</span>(<span class="r93 r">result</span>[0]) : <span class="r93 r">result</span>[0];
+                <b>default</b>:
+                    <b>object</b> <span id="r95 rd" class="r95 r">resultArray</span> = <span class="r93 r">result</span>.<span class="i">ToArray</span>();
+                    <b>return</b> <span class="r94 r">wrapToPSObject</span> ? <a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../LanguagePrimitives.cs.html#e9d9a7d7ec7be239" class="i method">AsPSObjectOrNull</a>(<span class="r95 r">resultArray</span>) : <span class="r95 r">resultArray</span>;
+            }
+        }
+ 
+        <b>internal void</b> <a id="0b3de91b4076a6c3" href="../../R/0b3de91b4076a6c3.html" target="n" data-glyph="74,1" class="i method">InvokeUsingCmdlet</a>(
+            <a href="../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r96 rd" class="r96 r">contextCmdlet</span>,
+            <b>bool</b> <span id="r97 rd" class="r97 r">useLocalScope</span>,
+            <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a> <span id="r98 rd" class="r98 r">errorHandlingBehavior</span>,
+            <b>object</b> <span id="r99 rd" class="r99 r">dollarUnder</span>,
+            <b>object</b> <span id="r100 rd" class="r100 r">input</span>,
+            <b>object</b> <span id="r101 rd" class="r101 r">scriptThis</span>,
+            <b>object</b>[] <span id="r102 rd" class="r102 r">args</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r96 r">contextCmdlet</span> != <b>null</b>, <span class="s">&quot;caller to verify contextCmdlet parameter&quot;</span>);
+ 
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r103 rd" class="r103 r">outputPipe</span> = ((<a href="../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>)<span class="r96 r">contextCmdlet</span>.<a href="../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a>).<a href="../MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a>;
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r104 rd" class="r104 r">context</span> = <a href="#2203aa15482df0bc" class="i method">GetContextFromTLS</a>();
+            <b>var</b> <span id="r105 rd" class="r105 r">myInv</span> = <span class="r104 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>.<a href="../SessionStateScope.cs.html#2dff503775afc808" class="i method">GetAutomaticVariableValue</a>(<a href="../SpecialVariables.cs.html#1c6f2efd91287b59" class="t t">AutomaticVariable</a>.<a href="../SpecialVariables.cs.html#80b3b66ce97fc2c9" class="i field">MyInvocation</a>);
+            <a href="../InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r106 rd" class="r106 r">inInfo</span> = <span class="r105 r">myInv</span> == <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a> ? <b>null</b> : (<a href="../InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a>)<span class="r105 r">myInv</span>;
+            <a href="#79e4a92eda3f9883" class="i method">InvokeWithPipe</a>(
+                <span class="r97 r">useLocalScope</span>,
+                <span class="r98 r">errorHandlingBehavior</span>,
+                <span class="r99 r">dollarUnder</span>,
+                <span class="r100 r">input</span>,
+                <span class="r101 r">scriptThis</span>,
+                <span class="r103 r">outputPipe</span>,
+                <span class="r106 r">inInfo</span>,
+                <span class="r107 r">propagateAllExceptionsToTop</span>: <b>false</b>,
+                <span class="r73 r">args</span>: <span class="r102 r">args</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The internal session state object associated with this scriptblock.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../P/2dc1bd90a8299178.html#2dc1bd90a8299178" class="t t">SessionStateInternal</a> <a id="d25a345294fd74f0" href="../../R/d25a345294fd74f0.html" target="n" data-glyph="104,1" class="i property">SessionStateInternal</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The session state instance that should be used when evaluating</span>
+        <span class="c">///</span><span class="c"> this scriptblock.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../SessionStatePublic.cs.html#0a202aa6b2d52930" class="t t">SessionState</a> <a id="6359018e5b4473dd" href="../../R/6359018e5b4473dd.html" target="n" data-glyph="104,1" class="i property">SessionState</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a> == <b>null</b>)
+                {
+                    <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r108 rd" class="r108 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+                    <b>if</b> (<span class="r108 r">context</span> != <b>null</b>)
+                    {
+                        <a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a> = <span class="r108 r">context</span>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionState.cs.html#e8d61ec8e5e7bb28" class="i property">PublicSessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>;
+                    }
+                }
+ 
+                <b>return</b> <a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a>?.<a href="../SessionState.cs.html#e8d61ec8e5e7bb28" class="i property">PublicSessionState</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<b>value</b> == <b>null</b>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<b>value</b>));
+                }
+ 
+                <a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a> = <b>value</b>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Delegates
+ 
+        <b>private static readonly</b> <span class="i">ConditionalWeakTable</span>&lt;<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>, <span class="i">ConcurrentDictionary</span>&lt;<span class="i">Type</span>, <span class="i">Delegate</span>&gt;&gt; <a id="4160da1828ec3a50" href="../../R/4160da1828ec3a50.html" target="n" data-glyph="46,1" class="i field">s_delegateTable</a> =
+            <b>new</b> <span class="i">ConditionalWeakTable</span>&lt;<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>, <span class="i">ConcurrentDictionary</span>&lt;<span class="i">Type</span>, <span class="i">Delegate</span>&gt;&gt;();
+ 
+        <b>internal</b> <span class="i">Delegate</span> <a id="b1d16389810bed80" href="../../R/b1d16389810bed80.html" target="n" data-glyph="74,1" class="i method">GetDelegate</a>(<span class="i">Type</span> <span id="r109 rd" class="r109 r">delegateType</span>)
+            =&gt; <a href="#4160da1828ec3a50" class="i field">s_delegateTable</a>.<span class="i">GetOrCreateValue</span>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="k">this</a>).<span class="i">GetOrAdd</span>(<span class="r109 r">delegateType</span>, <span class="i">CreateDelegate</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the delegate method as a call back.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Delegate</span> <a id="0f6e254068b33a21" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">CreateDelegate</a>(<span class="i">Type</span> <span id="r110 rd" class="r110 r">delegateType</span>)
+        {
+            <span class="i">MethodInfo</span> <span id="r111 rd" class="r111 r">invokeMethod</span> = <span class="r110 r">delegateType</span>.<span class="i">GetMethod</span>(<span class="s">&quot;Invoke&quot;</span>);
+            <span class="i">ParameterInfo</span>[] <span id="r112 rd" class="r112 r">parameters</span> = <span class="r111 r">invokeMethod</span>.<span class="i">GetParameters</span>();
+            <b>if</b> (<span class="r111 r">invokeMethod</span>.<span class="i">ContainsGenericParameters</span>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">ScriptBlockToPowerShellNotSupportedException</span>(
+                    <span class="s">&quot;CantConvertScriptBlockToOpenGenericType&quot;</span>,
+                    <b>null</b>,
+                    <span class="s">&quot;AutomationExceptions&quot;</span>,
+                    <span class="s">&quot;CantConvertScriptBlockToOpenGenericType&quot;</span>,
+                    <span class="r110 r">delegateType</span>);
+            }
+ 
+            <b>var</b> <span id="r113 rd" class="r113 r">parameterExprs</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">ParameterExpression</span>&gt;();
+            <b>foreach</b> (<b>var</b> <span id="r114 rd" class="r114 r">parameter</span> <b>in</b> <span class="r112 r">parameters</span>)
+            {
+                <span class="r113 r">parameterExprs</span>.<span class="i">Add</span>(<span class="i">Expression</span>.<span class="i">Parameter</span>(<span class="r114 r">parameter</span>.<span class="i">ParameterType</span>));
+            }
+ 
+            <b>bool</b> <span id="r115 rd" class="r115 r">returnsSomething</span> = !<span class="r111 r">invokeMethod</span>.<span class="i">ReturnType</span>.<span class="i">Equals</span>(<b>typeof</b>(<b>void</b>));
+ 
+            <span class="i">Expression</span> <span id="r116 rd" class="r116 r">dollarUnderExpr</span>;
+            <span class="i">Expression</span> <span id="r117 rd" class="r117 r">dollarThisExpr</span>;
+            <b>if</b> (<span class="r112 r">parameters</span>.<span class="i">Length</span> == 2 &amp;&amp; !<span class="r115 r">returnsSomething</span>)
+            {
+                <span class="c">// V1 was designed for System.EventHandler and not much else.</span>
+                <span class="c">// The first arg (sender) was bound to $this, the second (e or EventArgs) was bound to $_.</span>
+                <span class="c">// We do this for backwards compatibility, but we also bind the parameters (or $args) for</span>
+                <span class="c">// consistency w/ delegates that take more or fewer parameters.</span>
+                <span class="r116 r">dollarUnderExpr</span> = <span class="r113 r">parameterExprs</span>[1].<span class="i">Cast</span>(<b>typeof</b>(<b>object</b>));
+                <span class="r117 r">dollarThisExpr</span> = <span class="r113 r">parameterExprs</span>[0].<span class="i">Cast</span>(<b>typeof</b>(<b>object</b>));
+            }
+            <b>else</b>
+            {
+                <span class="r116 r">dollarUnderExpr</span> = <a href="../parser/Compiler.cs.html#38ca030cfcd33569" class="t t">ExpressionCache</a>.<a href="../parser/Compiler.cs.html#84591f5e881dc39e" class="i field">AutomationNullConstant</a>;
+                <span class="r117 r">dollarThisExpr</span> = <a href="../parser/Compiler.cs.html#38ca030cfcd33569" class="t t">ExpressionCache</a>.<a href="../parser/Compiler.cs.html#84591f5e881dc39e" class="i field">AutomationNullConstant</a>;
+            }
+ 
+            <span class="i">Expression</span> <span id="r118 rd" class="r118 r">call</span> = <span class="i">Expression</span>.<span class="i">Call</span>(
+                <span class="i">Expression</span>.<span class="i">Constant</span>(<a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="k">this</a>),
+                <a href="../parser/Compiler.cs.html#7281bb41069e8d62" class="t t">CachedReflectionInfo</a>.<a href="../parser/Compiler.cs.html#89862304af92dc04" class="i field">ScriptBlock_InvokeAsDelegateHelper</a>,
+                <span class="r116 r">dollarUnderExpr</span>,
+                <span class="r117 r">dollarThisExpr</span>,
+                <span class="i">Expression</span>.<span class="i">NewArrayInit</span>(<b>typeof</b>(<b>object</b>), <span class="r113 r">parameterExprs</span>.<span class="i">Select</span>(<b>static</b> <span id="r119 rd" class="r119 r">p</span> =&gt; <span class="r119 r">p</span>.<span class="i">Cast</span>(<b>typeof</b>(<b>object</b>)))));
+            <b>if</b> (<span class="r115 r">returnsSomething</span>)
+            {
+                <span class="r118 r">call</span> = <span class="i">DynamicExpression</span>.<span class="i">Dynamic</span>(
+                    <a href="../runtime/Binding/Binders.cs.html#97a1cf18399e4247" class="t t">PSConvertBinder</a>.<span class="i">Get</span>(<span class="r111 r">invokeMethod</span>.<span class="i">ReturnType</span>),
+                    <span class="r111 r">invokeMethod</span>.<span class="i">ReturnType</span>,
+                    <span class="r118 r">call</span>);
+            }
+ 
+            <b>return</b> <span class="i">Expression</span>.<span class="i">Lambda</span>(<span class="r110 r">delegateType</span>, <span class="r118 r">call</span>, <span class="r113 r">parameterExprs</span>).<span class="i">Compile</span>();
+        }
+ 
+        <b>internal object</b> <a id="1c37108546f45f3d" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">InvokeAsDelegateHelper</a>(<b>object</b> <span id="r120 rd" class="r120 r">dollarUnder</span>, <b>object</b> <span id="r121 rd" class="r121 r">dollarThis</span>, <b>object</b>[] <span id="r122 rd" class="r122 r">args</span>)
+        {
+            <span class="c">// Retrieve context and current runspace to ensure that we throw exception, if this is non-default runspace.</span>
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r123 rd" class="r123 r">context</span> = <a href="#2203aa15482df0bc" class="i method">GetContextFromTLS</a>();
+            <a href="../hostifaces/ConnectionBase.cs.html#b5efaa6cd9653c05" class="t t">RunspaceBase</a> <span id="r124 rd" class="r124 r">runspace</span> = (<a href="../hostifaces/ConnectionBase.cs.html#b5efaa6cd9653c05" class="t t">RunspaceBase</a>)<span class="r123 r">context</span>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>;
+ 
+            <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r125 rd" class="r125 r">rawResult</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r126 rd" class="r126 r">outputPipe</span> = <b>new</b> <a href="../Pipe.cs.html#99288ee09b9642bb" class="t constructor">Pipe</a>(<span class="r125 r">rawResult</span>);
+            <a href="#79e4a92eda3f9883" class="i method">InvokeWithPipe</a>(
+                <span class="r64 r">useLocalScope</span>: <b>true</b>,
+                <span class="r67 r">errorHandlingBehavior</span>: <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="#5e78734ffe1c6ed3" class="i field">WriteToCurrentErrorPipe</a>,
+                <span class="r68 r">dollarUnder</span>: <span class="r120 r">dollarUnder</span>,
+                <span class="r69 r">input</span>: <b>null</b>,
+                <span class="r70 r">scriptThis</span>: <span class="r121 r">dollarThis</span>,
+                <span class="r71 r">outputPipe</span>: <span class="r126 r">outputPipe</span>,
+                <span class="r72 r">invocationInfo</span>: <b>null</b>,
+                <span class="r73 r">args</span>: <span class="r122 r">args</span>);
+            <b>return</b> <a href="#3f4283693692b13c" class="i method">GetRawResult</a>(<span class="r125 r">rawResult</span>, <span class="r94 r">wrapToPSObject</span>: <b>false</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the current execution context from TLS, or raises an exception if it is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An attempt was made to use the scriptblock outside the engine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <a id="2203aa15482df0bc" href="../../R/2203aa15482df0bc.html" target="n" data-glyph="74,1" class="i method">GetContextFromTLS</a>()
+        {
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r127 rd" class="r127 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+ 
+            <span class="c">// If ExecutionContext from TLS is null then we are not in powershell engine thread.</span>
+            <b>if</b> (<span class="r127 r">context</span> == <b>null</b>)
+            {
+                <b>string</b> <span id="r128 rd" class="r128 r">scriptText</span> = <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="k">this</a>.<a href="../runtime/CompiledScriptBlock.cs.html#89c5da438a36dbb2" class="i method">ToString</a>();
+ 
+                <span class="r128 r">scriptText</span> = <a href="../ErrorPackage.cs.html#37830dc92d4ac970" class="t t">ErrorCategoryInfo</a>.<span class="i">Ellipsize</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentUICulture</span>, <span class="r128 r">scriptText</span>);
+ 
+                <a href="../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a> <span id="r129 rd" class="r129 r">e</span> = <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">ParserStrings</span>.<span class="i">ScriptBlockDelegateInvokedFromWrongThread</span>,
+                    <span class="r128 r">scriptText</span>);
+ 
+                <span class="r129 r">e</span>.<a href="../../utils/MshInvalidOperationException.cs.html#06b019caca30c7ed" class="i method">SetErrorId</a>(<span class="s">&quot;ScriptBlockDelegateInvokedFromWrongThread&quot;</span>);
+                <b>throw</b> <span class="r129 r">e</span>;
+            }
+ 
+            <b>return</b> <span class="r127 r">context</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Execute this node with the specified arguments. The arguments show</span>
+        <span class="c">///</span><span class="c"> up in the script as $args with $_ being the first argument.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">dollarUnder</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The value of the $_ variable for the script block. If AutomationNull.Value,</span>
+        <span class="c">///</span><span class="c"> the $_ variable is not created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The value of the $input variable for the script block. If AutomationNull.Value,</span>
+        <span class="c">///</span><span class="c"> the $input variable is not created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r130 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to this script.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The object(s) generated during the execution of</span>
+        <span class="c">///</span><span class="c"> the script block returned as a collection of PSObjects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A script exception occurred.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="parserutils.cs.html#a3a2a71cfea9c3b1" class="t t">FlowControlException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Internal exception from a flow control statement.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="2b65414bd51c2666" href="../../R/2b65414bd51c2666.html" target="n" data-glyph="74,1" class="i method">DoInvoke</a>(<b>object</b> <span id="r42 rd" class="r42 r">dollarUnder</span>, <b>object</b> <span id="r43 rd" class="r43 r">input</span>, <b>object</b>[] <span id="r130 rd" class="r130 r">args</span>)
+        {
+            <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r131 rd" class="r131 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r132 rd" class="r132 r">outputPipe</span> = <b>new</b> <a href="../Pipe.cs.html#99288ee09b9642bb" class="t constructor">Pipe</a>(<span class="r131 r">result</span>);
+            <a href="#79e4a92eda3f9883" class="i method">InvokeWithPipe</a>(
+                <span class="r64 r">useLocalScope</span>: <b>true</b>,
+                <span class="r67 r">errorHandlingBehavior</span>: <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a>.<a href="#df0061919fb37a15" class="i field">WriteToExternalErrorPipe</a>,
+                <span class="r68 r">dollarUnder</span>: <span class="r42 r">dollarUnder</span>,
+                <span class="r69 r">input</span>: <span class="r43 r">input</span>,
+                <span class="r70 r">scriptThis</span>: <a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>,
+                <span class="r71 r">outputPipe</span>: <span class="r132 r">outputPipe</span>,
+                <span class="r72 r">invocationInfo</span>: <b>null</b>,
+                <span class="r73 r">args</span>: <span class="r130 r">args</span>);
+            <b>return</b> <a href="#fe49e30a87096e2c" class="i method">GetWrappedResult</a>(<span class="r131 r">result</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a helper function to wrap script execution results</span>
+        <span class="c">///</span><span class="c"> in PSObjects.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r133 r">result</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="fe49e30a87096e2c" href="../../R/fe49e30a87096e2c.html" target="n" data-glyph="76,1" class="i method">GetWrappedResult</a>(<span class="i">List</span>&lt;<b>object</b>&gt; <span id="r133 rd" class="r133 r">result</span>)
+        {
+            <b>if</b> (<span class="r133 r">result</span> == <b>null</b> || <span class="r133 r">result</span>.<span class="i">Count</span> == 0)
+            {
+                <b>return</b> <b>new</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;();
+            }
+ 
+            <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r134 rd" class="r134 r">wrappedResult</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;();
+            <b>for</b> (<b>int</b> <span id="r135 rd" class="r135 r">i</span> = 0; <span class="r135 r">i</span> &lt; <span class="r133 r">result</span>.<span class="i">Count</span>; <span class="r135 r">i</span>++)
+            {
+                <span class="r134 r">wrappedResult</span>.<span class="i">Add</span>(<a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<span class="i">AsPSObjectOrNull</span>(<span class="r133 r">result</span>[<span class="r135 r">i</span>]));
+            }
+ 
+            <b>return</b> <span class="r134 r">wrappedResult</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Execute this node with the specified arguments. The arguments show</span>
+        <span class="c">///</span><span class="c"> up in the script as $args with $_ being the first argument.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r75 r">useLocalScope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r76 r">errorHandlingBehavior</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r77 r">dollarUnder</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">   The value of the $_ variable for the script block. If AutomationNull.Value,</span>
+        <span class="c">///</span><span class="c">   the $_ variable is not created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r78 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">   The value of the $input variable for the script block. If AutomationNull.Value,</span>
+        <span class="c">///</span><span class="c">   the $input variable is not created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">scriptThis</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to this script.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The object(s) generated during the execution of</span>
+        <span class="c">///</span><span class="c"> the script block returned as a collection of PSObjects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A script exception occurred.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="parserutils.cs.html#a3a2a71cfea9c3b1" class="t t">FlowControlException</a><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Internal exception from a flow control statement.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal object</b> <a id="c9191394af92013a" href="../../R/c9191394af92013a.html" target="n" data-glyph="74,1" class="i method">DoInvokeReturnAsIs</a>(
+            <b>bool</b> <span id="r75 rd" class="r75 r">useLocalScope</span>,
+            <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a> <span id="r76 rd" class="r76 r">errorHandlingBehavior</span>,
+            <b>object</b> <span id="r77 rd" class="r77 r">dollarUnder</span>,
+            <b>object</b> <span id="r78 rd" class="r78 r">input</span>,
+            <b>object</b> <span id="r79 rd" class="r79 r">scriptThis</span>,
+            <b>object</b>[] <span id="r80 rd" class="r80 r">args</span>)
+        {
+            <span class="i">List</span>&lt;<b>object</b>&gt; <span id="r136 rd" class="r136 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<b>object</b>&gt;();
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r137 rd" class="r137 r">outputPipe</span> = <b>new</b> <a href="../Pipe.cs.html#99288ee09b9642bb" class="t constructor">Pipe</a>(<span class="r136 r">result</span>);
+            <a href="#79e4a92eda3f9883" class="i method">InvokeWithPipe</a>(
+                <span class="r64 r">useLocalScope</span>: <span class="r75 r">useLocalScope</span>,
+                <span class="r67 r">errorHandlingBehavior</span>: <span class="r76 r">errorHandlingBehavior</span>,
+                <span class="r68 r">dollarUnder</span>: <span class="r77 r">dollarUnder</span>,
+                <span class="r69 r">input</span>: <span class="r78 r">input</span>,
+                <span class="r70 r">scriptThis</span>: <span class="r79 r">scriptThis</span>,
+                <span class="r71 r">outputPipe</span>: <span class="r137 r">outputPipe</span>,
+                <span class="r72 r">invocationInfo</span>: <b>null</b>,
+                <span class="r73 r">args</span>: <span class="r80 r">args</span>);
+            <b>return</b> <a href="#3f4283693692b13c" class="i method">GetRawResult</a>(<span class="r136 r">result</span>, <span class="r94 r">wrapToPSObject</span>: <b>true</b>);
+        }
+ 
+        <b>internal void</b> <a id="79e4a92eda3f9883" href="../../R/79e4a92eda3f9883.html" target="n" data-glyph="74,1" class="i method">InvokeWithPipe</a>(
+            <b>bool</b> <span id="r64 rd" class="r64 r">useLocalScope</span>,
+            <a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a> <span id="r67 rd" class="r67 r">errorHandlingBehavior</span>,
+            <b>object</b> <span id="r68 rd" class="r68 r">dollarUnder</span>,
+            <b>object</b> <span id="r69 rd" class="r69 r">input</span>,
+            <b>object</b> <span id="r70 rd" class="r70 r">scriptThis</span>,
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r71 rd" class="r71 r">outputPipe</span>,
+            <a href="../InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r72 rd" class="r72 r">invocationInfo</span>,
+            <b>bool</b> <span id="r107 rd" class="r107 r">propagateAllExceptionsToTop</span> = <b>false</b>,
+            <span class="i">List</span>&lt;<a href="../ShellVariable.cs.html#5bd16fef1f858b3d" class="t t">PSVariable</a>&gt; <span id="r66 rd" class="r66 r">variablesToDefine</span> = <b>null</b>,
+            <span class="i">Dictionary</span>&lt;<b>string</b>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>&gt; <span id="r65 rd" class="r65 r">functionsToDefine</span> = <b>null</b>,
+            <b>object</b>[] <span id="r73 rd" class="r73 r">args</span> = <b>null</b>)
+        {
+            <b>bool</b> <span id="r138 rd" class="r138 r">shouldGenerateEvent</span> = <b>false</b>;
+            <b>bool</b> <span id="r139 rd" class="r139 r">oldPropagateExceptions</span> = <b>false</b>;
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r140 rd" class="r140 r">context</span> = <a href="../hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a>.<a href="../hostifaces/LocalPipeline.cs.html#d3eaa3d3391ed484" class="i method">GetExecutionContextFromTLS</a>();
+ 
+            <b>if</b> (<a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a> != <b>null</b> &amp;&amp; <a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a>.<a href="../SessionState.cs.html#3ddff2db6bc01805" class="i property">ExecutionContext</a> != <span class="r140 r">context</span>)
+            {
+                <span class="r140 r">context</span> = <a href="#d25a345294fd74f0" class="i property">SessionStateInternal</a>.<a href="../SessionState.cs.html#3ddff2db6bc01805" class="i property">ExecutionContext</a>;
+                <span class="r138 r">shouldGenerateEvent</span> = <b>true</b>;
+            }
+            <b>else</b> <b>if</b> (<span class="r140 r">context</span> == <b>null</b>)
+            {
+                <span class="c">// This will throw.</span>
+                <a href="#2203aa15482df0bc" class="i method">GetContextFromTLS</a>();
+            }
+            <b>else</b>
+            {
+                <b>if</b> (<span class="r107 r">propagateAllExceptionsToTop</span>)
+                {
+                    <span class="r139 r">oldPropagateExceptions</span> = <span class="r140 r">context</span>.<a href="../ExecutionContext.cs.html#1d9a57911a3915e8" class="i property">PropagateExceptionsToEnclosingStatementBlock</a>;
+                    <span class="r140 r">context</span>.<a href="../ExecutionContext.cs.html#1d9a57911a3915e8" class="i property">PropagateExceptionsToEnclosingStatementBlock</a> = <b>true</b>;
+                }
+ 
+                <b>try</b>
+                {
+                    <a href="../hostifaces/ConnectionBase.cs.html#b5efaa6cd9653c05" class="k">var</a> <span id="r141 rd" class="r141 r">runspace</span> = (<a href="../hostifaces/ConnectionBase.cs.html#b5efaa6cd9653c05" class="t t">RunspaceBase</a>)<span class="r140 r">context</span>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a>;
+                    <b>if</b> (<span class="r141 r">runspace</span>.<a href="../hostifaces/ConnectionBase.cs.html#f2f3a7f1885fe7ea" class="i method">CanRunActionInCurrentPipeline</a>())
+                    {
+                        <a href="../runtime/CompiledScriptBlock.cs.html#3dc0ff0ae9ff4d22" class="i method">InvokeWithPipeImpl</a>(
+                            <span class="r64 r">useLocalScope</span>,
+                            <span class="r65 r">functionsToDefine</span>,
+                            <span class="r66 r">variablesToDefine</span>,
+                            <span class="r67 r">errorHandlingBehavior</span>,
+                            <span class="r68 r">dollarUnder</span>,
+                            <span class="r69 r">input</span>,
+                            <span class="r70 r">scriptThis</span>,
+                            <span class="r71 r">outputPipe</span>,
+                            <span class="r72 r">invocationInfo</span>,
+                            <span class="r73 r">args</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r138 r">shouldGenerateEvent</span> = <b>true</b>;
+                    }
+                }
+                <b>finally</b>
+                {
+                    <b>if</b> (<span class="r107 r">propagateAllExceptionsToTop</span>)
+                    {
+                        <span class="r140 r">context</span>.<a href="../ExecutionContext.cs.html#1d9a57911a3915e8" class="i property">PropagateExceptionsToEnclosingStatementBlock</a> = <span class="r139 r">oldPropagateExceptions</span>;
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r138 r">shouldGenerateEvent</span>)
+            {
+                <span class="r140 r">context</span>.<a href="../ExecutionContext.cs.html#67642aa960214ec5" class="i property">Events</a>.<a href="../EventManager.cs.html#b470b6b2fdb01a48" class="i method">SubscribeEvent</a>(
+                    <span class="r142 r">source</span>: <b>null</b>,
+                    <span class="r143 r">eventName</span>: <a href="../EventManager.cs.html#db3a5a65f2783a2f" class="t t">PSEngineEvent</a>.<a href="../EventManager.cs.html#2c9498226a18a30d" class="i field">OnScriptBlockInvoke</a>,
+                    <span class="r144 r">sourceIdentifier</span>: <a href="../EventManager.cs.html#db3a5a65f2783a2f" class="t t">PSEngineEvent</a>.<a href="../EventManager.cs.html#2c9498226a18a30d" class="i field">OnScriptBlockInvoke</a>,
+                    <span class="r145 r">data</span>: <b>null</b>,
+                    <span class="r146 r">handlerDelegate</span>: <b>new</b> <span class="t">PSEventReceivedEventHandler</span>(<a href="#f32b6ef84676fd5d" class="i method">OnScriptBlockInvokeEventHandler</a>),
+                    <span class="r147 r">supportEvent</span>: <b>true</b>,
+                    <span class="r148 r">forwardEvent</span>: <b>false</b>,
+                    <span class="r149 r">shouldQueueAndProcessInExecutionThread</span>: <b>true</b>,
+                    <span class="r150 r">maxTriggerCount</span>: 1);
+ 
+                <a href="#22fa4e1f86aa7563" class="k">var</a> <span id="r151 rd" class="r151 r">scriptBlockInvocationEventArgs</span> = <b>new</b> <a href="#cc6d56a25da31d96" class="t constructor">ScriptBlockInvocationEventArgs</a>(
+                    <span class="r152 r">scriptBlock</span>: <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="k">this</a>,
+                    <span class="r64 r">useLocalScope</span>,
+                    <span class="r67 r">errorHandlingBehavior</span>,
+                    <span class="r68 r">dollarUnder</span>,
+                    <span class="r69 r">input</span>,
+                    <span class="r70 r">scriptThis</span>,
+                    <span class="r71 r">outputPipe</span>,
+                    <span class="r72 r">invocationInfo</span>,
+                    <span class="r73 r">args</span>);
+ 
+                <span class="r140 r">context</span>.<a href="../ExecutionContext.cs.html#67642aa960214ec5" class="i property">Events</a>.<a href="../EventManager.cs.html#bab599a5805d9aed" class="i method">GenerateEvent</a>(
+                    <span class="r153 r">sourceIdentifier</span>: <a href="../EventManager.cs.html#db3a5a65f2783a2f" class="t t">PSEngineEvent</a>.<a href="../EventManager.cs.html#2c9498226a18a30d" class="i field">OnScriptBlockInvoke</a>,
+                    <span class="r154 r">sender</span>: <b>null</b>,
+                    <span class="r155 r">args</span>: <b>new</b> <b>object</b>[1] { <span class="r151 r">scriptBlockInvocationEventArgs</span> },
+                    <span class="r156 r">extraData</span>: <b>null</b>,
+                    <span class="r157 r">processInCurrentThread</span>: <b>true</b>,
+                    <span class="r158 r">waitForCompletionInCurrentThread</span>: <b>true</b>);
+ 
+                <b>if</b> (<span class="r151 r">scriptBlockInvocationEventArgs</span>.<a href="#1b08d0c87b08d0e3" class="i property">Exception</a> != <b>null</b>)
+                {
+                    <span class="r151 r">scriptBlockInvocationEventArgs</span>.<a href="#1b08d0c87b08d0e3" class="i property">Exception</a>.<span class="i">Throw</span>();
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles OnScriptBlockInvoke event, this is called by the event manager.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="f32b6ef84676fd5d" href="../../R/f32b6ef84676fd5d.html" target="n" data-glyph="76,1" class="i method">OnScriptBlockInvokeEventHandler</a>(<b>object</b> <span id="r159 rd" class="r159 r">sender</span>, <a href="../EventManager.cs.html#7210411b2f4a8407" class="t t">PSEventArgs</a> <span id="r160 rd" class="r160 r">args</span>)
+        {
+            <a href="#22fa4e1f86aa7563" class="k">var</a> <span id="r161 rd" class="r161 r">eventArgs</span> = (<b>object</b>)<span class="r160 r">args</span>.<a href="../EventManager.cs.html#d0726de6cebf6169" class="i property">SourceEventArgs</a> <b>as</b> <a href="#22fa4e1f86aa7563" class="t t">ScriptBlockInvocationEventArgs</a>;
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r161 r">eventArgs</span> != <b>null</b>,
+                <span class="s">&quot;Event Arguments to OnScriptBlockInvokeEventHandler should not be null&quot;</span>);
+ 
+            <b>try</b>
+            {
+                <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r162 rd" class="r162 r">sb</span> = <span class="r161 r">eventArgs</span>.<a href="#6d8ead585ccd2d41" class="i property">ScriptBlock</a>;
+                <span class="r162 r">sb</span>.<a href="../runtime/CompiledScriptBlock.cs.html#3dc0ff0ae9ff4d22" class="i method">InvokeWithPipeImpl</a>(
+                    <span class="r161 r">eventArgs</span>.<a href="#120157d86c4732be" class="i property">UseLocalScope</a>,
+                    <span class="r163 r">functionsToDefine</span>: <b>null</b>,
+                    <span class="r164 r">variablesToDefine</span>: <b>null</b>,
+                    <span class="r161 r">eventArgs</span>.<a href="#cde503629e467dc9" class="i property">ErrorHandlingBehavior</a>,
+                    <span class="r161 r">eventArgs</span>.<a href="#35dbdd5bb1eebe28" class="i property">DollarUnder</a>,
+                    <span class="r161 r">eventArgs</span>.<a href="#6220b8531e89c9fb" class="i property">Input</a>,
+                    <span class="r161 r">eventArgs</span>.<a href="#67829c0dbde8052d" class="i property">ScriptThis</a>,
+                    <span class="r161 r">eventArgs</span>.<a href="#b63483288a19fd63" class="i property">OutputPipe</a>,
+                    <span class="r161 r">eventArgs</span>.<a href="#816a08255a0a2384" class="i property">InvocationInfo</a>,
+                    <span class="r161 r">eventArgs</span>.<a href="#1cfa56102086471b" class="i property">Args</a>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r165 rd" class="r165 r">e</span>)
+            {
+                <span class="r161 r">eventArgs</span>.<a href="#1b08d0c87b08d0e3" class="i property">Exception</a> = <span class="i">ExceptionDispatchInfo</span>.<span class="i">Capture</span>(<span class="r165 r">e</span>);
+            }
+        }
+ 
+        <b>internal void</b> <a id="a3474072505c30d2" href="../../R/a3474072505c30d2.html" target="n" data-glyph="74,1" class="i method">SetPSScriptRootAndPSCommandPath</a>(<a href="../runtime/MutableTuple.cs.html#d4c692d6a8bac31d" class="t t">MutableTuple</a> <span id="r166 rd" class="r166 r">locals</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r167 rd" class="r167 r">context</span>)
+        {
+            <b>var</b> <span id="r168 rd" class="r168 r">psScriptRoot</span> = <b>string</b>.<span class="i">Empty</span>;
+            <b>var</b> <span id="r169 rd" class="r169 r">psCommandPath</span> = <b>string</b>.<span class="i">Empty</span>;
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#20772981d01b9078" class="i property">File</a>))
+            {
+                <span class="r168 r">psScriptRoot</span> = <span class="i">Path</span>.<span class="i">GetDirectoryName</span>(<a href="#20772981d01b9078" class="i property">File</a>);
+                <span class="r169 r">psCommandPath</span> = <a href="#20772981d01b9078" class="i property">File</a>;
+            }
+ 
+            <span class="r166 r">locals</span>.<span class="i">SetAutomaticVariable</span>(<a href="../SpecialVariables.cs.html#1c6f2efd91287b59" class="t t">AutomaticVariable</a>.<a href="../SpecialVariables.cs.html#1c3db3207a8956e8" class="i field">PSScriptRoot</a>, <span class="r168 r">psScriptRoot</span>, <span class="r167 r">context</span>);
+            <span class="r166 r">locals</span>.<span class="i">SetAutomaticVariable</span>(<a href="../SpecialVariables.cs.html#1c6f2efd91287b59" class="t t">AutomaticVariable</a>.<a href="../SpecialVariables.cs.html#b00a55abca04b860" class="i field">PSCommandPath</a>, <span class="r169 r">psCommandPath</span>, <span class="r167 r">context</span>);
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A steppable pipeline wrapper object...</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">SuppressMessage</span>(
+        <span class="s">&quot;Microsoft.Naming&quot;</span>,
+        <span class="s">&quot;CA1704:IdentifiersShouldBeSpelledCorrectly&quot;</span>,
+        <span class="i">MessageId</span> = <span class="s">&quot;Steppable&quot;</span>,
+        <span class="i">Justification</span> = <span class="s">&quot;Consider Name change during API review&quot;</span>)]
+    <b>public sealed class</b> <a id="5e20a8a88cfbe6cb" href="../../R/5e20a8a88cfbe6cb.html" target="n" data-glyph="0,0" class="t t">SteppablePipeline</a> : <span class="i">IDisposable</span>
+    {
+        <b>internal</b> <a id="b328e97fca1fbdc8" href="../../R/b328e97fca1fbdc8.html" target="n" data-glyph="74,1" class="t constructor">SteppablePipeline</a>(<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r170 rd" class="r170 r">context</span>, <a href="../pipeline.cs.html#5e576bcabfa5c82b" class="t t">PipelineProcessor</a> <span id="r171 rd" class="r171 r">pipeline</span>)
+        {
+            <b>if</b> (<span class="r171 r">pipeline</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r171 r">pipeline</span>));
+            }
+ 
+            <b>if</b> (<span class="r170 r">context</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r170 r">context</span>));
+            }
+ 
+            <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a> = <span class="r171 r">pipeline</span>;
+            <a href="#c56dfcb64891fbdd" class="i field">_context</a> = <span class="r170 r">context</span>;
+        }
+ 
+        <b>private readonly</b> <a href="../pipeline.cs.html#5e576bcabfa5c82b" class="t t">PipelineProcessor</a> <a id="c83a7e9283e96a3c" href="../../R/c83a7e9283e96a3c.html" target="n" data-glyph="46,1" class="i field">_pipeline</a>;
+        <b>private readonly</b> <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <a id="c56dfcb64891fbdd" href="../../R/c56dfcb64891fbdd.html" target="n" data-glyph="46,1" class="i field">_context</a>;
+        <b>private bool</b> <a id="f3be3ea2984f5c49" href="../../R/f3be3ea2984f5c49.html" target="n" data-glyph="46,1" class="i field">_expectInput</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Begin execution of a steppable pipeline. This overload doesn&#39;t reroute output and error pipes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r172 r">expectInput</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">true</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> if you plan to write input into this pipe; </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">false</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> otherwise.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="1b7416b9d779057b" href="../../R/1b7416b9d779057b.html" target="n" data-glyph="72,1" class="i method">Begin</a>(<b>bool</b> <span id="r172 rd" class="r172 r">expectInput</span>) =&gt; <a href="#4a0304817d8a7d46" class="i method">Begin</a>(<span class="r172 r">expectInput</span>, <span class="r173 r">commandRuntime</span>: (<a href="../ICommandRuntime.cs.html#ea5faa24de5f394a" class="t t">ICommandRuntime</a>)<b>null</b>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Begin execution of a steppable pipeline, using the command running currently in the specified context to figure</span>
+        <span class="c">///</span><span class="c"> out how to route the output and errors.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r174 r">expectInput</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">true</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> if you plan to write input into this pipe; </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">false</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> otherwise.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r175 r">contextToRedirectTo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Context used to figure out how to route the output and errors.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="0c06fe9a959c5ce9" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Begin</a>(<b>bool</b> <span id="r174 rd" class="r174 r">expectInput</span>, <a href="../EngineIntrinsics.cs.html#e9f6dd7d61246066" class="t t">EngineIntrinsics</a> <span id="r175 rd" class="r175 r">contextToRedirectTo</span>)
+        {
+            <b>if</b> (<span class="r175 r">contextToRedirectTo</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r175 r">contextToRedirectTo</span>));
+            }
+ 
+            <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r176 rd" class="r176 r">executionContext</span> = <span class="r175 r">contextToRedirectTo</span>.<a href="../EngineIntrinsics.cs.html#73254f4142672190" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#9be0303086619111" class="i property">Internal</a>.<a href="../SessionState.cs.html#3ddff2db6bc01805" class="i property">ExecutionContext</a>;
+            <a href="../CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r177 rd" class="r177 r">commandProcessor</span> = <span class="r176 r">executionContext</span>.<a href="../ExecutionContext.cs.html#1146573afe2845c8" class="i property">CurrentCommandProcessor</a>;
+            <a href="../ICommandRuntime.cs.html#ea5faa24de5f394a" class="t t">ICommandRuntime</a> <span id="r178 rd" class="r178 r">crt</span> = <span class="r177 r">commandProcessor</span>?.<a href="../CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>;
+            <a href="#4a0304817d8a7d46" class="i method">Begin</a>(<span class="r174 r">expectInput</span>, <span class="r178 r">crt</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Begin execution of a steppable pipeline, using the calling command to figure</span>
+        <span class="c">///</span><span class="c"> out how to route the output and errors. This is the most effective</span>
+        <span class="c">///</span><span class="c"> way to start stepping.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r179 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The command you&#39;re calling this from (i.e. instance of PSCmdlet or value of $PSCmdlet variable).</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="69311be8ec79f799" href="../../R/69311be8ec79f799.html" target="n" data-glyph="72,1" class="i method">Begin</a>(<a href="../CommandBase.cs.html#26cb3aadccaa58ac" class="t t">InternalCommand</a> <span id="r179 rd" class="r179 r">command</span>)
+        {
+            <b>if</b> (<span class="r179 r">command</span> == <b>null</b> || <span class="r179 r">command</span>.<a href="../CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r179 r">command</span>));
+            }
+ 
+            <a href="#4a0304817d8a7d46" class="i method">Begin</a>(<span class="r179 r">command</span>.<a href="../CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>.<a href="../InvocationInfo.cs.html#9a1646f37a942067" class="i property">ExpectingInput</a>, <span class="r179 r">command</span>.<a href="../CommandBase.cs.html#71eb09c6dd471a86" class="i field">commandRuntime</a>);
+        }
+ 
+        <b>private void</b> <a id="4a0304817d8a7d46" href="../../R/4a0304817d8a7d46.html" target="n" data-glyph="76,1" class="i method">Begin</a>(<b>bool</b> <span id="r180 rd" class="r180 r">expectInput</span>, <a href="../ICommandRuntime.cs.html#ea5faa24de5f394a" class="t t">ICommandRuntime</a> <span id="r173 rd" class="r173 r">commandRuntime</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#3f5e9eeb97887f83" class="i property">ExecutionScope</a> = <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>;
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#59f954936236f028" class="i method">PushPipelineProcessor</a>(<a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>);
+                <a href="#f3be3ea2984f5c49" class="i field">_expectInput</a> = <span class="r180 r">expectInput</span>;
+ 
+                <span class="c">// Start the pipeline, if the command calling this pipeline is</span>
+                <span class="c">// not expecting input (as indicated by it&#39;s position in the pipeline</span>
+                <span class="c">// then neither should we.</span>
+                <a href="../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r181 rd" class="r181 r">crt</span> = <span class="r173 r">commandRuntime</span> <b>as</b> <a href="../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                <b>if</b> (<span class="r181 r">crt</span> != <b>null</b>)
+                {
+                    <b>if</b> (<span class="r181 r">crt</span>.<a href="../MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a> != <b>null</b>)
+                    {
+                        <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#d2e5117f11b909e0" class="i method">LinkPipelineSuccessOutput</a>(<span class="r181 r">crt</span>.<a href="../MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a>);
+                    }
+ 
+                    <b>if</b> (<span class="r181 r">crt</span>.<a href="../MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a> != <b>null</b>)
+                    {
+                        <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#d490946a57bc3b2b" class="i method">LinkPipelineErrorOutput</a>(<span class="r181 r">crt</span>.<a href="../MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>);
+                    }
+                }
+ 
+                <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#79e7a5ea4cea7c37" class="i method">StartStepping</a>(<a href="#f3be3ea2984f5c49" class="i field">_expectInput</a>);
+            }
+            <b>finally</b>
+            {
+                <span class="c">// then pop this pipeline...</span>
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#e9ca865f4a03c30c" class="i method">PopPipelineProcessor</a>(<b>true</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process a single input object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r182 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The object to process.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A collection of 0 or more result objects.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Array</span> <a id="b3b43d4b0d086e62" href="../../R/b3b43d4b0d086e62.html" target="n" data-glyph="72,1" class="i method">Process</a>(<b>object</b> <span id="r182 rd" class="r182 r">input</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#59f954936236f028" class="i method">PushPipelineProcessor</a>(<a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>);
+                <b>if</b> (<a href="#f3be3ea2984f5c49" class="i field">_expectInput</a>)
+                {
+                    <b>return</b> <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#f434c7211d4ab4d2" class="i method">Step</a>(<span class="r182 r">input</span>);
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#f434c7211d4ab4d2" class="i method">Step</a>(<a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>);
+                }
+            }
+            <b>finally</b>
+            {
+                <span class="c">// then pop this pipeline...</span>
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#e9ca865f4a03c30c" class="i method">PopPipelineProcessor</a>(<b>true</b>);
+            }
+        }
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process a single PSObject. This overload exists to deal with the fact</span>
+        <span class="c">///</span><span class="c"> that the PowerShell runtime will PSBase an object before passing it to</span>
+        <span class="c">///</span><span class="c"> a .NET API call with argument type object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r183 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The input object to process.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Array</span> <a id="a6310532c61ba767" href="../../R/a6310532c61ba767.html" target="n" data-glyph="72,1" class="i method">Process</a>(<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r183 rd" class="r183 r">input</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#59f954936236f028" class="i method">PushPipelineProcessor</a>(<a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>);
+                <b>if</b> (<a href="#f3be3ea2984f5c49" class="i field">_expectInput</a>)
+                {
+                    <b>return</b> <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#f434c7211d4ab4d2" class="i method">Step</a>(<span class="r183 r">input</span>);
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#f434c7211d4ab4d2" class="i method">Step</a>(<a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>);
+                }
+            }
+            <b>finally</b>
+            {
+                <span class="c">// then pop this pipeline...</span>
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#e9ca865f4a03c30c" class="i method">PopPipelineProcessor</a>(<b>true</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process with no input. This is used in the case where</span>
+        <span class="c">///</span><span class="c"> Begin() was called with $false so we won&#39;t send any</span>
+        <span class="c">///</span><span class="c"> input to be processed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The result of the execution.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Array</span> <a id="e175a38e43c842be" href="../../R/e175a38e43c842be.html" target="n" data-glyph="72,1" class="i method">Process</a>()
+        {
+            <b>try</b>
+            {
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#59f954936236f028" class="i method">PushPipelineProcessor</a>(<a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>);
+                <b>return</b> <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#f434c7211d4ab4d2" class="i method">Step</a>(<a href="../AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="../AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>);
+            }
+            <b>finally</b>
+            {
+                <span class="c">// then pop this pipeline...</span>
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#e9ca865f4a03c30c" class="i method">PopPipelineProcessor</a>(<b>true</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> End the execution of this steppable pipeline. This will</span>
+        <span class="c">///</span><span class="c"> complete the execution and dispose the results.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Array</span> <a id="acd4446c9db7bae3" href="../../R/acd4446c9db7bae3.html" target="n" data-glyph="72,1" class="i method">End</a>()
+        {
+            <b>try</b>
+            {
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#59f954936236f028" class="i method">PushPipelineProcessor</a>(<a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>);
+                <b>return</b> <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#11bb777c0fdcb4a2" class="i method">DoComplete</a>();
+            }
+            <b>finally</b>
+            {
+                <span class="c">// then pop this pipeline and dispose it...</span>
+                <a href="#c56dfcb64891fbdd" class="i field">_context</a>.<a href="../ExecutionContext.cs.html#e9ca865f4a03c30c" class="i method">PopPipelineProcessor</a>(<b>true</b>);
+                <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#3193eaf8bd4e8783" class="i method">Dispose</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDispose
+ 
+        <b>private bool</b> <a id="dc7bdae0b4d60f75" href="../../R/dc7bdae0b4d60f75.html" target="n" data-glyph="46,1" class="i field">_disposed</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> IDisposable implementation</span>
+        <span class="c">///</span><span class="c"> When this object is disposed, the contained pipeline should also be disposed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="0e4e3778f4e10d63" href="../../R/0e4e3778f4e10d63.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#6c22ebdb57629ebe" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#5e20a8a88cfbe6cb" class="k">this</a>);
+        }
+ 
+        <b>private void</b> <a id="6c22ebdb57629ebe" href="../../R/6c22ebdb57629ebe.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r184 rd" class="r184 r">disposing</span>)
+        {
+            <b>if</b> (<a href="#dc7bdae0b4d60f75" class="i field">_disposed</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r184 r">disposing</span>)
+            {
+                <a href="#c83a7e9283e96a3c" class="i field">_pipeline</a>.<a href="../pipeline.cs.html#3193eaf8bd4e8783" class="i method">Dispose</a>();
+            }
+ 
+            <a href="#dc7bdae0b4d60f75" class="i field">_disposed</a> = <b>true</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDispose
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines the exception thrown when conversion from ScriptBlock to PowerShell is forbidden</span>
+    <span class="c">///</span><span class="c"> (i.e. when the script block has undeclared variables or more than one statement)</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Serializable</span>]
+    <b>public class</b> <a id="e3ec0b5ce28753ed" href="../../R/e3ec0b5ce28753ed.html" target="n" data-glyph="0,0" class="t t">ScriptBlockToPowerShellNotSupportedException</a> : <a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException</span>
+        <span class="c">///</span><span class="c"> with the message set to typeof(ScriptBlockToPowerShellNotSupportedException).FullName.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a id="5d89de71e7f46995" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">ScriptBlockToPowerShellNotSupportedException</a>()
+            : <b>base</b>(<b>typeof</b>(<a href="#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a>).<span class="i">FullName</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException setting the message.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r185 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exception&#39;s message.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="87283de43a502b0c" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">ScriptBlockToPowerShellNotSupportedException</a>(<b>string</b> <span id="r185 rd" class="r185 r">message</span>)
+            : <a href="../../utils/RuntimeException.cs.html#e4538a388d78c143" class="k">base</a>(<span class="r185 r">message</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException setting the message and innerException.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r186 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exception&#39;s message.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r187 r">innerException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exceptions&#39;s inner exception.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="c642d6afea455a72" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">ScriptBlockToPowerShellNotSupportedException</a>(<b>string</b> <span id="r186 rd" class="r186 r">message</span>, <span class="i">Exception</span> <span id="r187 rd" class="r187 r">innerException</span>)
+            : <a href="../../utils/RuntimeException.cs.html#e550883d468d8c30" class="k">base</a>(<span class="r186 r">message</span>, <span class="r187 r">innerException</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Recommended constructor for the class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r188 r">errorId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">String that uniquely identifies each thrown Exception.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r189 r">innerException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The inner exception.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r190 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The error message.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r191 r">arguments</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments to the resource string.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="196927f1d407986f" href="../../R/196927f1d407986f.html" target="n" data-glyph="74,1" class="t constructor">ScriptBlockToPowerShellNotSupportedException</a>(
+            <b>string</b> <span id="r188 rd" class="r188 r">errorId</span>,
+            <span class="i">Exception</span> <span id="r189 rd" class="r189 r">innerException</span>,
+            <b>string</b> <span id="r190 rd" class="r190 r">message</span>,
+            <b>params object</b>[] <span id="r191 rd" class="r191 r">arguments</span>)
+            : <b>base</b>(<b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="r190 r">message</span>, <span class="r191 r">arguments</span>), <span class="r189 r">innerException</span>)
+            =&gt; <a href="#e3ec0b5ce28753ed" class="k">this</a>.<a href="../../utils/RuntimeException.cs.html#f25affe9a215ccc0" class="i method">SetErrorId</a>(<span class="r188 r">errorId</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Serialization
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException with serialization parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r192 r">info</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Serialization information.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r193 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Streaming context.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a id="6f99a005c3a45e9d" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="t constructor">ScriptBlockToPowerShellNotSupportedException</a>(<span class="i">SerializationInfo</span> <span id="r192 rd" class="r192 r">info</span>, <span class="i">StreamingContext</span> <span id="r193 rd" class="r193 r">context</span>)
+            : <a href="../../utils/RuntimeException.cs.html#42acad626a5cf24e" class="k">base</a>(<span class="r192 r">info</span>, <span class="r193 r">context</span>)
+        {
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Serialization
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines Event arguments passed to OnScriptBlockInvocationEventHandler.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="22fa4e1f86aa7563" href="../../R/22fa4e1f86aa7563.html" target="n" data-glyph="2,0" class="t t">ScriptBlockInvocationEventArgs</a> : <span class="i">EventArgs</span>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructs ScriptBlockInvocationEventArgs.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r152 r">scriptBlock</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The scriptblock to invoke</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> /// </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r194 r">useLocalScope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r195 r">errorHandlingBehavior</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r196 r">dollarUnder</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">   The value of the $_ variable for the script block. If AutomationNull.Value,</span>
+        <span class="c">///</span><span class="c">   the $_ variable is not created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r197 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c">   The value of the $input variable for the script block. If AutomationNull.Value,</span>
+        <span class="c">///</span><span class="c">   the $input variable is not created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r198 r">scriptThis</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r199 r">outputPipe</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The output pipe which has the results of the invocation</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r200 r">invocationInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The information about current state of the runspace.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r201 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The arguments to this script.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">ScriptBlock is null</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="cc6d56a25da31d96" href="../../R/cc6d56a25da31d96.html" target="n" data-glyph="74,1" class="t constructor">ScriptBlockInvocationEventArgs</a>(
+            <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <span id="r152 rd" class="r152 r">scriptBlock</span>,
+            <b>bool</b> <span id="r194 rd" class="r194 r">useLocalScope</span>,
+            <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a> <span id="r195 rd" class="r195 r">errorHandlingBehavior</span>,
+            <b>object</b> <span id="r196 rd" class="r196 r">dollarUnder</span>,
+            <b>object</b> <span id="r197 rd" class="r197 r">input</span>,
+            <b>object</b> <span id="r198 rd" class="r198 r">scriptThis</span>,
+            <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r199 rd" class="r199 r">outputPipe</span>,
+            <a href="../InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r200 rd" class="r200 r">invocationInfo</span>,
+            <b>object</b>[] <span id="r201 rd" class="r201 r">args</span>)
+        {
+            <b>if</b> (<span class="r152 r">scriptBlock</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r152 r">scriptBlock</span>));
+            }
+ 
+            <a href="#6d8ead585ccd2d41" class="i property">ScriptBlock</a> = <span class="r152 r">scriptBlock</span>;
+            <a href="#b63483288a19fd63" class="i property">OutputPipe</a> = <span class="r199 r">outputPipe</span>;
+            <a href="#120157d86c4732be" class="i property">UseLocalScope</a> = <span class="r194 r">useLocalScope</span>;
+            <a href="#cde503629e467dc9" class="i property">ErrorHandlingBehavior</a> = <span class="r195 r">errorHandlingBehavior</span>;
+            <a href="#35dbdd5bb1eebe28" class="i property">DollarUnder</a> = <span class="r196 r">dollarUnder</span>;
+            <a href="#6220b8531e89c9fb" class="i property">Input</a> = <span class="r197 r">input</span>;
+            <a href="#67829c0dbde8052d" class="i property">ScriptThis</a> = <span class="r198 r">scriptThis</span>;
+            <a href="#816a08255a0a2384" class="i property">InvocationInfo</a> = <span class="r200 r">invocationInfo</span>;
+            <a href="#1cfa56102086471b" class="i property">Args</a> = <span class="r201 r">args</span>;
+        }
+ 
+        <b>internal</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a> <a id="6d8ead585ccd2d41" href="../../R/6d8ead585ccd2d41.html" target="n" data-glyph="104,1" class="i property">ScriptBlock</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal bool</b> <a id="120157d86c4732be" href="../../R/120157d86c4732be.html" target="n" data-glyph="104,1" class="i property">UseLocalScope</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal</b> <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="#10c045824f712272" class="t t">ErrorHandlingBehavior</a> <a id="cde503629e467dc9" href="../../R/cde503629e467dc9.html" target="n" data-glyph="104,1" class="i property">ErrorHandlingBehavior</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal object</b> <a id="35dbdd5bb1eebe28" href="../../R/35dbdd5bb1eebe28.html" target="n" data-glyph="104,1" class="i property">DollarUnder</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal object</b> <a id="6220b8531e89c9fb" href="../../R/6220b8531e89c9fb.html" target="n" data-glyph="104,1" class="i property">Input</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal object</b> <a id="67829c0dbde8052d" href="../../R/67829c0dbde8052d.html" target="n" data-glyph="104,1" class="i property">ScriptThis</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal</b> <a href="../Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <a id="b63483288a19fd63" href="../../R/b63483288a19fd63.html" target="n" data-glyph="104,1" class="i property">OutputPipe</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal</b> <a href="../InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <a id="816a08255a0a2384" href="../../R/816a08255a0a2384.html" target="n" data-glyph="104,1" class="i property">InvocationInfo</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>internal object</b>[] <a id="1cfa56102086471b" href="../../R/1cfa56102086471b.html" target="n" data-glyph="104,1" class="i property">Args</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Holds the exception thrown during scriptblock invocation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">ExceptionDispatchInfo</span> <a id="1b08d0c87b08d0e3" href="../../R/1b08d0c87b08d0e3.html" target="n" data-glyph="104,1" class="i property">Exception</a> { <b>get</b>; <b>set</b>; }
+    }
+}
+</pre></td></tr></table></div></body></html>

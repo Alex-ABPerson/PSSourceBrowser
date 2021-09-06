@@ -1,0 +1,817 @@
+﻿<!DOCTYPE html>
+<html><head><title>clientremotesessionprotocolstatemachine.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(808);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/client/clientremotesessionprotocolstatemachine.cs" target="_top">engine\remoting\client\clientremotesessionprotocolstatemachine.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class implements a Finite State Machine (FSM) to control the remote connection on the client side.</span>
+    <span class="c">///</span><span class="c"> There is a similar but not identical FSM on the server side for this connection.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> The FSM&#39;s states and events are defined to be the same for both the client FSM and the server FSM.</span>
+    <span class="c">///</span><span class="c"> This design allows the client and server FSM&#39;s to</span>
+    <span class="c">///</span><span class="c"> be as similar as possible, so that the complexity of maintaining them is minimized.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This FSM only controls the remote connection state. States related to runspace and pipeline are managed by runspace</span>
+    <span class="c">///</span><span class="c"> pipeline themselves.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This FSM defines an event handling matrix, which is filled by the event handlers.</span>
+    <span class="c">///</span><span class="c"> The state transitions can only be performed by these event handlers, which are private</span>
+    <span class="c">///</span><span class="c"> to this class. The event handling is done by a single thread, which makes this</span>
+    <span class="c">///</span><span class="c"> implementation solid and thread safe.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This implementation of the FSM does not allow the remote session to be reused for a connection</span>
+    <span class="c">///</span><span class="c"> after it is been closed. This design decision is made to simplify the implementation.</span>
+    <span class="c">///</span><span class="c"> However, the design can be easily modified to allow the reuse of the remote session</span>
+    <span class="c">///</span><span class="c"> to reconnect after the connection is closed.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="039f4a3a46a31204" href="../../../R/039f4a3a46a31204.html" target="n" data-glyph="2,0" class="t t">ClientRemoteSessionDSHandlerStateMachine</a>
+    {
+        [<span class="i">TraceSourceAttribute</span>(<span class="s">&quot;CRSessionFSM&quot;</span>, <span class="s">&quot;CRSessionFSM&quot;</span>)]
+        <b>private static readonly</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="b12316625d83bf17" href="../../../R/b12316625d83bf17.html" target="n" data-glyph="46,1" class="i field">s_trace</a> = <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#697b06ec70e3c537" class="i method">GetTracer</a>(<span class="s">&quot;CRSessionFSM&quot;</span>, <span class="s">&quot;CRSessionFSM&quot;</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event handling matrix. It defines what action to take when an event occur.</span>
+        <span class="c">///</span><span class="c"> [State,Event]=&gt;Action.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">EventHandler</span>&lt;<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a>&gt;[,] <a id="ef6d7a9a26d0074e" href="../../../R/ef6d7a9a26d0074e.html" target="n" data-glyph="46,1" class="i field">_stateMachineHandle</a>;
+        <b>private readonly</b> <span class="i">Queue</span>&lt;<a href="../common/misc.cs.html#7e5c4afe334f8fc9" class="t t">RemoteSessionStateEventArgs</a>&gt; <a id="a5bb510282a86135" href="../../../R/a5bb510282a86135.html" target="n" data-glyph="46,1" class="i field">_clientRemoteSessionStateChangeQueue</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Current state of session.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a> <a id="e0f642b51ed02c2c" href="../../../R/e0f642b51ed02c2c.html" target="n" data-glyph="46,1" class="i field">_state</a>;
+ 
+        <b>private readonly</b> <span class="i">Queue</span>&lt;<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a>&gt; <a id="26591cd036cafcc0" href="../../../R/26591cd036cafcc0.html" target="n" data-glyph="46,1" class="i field">_processPendingEventsQueue</a>
+            = <b>new</b> <span class="i">Queue</span>&lt;<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a>&gt;();
+ 
+        <span class="c">// all events raised through the state machine</span>
+        <span class="c">// will be queued in this</span>
+        <b>private readonly object</b> <a id="c8ba17eecd3cb81c" href="../../../R/c8ba17eecd3cb81c.html" target="n" data-glyph="46,1" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+        <span class="c">// object for synchronizing access to the above</span>
+        <span class="c">// queue</span>
+ 
+        <b>private bool</b> <a id="4c2a2755a9d1bfed" href="../../../R/4c2a2755a9d1bfed.html" target="n" data-glyph="46,1" class="i field">_eventsInProcess</a> = <b>false</b>;
+        <span class="c">// whether some thread is actively processing events</span>
+        <span class="c">// in a loop. If this is set then other threads</span>
+        <span class="c">// should simply add to the queue and not attempt</span>
+        <span class="c">// at processing the events in the queue. This will</span>
+        <span class="c">// guarantee that events will always be serialized</span>
+        <span class="c">// and processed</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Timer to be used for key exchange.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">Timer</span> <a id="79a764457febe5dc" href="../../../R/79a764457febe5dc.html" target="n" data-glyph="46,1" class="i field">_keyExchangeTimer</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates that the client has previously completed the session key exchange.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="531c6853b71a64f2" href="../../../R/531c6853b71a64f2.html" target="n" data-glyph="46,1" class="i field">_keyExchanged</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is to queue up a disconnect request when a key exchange is in process</span>
+        <span class="c">///</span><span class="c"> the session will be disconnect once the exchange is complete</span>
+        <span class="c">///</span><span class="c"> intermediate disconnect requests are tracked by this flag.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="1df00a0df74176d6" href="../../../R/1df00a0df74176d6.html" target="n" data-glyph="46,1" class="i field">_pendingDisconnect</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Processes events in the queue. If there are no</span>
+        <span class="c">///</span><span class="c"> more events to process, then sets eventsInProcess</span>
+        <span class="c">///</span><span class="c"> variable to false. This will ensure that another</span>
+        <span class="c">///</span><span class="c"> thread which raises an event can then take control</span>
+        <span class="c">///</span><span class="c"> of processing the events.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="fe39cd9707741f43" href="../../../R/fe39cd9707741f43.html" target="n" data-glyph="76,1" class="i method">ProcessEvents</a>()
+        {
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r0 rd" class="r0 r">eventArgs</span> = <b>null</b>;
+ 
+            <b>do</b>
+            {
+                <b>lock</b> (<a href="#c8ba17eecd3cb81c" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (<a href="#26591cd036cafcc0" class="i field">_processPendingEventsQueue</a>.<span class="i">Count</span> == 0)
+                    {
+                        <a href="#4c2a2755a9d1bfed" class="i field">_eventsInProcess</a> = <b>false</b>;
+                        <b>break</b>;
+                    }
+ 
+                    <span class="r0 r">eventArgs</span> = <a href="#26591cd036cafcc0" class="i field">_processPendingEventsQueue</a>.<span class="i">Dequeue</span>();
+                }
+ 
+                <b>try</b>
+                {
+                    <a href="#5f46211ca4070c97" class="i method">RaiseEventPrivate</a>(<span class="r0 r">eventArgs</span>);
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r1 rd" class="r1 r">ex</span>)
+                {
+                    <a href="#8c91252ae98f7e3d" class="i method">HandleFatalError</a>(<span class="r1 r">ex</span>);
+                }
+ 
+                <b>try</b>
+                {
+                    <a href="#0fc1e9e33913926c" class="i method">RaiseStateMachineEvents</a>();
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r2 rd" class="r2 r">ex</span>)
+                {
+                    <a href="#8c91252ae98f7e3d" class="i method">HandleFatalError</a>(<span class="r2 r">ex</span>);
+                }
+            } <b>while</b> (<a href="#4c2a2755a9d1bfed" class="i field">_eventsInProcess</a>);
+        }
+ 
+        <b>private void</b> <a id="8c91252ae98f7e3d" href="../../../R/8c91252ae98f7e3d.html" target="n" data-glyph="76,1" class="i method">HandleFatalError</a>(<span class="i">Exception</span> <span id="r3 rd" class="r3 r">ex</span>)
+        {
+            <span class="c">// Event handlers should not throw exceptions.  But if they do we need to</span>
+            <span class="c">// handle them here to prevent the state machine from not responding when there are pending</span>
+            <span class="c">// events to process.</span>
+ 
+            <span class="c">// Enqueue a fatal error event if such an exception occurs; clear all existing events.. we are going to terminate the session</span>
+            <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r4 rd" class="r4 r">fatalError</span> = <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="r3 r">ex</span>,
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">FatalErrorCausingClose</span>);
+ 
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r5 rd" class="r5 r">closeEvent</span> =
+                <b>new</b> <span class="t">RemoteSessionStateMachineEventArgs</span>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5f2a20db247782f7" class="i field">Close</a>, <span class="r4 r">fatalError</span>);
+ 
+            <a href="#0f71c1a2e194203d" class="i method">RaiseEvent</a>(<span class="r5 r">closeEvent</span>, <b>true</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Raises the StateChanged events which are queued</span>
+        <span class="c">///</span><span class="c"> All StateChanged events will be raised once the</span>
+        <span class="c">///</span><span class="c"> processing of the State Machine events are</span>
+        <span class="c">///</span><span class="c"> complete.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="0fc1e9e33913926c" href="../../../R/0fc1e9e33913926c.html" target="n" data-glyph="76,1" class="i method">RaiseStateMachineEvents</a>()
+        {
+            <a href="../common/misc.cs.html#7e5c4afe334f8fc9" class="t t">RemoteSessionStateEventArgs</a> <span id="r6 rd" class="r6 r">queuedEventArg</span> = <b>null</b>;
+ 
+            <b>while</b> (<a href="#a5bb510282a86135" class="i field">_clientRemoteSessionStateChangeQueue</a>.<span class="i">Count</span> &gt; 0)
+            {
+                <span class="r6 r">queuedEventArg</span> = <a href="#a5bb510282a86135" class="i field">_clientRemoteSessionStateChangeQueue</a>.<span class="i">Dequeue</span>();
+ 
+                <a href="#7144d1f987a602b2" class="i">StateChanged</a>.<span class="i">SafeInvoke</span>(<a href="#039f4a3a46a31204" class="k">this</a>, <span class="r6 r">queuedEventArg</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Unique identifier for this state machine. Used</span>
+        <span class="c">///</span><span class="c"> in tracing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">Guid</span> <a id="5e055563e9381420" href="../../../R/5e055563e9381420.html" target="n" data-glyph="46,1" class="i field">_id</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handler to be used in cases, where setting the state is the</span>
+        <span class="c">///</span><span class="c"> only task being performed. This method also asserts</span>
+        <span class="c">///</span><span class="c"> if the specified event is valid for the current state of</span>
+        <span class="c">///</span><span class="c"> the state machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Event args.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="77f664f9defeb623" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">SetStateHandler</a>(<b>object</b> <span id="r7 rd" class="r7 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r8 rd" class="r8 r">eventArgs</span>)
+        {
+            <b>switch</b> (<span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a>)
+            {
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4127e12afe91cae3" class="i field">NegotiationCompleted</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#d955b86cdbdb4e87" class="i field">NegotiationReceived</a>,
+                            <span class="s">&quot;State can be set to Established only when current state is NegotiationReceived&quot;</span>);
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, <b>null</b>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4cee2bb76cc2f1d7" class="i field">NegotiationReceived</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#c8e0072d135e2296" class="i property">RemoteSessionCapability</a> != <b>null</b>,
+                            <span class="s">&quot;State can be set to NegotiationReceived only when RemoteSessionCapability is not null&quot;</span>);
+                        <b>if</b> (<span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#c8e0072d135e2296" class="i property">RemoteSessionCapability</a> == <b>null</b>)
+                        {
+                            <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#fed5f40dc0075d41" class="i method">NewArgumentException</a>(<b>nameof</b>(<span class="r8 r">eventArgs</span>));
+                        }
+ 
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#d955b86cdbdb4e87" class="i field">NegotiationReceived</a>, <b>null</b>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#af2b93f6859b4283" class="i field">NegotiationSendCompleted</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>((<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#02873a55aa6133c3" class="i field">NegotiationSending</a>) || (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#2603336a7a6ceec5" class="i field">NegotiationSendingOnConnect</a>),
+                            <span class="s">&quot;Negotiating send can be completed only when current state is NegotiationSending&quot;</span>);
+ 
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#fc1e5bdf5a5d6c93" class="i field">NegotiationSent</a>, <b>null</b>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#a3cf592c2b4f317e" class="i field">ConnectFailed</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#619fda3f57045099" class="i field">Connecting</a>,
+                            <span class="s">&quot;A ConnectFailed event can be raised only when the current state is Connecting&quot;</span>);
+ 
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5e7bbe4ce8336771" class="i field">ClosingConnection</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5e267fbc67921ad8" class="i field">CloseFailed</a>:
+                    {
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#7436cd78255d3040" class="i field">Closed</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#6fa9ce621d9e7aab" class="i field">CloseCompleted</a>:
+                    {
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#7436cd78255d3040" class="i field">Closed</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#e49fef7a4c185afd" class="i field">KeyRequested</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>,
+                            <span class="s">&quot;Server can request a key only after the client reaches the Established state&quot;</span>);
+ 
+                        <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>)
+                        {
+                            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#0a8b75005471414a" class="i field">EstablishedAndKeyRequested</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#62bb8381c4c20c9a" class="i field">KeyReceived</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>,
+                            <span class="s">&quot;Key Receiving can only be raised after reaching the Established state&quot;</span>);
+ 
+                        <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>)
+                        {
+                            <span class="i">Timer</span> <span id="r9 rd" class="r9 r">tmp</span> = <span class="i">Interlocked</span>.<span class="i">Exchange</span>(<b>ref</b> <a href="#79a764457febe5dc" class="i field">_keyExchangeTimer</a>, <b>null</b>);
+                            <b>if</b> (<span class="r9 r">tmp</span> != <b>null</b>)
+                            {
+                                <span class="r9 r">tmp</span>.<span class="i">Dispose</span>();
+                            }
+ 
+                            <a href="#531c6853b71a64f2" class="i field">_keyExchanged</a> = <b>true</b>;
+                            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+ 
+                            <b>if</b> (<a href="#1df00a0df74176d6" class="i field">_pendingDisconnect</a>)
+                            {
+                                <span class="c">// session key exchange is complete, if there is a disconnect pending, process it now</span>
+                                <a href="#1df00a0df74176d6" class="i field">_pendingDisconnect</a> = <b>false</b>;
+                                <a href="#41d441876386cb13" class="i method">DoDisconnect</a>(<span class="r7 r">sender</span>, <span class="r8 r">eventArgs</span>);
+                            }
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#c2c61753a02af001" class="i field">KeySent</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> &gt;= <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>,
+                            <span class="s">&quot;Client can send a public key only after reaching the Established state&quot;</span>);
+ 
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<a href="#531c6853b71a64f2" class="i field">_keyExchanged</a>, <span class="s">&quot;Client should do key exchange only once&quot;</span>);
+ 
+                        <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a> ||
+                            <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#0a8b75005471414a" class="i field">EstablishedAndKeyRequested</a>)
+                        {
+                            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+ 
+                            <span class="c">// start the timer and wait</span>
+                            <a href="#79a764457febe5dc" class="i field">_keyExchangeTimer</a> = <b>new</b> <span class="i">Timer</span>(<span class="i">HandleKeyExchangeTimeout</span>, <b>null</b>, <a href="../fanin/BaseTransportManager.cs.html#9ccd7ea4a824f9d8" class="t t">BaseTransportManager</a>.<a href="../fanin/BaseTransportManager.cs.html#21a6ee26ace3693f" class="i field">ClientDefaultOperationTimeoutMs</a>, <span class="i">Timeout</span>.<span class="i">Infinite</span>);
+                        }
+                    }
+ 
+                    <b>break</b>;
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#acf6786192b8c617" class="i field">DisconnectCompleted</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a> || <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7684106e39f8202" class="i field">RCDisconnecting</a>,
+                            <span class="s">&quot;DisconnectCompleted event received while state machine is in wrong state&quot;</span>);
+ 
+                        <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a> || <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7684106e39f8202" class="i field">RCDisconnecting</a>)
+                        {
+                            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                        }
+                    }
+ 
+                    <b>break</b>;
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#eccec87cecd536cc" class="i field">DisconnectFailed</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>,
+                           <span class="s">&quot;DisconnectCompleted event received while state machine is in wrong state&quot;</span>);
+ 
+                        <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>)
+                        {
+                            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>); <span class="c">// set state to disconnected even TODO. Put some ETW event describing the disconnect process failure</span>
+                        }
+                    }
+ 
+                    <b>break</b>;
+                <b>case</b> <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#19a7c9fca66697c2" class="i field">ReconnectCompleted</a>:
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#183c36493d939baa" class="i field">Reconnecting</a>,
+                            <span class="s">&quot;ReconnectCompleted event received while state machine is in wrong state&quot;</span>);
+ 
+                        <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#183c36493d939baa" class="i field">Reconnecting</a>)
+                        {
+                            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, <span class="r8 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                        }
+                    }
+ 
+                    <b>break</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles the timeout for key exchange.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="ab642f6c2d67ec79" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleKeyExchangeTimeout</a>(<b>object</b> <span id="r10 rd" class="r10 r">sender</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>, <span class="s">&quot;timeout should only happen when waiting for a key&quot;</span>);
+ 
+            <span class="i">Timer</span> <span id="r11 rd" class="r11 r">tmp</span> = <span class="i">Interlocked</span>.<span class="i">Exchange</span>(<b>ref</b> <a href="#79a764457febe5dc" class="i field">_keyExchangeTimer</a>, <b>null</b>);
+            <b>if</b> (<span class="r11 r">tmp</span> != <b>null</b>)
+            {
+                <span class="r11 r">tmp</span>.<span class="i">Dispose</span>();
+            }
+ 
+            <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r12 rd" class="r12 r">exception</span> =
+                <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ClientKeyExchangeFailed</span>);
+ 
+            <a href="#0f71c1a2e194203d" class="i method">RaiseEvent</a>(<b>new</b> <span class="t">RemoteSessionStateMachineEventArgs</span>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#993bc35e49621837" class="i field">KeyReceiveFailed</a>, <span class="r12 r">exception</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handler to be used in cases, where raising an event to</span>
+        <span class="c">///</span><span class="c"> the state needs to be performed. This method also</span>
+        <span class="c">///</span><span class="c"> asserts if the specified event is valid for</span>
+        <span class="c">///</span><span class="c"> the current state of the state machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Event args.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="d116dc13c9f69786" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">SetStateToClosedHandler</a>(<b>object</b> <span id="r13 rd" class="r13 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r14 rd" class="r14 r">eventArgs</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#d955b86cdbdb4e87" class="i field">NegotiationReceived</a> &amp;&amp;
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#8dec2b368421fae5" class="i field">NegotiationFailed</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#dd3d9d5b5442e94d" class="i field">SendFailed</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#7559d0a1c791c0c1" class="i field">ReceiveFailed</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#988e947e796cae52" class="i field">NegotiationTimeout</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#cc67049edf010533" class="i field">KeySendFailed</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#993bc35e49621837" class="i field">KeyReceiveFailed</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#73aa256ee037c4d0" class="i field">KeyRequestFailed</a> ||
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#c9bdaeea7b86fc2c" class="i field">ReconnectFailed</a>,
+                        <span class="s">&quot;An event to close the state machine can be raised only on the following conditions: &quot;</span> +
+            <span class="s">&quot;1. Negotiation failed 2. Send failed 3. Receive failed 4. Negotiation timedout 5. Key send failed 6. key receive failed 7. key exchange failed 8. Reconnection failed&quot;</span>);
+ 
+            <span class="c">// if there is a NegotiationTimeout event raised, it</span>
+            <span class="c">// shouldn&#39;t matter if we are currently in the</span>
+            <span class="c">// Established state</span>
+            <b>if</b> (<span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#988e947e796cae52" class="i field">NegotiationTimeout</a> &amp;&amp;
+                <a href="#f9016af4ea5ec99d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// raise an event to close the state machine</span>
+            <a href="#0f71c1a2e194203d" class="i method">RaiseEvent</a>(<b>new</b> <a href="../common/misc.cs.html#d6c2cb8af807b450" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5f2a20db247782f7" class="i field">Close</a>,
+                            <span class="r14 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>));
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> constructor
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates an instance of ClientRemoteSessionDSHandlerStateMachine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="f3a4ae7c6f2c182b" href="../../../R/f3a4ae7c6f2c182b.html" target="n" data-glyph="74,1" class="t constructor">ClientRemoteSessionDSHandlerStateMachine</a>()
+        {
+            <a href="#a5bb510282a86135" class="i field">_clientRemoteSessionStateChangeQueue</a> = <b>new</b> <span class="i">Queue</span>&lt;<a href="../common/misc.cs.html#7e5c4afe334f8fc9" class="t t">RemoteSessionStateEventArgs</a>&gt;();
+ 
+            <span class="c">// Initialize the state machine event handling matrix</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a> = <b>new</b> <span class="i">EventHandler</span>&lt;<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a>&gt;[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#2d14913bbfe02638" class="i field">MaxState</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#a9e25434dddb9d20" class="i field">MaxEvent</a>];
+            <b>for</b> (<b>int</b> <span id="r15 rd" class="r15 r">i</span> = 0; <span class="r15 r">i</span> &lt; <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>.<span class="i">GetLength</span>(0); <span class="r15 r">i</span>++)
+            {
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#1389dea06ebf9587" class="i field">FatalError</a>] += <span class="i">DoFatal</span>;
+ 
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5f2a20db247782f7" class="i field">Close</a>] += <span class="i">DoClose</span>;
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5e267fbc67921ad8" class="i field">CloseFailed</a>] += <span class="i">SetStateHandler</span>;
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#6fa9ce621d9e7aab" class="i field">CloseCompleted</a>] += <span class="i">SetStateHandler</span>;
+ 
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#988e947e796cae52" class="i field">NegotiationTimeout</a>] += <span class="i">SetStateToClosedHandler</span>;
+ 
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#dd3d9d5b5442e94d" class="i field">SendFailed</a>] += <span class="i">SetStateToClosedHandler</span>;
+ 
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#7559d0a1c791c0c1" class="i field">ReceiveFailed</a>] += <span class="i">SetStateToClosedHandler</span>;
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4a7b290f602ecbe6" class="i field">CreateSession</a>] += <span class="i">DoCreateSession</span>;
+                <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r15 r">i</span>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#7d3be51cf5873639" class="i field">ConnectSession</a>] += <span class="i">DoConnectSession</span>;
+            }
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#ff6fa674e90841ed" class="i field">NegotiationSending</a>] += <span class="i">DoNegotiationSending</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#61540c839785e3f4" class="i field">NegotiationSendingOnConnect</a>] += <span class="i">DoNegotiationSending</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#02873a55aa6133c3" class="i field">NegotiationSending</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#af2b93f6859b4283" class="i field">NegotiationSendCompleted</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#2603336a7a6ceec5" class="i field">NegotiationSendingOnConnect</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#af2b93f6859b4283" class="i field">NegotiationSendCompleted</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#fc1e5bdf5a5d6c93" class="i field">NegotiationSent</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4cee2bb76cc2f1d7" class="i field">NegotiationReceived</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#d955b86cdbdb4e87" class="i field">NegotiationReceived</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#4127e12afe91cae3" class="i field">NegotiationCompleted</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#d955b86cdbdb4e87" class="i field">NegotiationReceived</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#8dec2b368421fae5" class="i field">NegotiationFailed</a>] += <span class="i">SetStateToClosedHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#619fda3f57045099" class="i field">Connecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#a3cf592c2b4f317e" class="i field">ConnectFailed</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5e7bbe4ce8336771" class="i field">ClosingConnection</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#6fa9ce621d9e7aab" class="i field">CloseCompleted</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#93112c8187f735db" class="i field">DisconnectStart</a>] += <span class="i">DoDisconnect</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#acf6786192b8c617" class="i field">DisconnectCompleted</a>] += <span class="i">SetStateHandler</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#eccec87cecd536cc" class="i field">DisconnectFailed</a>] += <span class="i">SetStateHandler</span>; <span class="c">// dont close</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5c7fc3b4f38f3fb1" class="i field">ReconnectStart</a>] += <span class="i">DoReconnect</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#183c36493d939baa" class="i field">Reconnecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#19a7c9fca66697c2" class="i field">ReconnectCompleted</a>] += <span class="i">SetStateHandler</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#183c36493d939baa" class="i field">Reconnecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#c9bdaeea7b86fc2c" class="i field">ReconnectFailed</a>] += <span class="i">SetStateToClosedHandler</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#6081a8d6127fa9e9" class="i field">RCDisconnectStarted</a>] += <span class="i">DoRCDisconnectStarted</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#6081a8d6127fa9e9" class="i field">RCDisconnectStarted</a>] += <span class="i">DoRCDisconnectStarted</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#6081a8d6127fa9e9" class="i field">RCDisconnectStarted</a>] += <span class="i">DoRCDisconnectStarted</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7684106e39f8202" class="i field">RCDisconnecting</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#acf6786192b8c617" class="i field">DisconnectCompleted</a>] += <span class="i">SetStateHandler</span>;
+ 
+            <span class="c">// Disconnect during key exchange process</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#93112c8187f735db" class="i field">DisconnectStart</a>] += <span class="i">DoDisconnectDuringKeyExchange</span>;
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#0a8b75005471414a" class="i field">EstablishedAndKeyRequested</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#93112c8187f735db" class="i field">DisconnectStart</a>] += <span class="i">DoDisconnectDuringKeyExchange</span>;
+ 
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#e49fef7a4c185afd" class="i field">KeyRequested</a>] += <span class="i">SetStateHandler</span>; <span class="c">//</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#c2c61753a02af001" class="i field">KeySent</a>] += <span class="i">SetStateHandler</span>; <span class="c">//</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#cc67049edf010533" class="i field">KeySendFailed</a>] += <span class="i">SetStateToClosedHandler</span>; <span class="c">//</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#62bb8381c4c20c9a" class="i field">KeyReceived</a>] += <span class="i">SetStateHandler</span>; <span class="c">//</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#0a8b75005471414a" class="i field">EstablishedAndKeyRequested</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#c2c61753a02af001" class="i field">KeySent</a>] += <span class="i">SetStateHandler</span>; <span class="c">//</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#993bc35e49621837" class="i field">KeyReceiveFailed</a>] += <span class="i">SetStateToClosedHandler</span>; <span class="c">//</span>
+            <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#0a8b75005471414a" class="i field">EstablishedAndKeyRequested</a>, (<b>int</b>)<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#cc67049edf010533" class="i field">KeySendFailed</a>] += <span class="i">SetStateToClosedHandler</span>;
+ 
+            <span class="c">// TODO: All these are potential unexpected state transitions.. should have a way to track these calls..</span>
+            <span class="c">// should atleast put a dbg assert in this handler</span>
+            <b>for</b> (<b>int</b> <span id="r16 rd" class="r16 r">i</span> = 0; <span class="r16 r">i</span> &lt; <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>.<span class="i">GetLength</span>(0); <span class="r16 r">i</span>++)
+            {
+                <b>for</b> (<b>int</b> <span id="r17 rd" class="r17 r">j</span> = 0; <span class="r17 r">j</span> &lt; <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>.<span class="i">GetLength</span>(1); <span class="r17 r">j</span>++)
+                {
+                    <b>if</b> (<a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r16 r">i</span>, <span class="r17 r">j</span>] == <b>null</b>)
+                    {
+                        <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[<span class="r16 r">i</span>, <span class="r17 r">j</span>] += <span class="i">DoClose</span>;
+                    }
+                }
+            }
+ 
+            <a href="#5e055563e9381420" class="i field">_id</a> = <span class="i">Guid</span>.<span class="i">NewGuid</span>();
+ 
+            <span class="c">// initialize the state to be Idle: this means it is ready to start connecting.</span>
+            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>, <b>null</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper method used by dependents to figure out if the RaiseEvent</span>
+        <span class="c">///</span><span class="c"> method can be short-circuited. This will be useful in cases where</span>
+        <span class="c">///</span><span class="c"> the dependent code wants to take action immediately instead of</span>
+        <span class="c">///</span><span class="c"> going through state machine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="fea96bca41a2c80a" href="../../../R/fea96bca41a2c80a.html" target="n" data-glyph="74,1" class="i method">CanByPassRaiseEvent</a>(<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r18 rd" class="r18 r">arg</span>)
+        {
+            <b>if</b> (<span class="r18 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#f2d9ed322eacd8a5" class="i field">MessageReceived</a>)
+            {
+                <b>if</b> (<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a> ||
+                    <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#eaa2a7383a2a2830" class="i field">EstablishedAndKeyReceived</a> ||   <span class="c">// TODO - Client session would never get into this state... to be removed</span>
+                    <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a> ||
+                    <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a> ||               <span class="c">// There can be input data until disconnect has been completed</span>
+                    <a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>)                  <span class="c">// Data can arrive while state machine is transitioning to disconnected</span>
+                {
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is used by all classes to raise a FSM event.</span>
+        <span class="c">///</span><span class="c"> The method will queue the event. The event queue will be handled in</span>
+        <span class="c">///</span><span class="c"> a thread safe manner by a single dedicated thread.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the event to be raised.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">clearQueuedEvents</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> optional bool indicating whether to clear currently queued events</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="0f71c1a2e194203d" href="../../../R/0f71c1a2e194203d.html" target="n" data-glyph="74,1" class="i method">RaiseEvent</a>(<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r19 rd" class="r19 r">arg</span>, <b>bool</b> <span id="r20 rd" class="r20 r">clearQueuedEvents</span> = <b>false</b>)
+        {
+            <b>lock</b> (<a href="#c8ba17eecd3cb81c" class="i field">_syncObject</a>)
+            {
+                <a href="#b12316625d83bf17" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Event received : {0} for {1}&quot;</span>, <span class="r19 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a>, <a href="#5e055563e9381420" class="i field">_id</a>);
+                <b>if</b> (<span class="r20 r">clearQueuedEvents</span>)
+                {
+                    <a href="#26591cd036cafcc0" class="i field">_processPendingEventsQueue</a>.<span class="i">Clear</span>();
+                }
+ 
+                <a href="#26591cd036cafcc0" class="i field">_processPendingEventsQueue</a>.<span class="i">Enqueue</span>(<span class="r19 r">arg</span>);
+ 
+                <b>if</b> (!<a href="#4c2a2755a9d1bfed" class="i field">_eventsInProcess</a>)
+                {
+                    <a href="#4c2a2755a9d1bfed" class="i field">_eventsInProcess</a> = <b>true</b>;
+                }
+                <b>else</b>
+                {
+                    <b>return</b>;
+                }
+            }
+ 
+            <a href="#fe39cd9707741f43" class="i method">ProcessEvents</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the private version of raising a FSM event.</span>
+        <span class="c">///</span><span class="c"> It can only be called by the dedicated thread that processes the event queue.</span>
+        <span class="c">///</span><span class="c"> It calls the event handler</span>
+        <span class="c">///</span><span class="c"> in the right position of the event handling matrix.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The parameter contains the actual FSM event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="5f46211ca4070c97" href="../../../R/5f46211ca4070c97.html" target="n" data-glyph="76,1" class="i method">RaiseEventPrivate</a>(<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r21 rd" class="r21 r">arg</span>)
+        {
+            <b>if</b> (<span class="r21 r">arg</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r21 r">arg</span>));
+            }
+ 
+            <span class="i">EventHandler</span>&lt;<a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a>&gt; <span id="r22 rd" class="r22 r">handler</span> = <a href="#ef6d7a9a26d0074e" class="i field">_stateMachineHandle</a>[(<b>int</b>)<a href="#f9016af4ea5ec99d" class="i property">State</a>, (<b>int</b>)<span class="r21 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a>];
+            <b>if</b> (<span class="r22 r">handler</span> != <b>null</b>)
+            {
+                <a href="#b12316625d83bf17" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Before calling state machine event handler: state = {0}, event = {1}, id = {2}&quot;</span>, <a href="#f9016af4ea5ec99d" class="i property">State</a>, <span class="r21 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a>, <a href="#5e055563e9381420" class="i field">_id</a>);
+ 
+                <span class="r22 r">handler</span>(<a href="#039f4a3a46a31204" class="k">this</a>, <span class="r21 r">arg</span>);
+ 
+                <a href="#b12316625d83bf17" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;After calling state machine event handler: state = {0}, event = {1}, id = {2}&quot;</span>, <a href="#f9016af4ea5ec99d" class="i property">State</a>, <span class="r21 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a>, <a href="#5e055563e9381420" class="i field">_id</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a readonly property available to all other classes. It gives the FSM state.</span>
+        <span class="c">///</span><span class="c"> Other classes can query for this state. Only the FSM itself can change the state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a> <a id="f9016af4ea5ec99d" href="../../../R/f9016af4ea5ec99d.html" target="n" data-glyph="104,1" class="i property">State</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#e0f642b51ed02c2c" class="i field">_state</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This event indicates that the FSM state changed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal event</b> <span class="i">EventHandler</span>&lt;<a href="../common/misc.cs.html#7e5c4afe334f8fc9" class="t t">RemoteSessionStateEventArgs</a>&gt; <a id="7144d1f987a602b2" href="../../../R/7144d1f987a602b2.html" target="n" data-glyph="32,1" class="i">StateChanged</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Event Handlers
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the handler for CreateSession event of the FSM. This is the beginning of everything</span>
+        <span class="c">///</span><span class="c"> else. From this moment on, the FSM will proceeds step by step to eventually reach</span>
+        <span class="c">///</span><span class="c"> Established state or Closed state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the FSM event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../../utils/MshArgumentNullException.cs.html#efa3789145f41301" class="t t">PSArgumentNullException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">arg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="8c80b816ce7840f2" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoCreateSession</a>(<b>object</b> <span id="r23 rd" class="r23 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r24 rd" class="r24 r">arg</span>)
+        {
+            <b>using</b> (<a href="#b12316625d83bf17" class="i field">s_trace</a>.<a href="../../../utils/StructuredTraceSource.cs.html#a7463a7f51bc0952" class="i method">TraceEventHandlers</a>())
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>,
+                    <span class="s">&quot;State needs to be idle to start connection&quot;</span>);
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> != <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5e7bbe4ce8336771" class="i field">ClosingConnection</a> ||
+                           <a href="#e0f642b51ed02c2c" class="i field">_state</a> != <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#7436cd78255d3040" class="i field">Closed</a>,
+                    <span class="s">&quot;Reconnect after connection is closing or closed is not allowed&quot;</span>);
+ 
+                <b>if</b> (<a href="#f9016af4ea5ec99d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>)
+                {
+                    <span class="c">// we are short-circuiting the state by going directly to NegotiationSending..</span>
+                    <span class="c">// This will save 1 network trip just to establish a connection.</span>
+                    <span class="c">// Raise the event for sending the negotiation</span>
+                    <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r25 rd" class="r25 r">sendingArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#ff6fa674e90841ed" class="i field">NegotiationSending</a>);
+                    <a href="#0f71c1a2e194203d" class="i method">RaiseEvent</a>(<span class="r25 r">sendingArg</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the handler for ConnectSession event of the FSM. This is the beginning of everything</span>
+        <span class="c">///</span><span class="c"> else. From this moment on, the FSM will proceeds step by step to eventually reach</span>
+        <span class="c">///</span><span class="c"> Established state or Closed state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the FSM event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../../../utils/MshArgumentNullException.cs.html#efa3789145f41301" class="t t">PSArgumentNullException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">arg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="ee93e03fac561492" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoConnectSession</a>(<b>object</b> <span id="r26 rd" class="r26 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r27 rd" class="r27 r">arg</span>)
+        {
+            <b>using</b> (<a href="#b12316625d83bf17" class="i field">s_trace</a>.<a href="../../../utils/StructuredTraceSource.cs.html#a7463a7f51bc0952" class="i method">TraceEventHandlers</a>())
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>,
+                    <span class="s">&quot;State needs to be idle to start connection&quot;</span>);
+ 
+                <b>if</b> (<a href="#f9016af4ea5ec99d" class="i property">State</a> == <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>)
+                {
+                    <span class="c">// We need to send negotiation and connect algorithm related info</span>
+                    <span class="c">// Change state to let other DSHandlers add appropriate messages to be piggybacked on transport&#39;s Create payload</span>
+                    <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r28 rd" class="r28 r">sendingArg</span> = <b>new</b> <a href="../common/misc.cs.html#77708abdda1be0a8" class="t constructor">RemoteSessionStateMachineEventArgs</a>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#61540c839785e3f4" class="i field">NegotiationSendingOnConnect</a>);
+                    <a href="#0f71c1a2e194203d" class="i method">RaiseEvent</a>(<span class="r28 r">sendingArg</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the handler for NegotiationSending event.</span>
+        <span class="c">///</span><span class="c"> It sets the new state to be NegotiationSending and</span>
+        <span class="c">///</span><span class="c"> calls data structure handler to send the negotiation packet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the FSM event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">arg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="ea596ddef3fe4deb" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoNegotiationSending</a>(<b>object</b> <span id="r29 rd" class="r29 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r30 rd" class="r30 r">arg</span>)
+        {
+            <b>if</b> (<span class="r30 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#ff6fa674e90841ed" class="i field">NegotiationSending</a>)
+            {
+                <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#02873a55aa6133c3" class="i field">NegotiationSending</a>, <b>null</b>);
+            }
+            <b>else</b> <b>if</b> (<span class="r30 r">arg</span>.<a href="../common/misc.cs.html#60b182b84610c3ba" class="i property">StateEvent</a> == <a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#61540c839785e3f4" class="i field">NegotiationSendingOnConnect</a>)
+            {
+                <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#2603336a7a6ceec5" class="i field">NegotiationSendingOnConnect</a>, <b>null</b>);
+            }
+            <b>else</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;NegotiationSending called on wrong event&quot;</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="d30ca2e96f0c6c5a" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoDisconnectDuringKeyExchange</a>(<b>object</b> <span id="r31 rd" class="r31 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r32 rd" class="r32 r">arg</span>)
+        {
+            <span class="c">// set flag to indicate Disconnect request queue up</span>
+            <a href="#1df00a0df74176d6" class="i field">_pendingDisconnect</a> = <b>true</b>;
+        }
+ 
+        <b>private void</b> <a id="41d441876386cb13" href="../../../R/41d441876386cb13.html" target="n" data-glyph="76,1" class="i method">DoDisconnect</a>(<b>object</b> <span id="r33 rd" class="r33 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r34 rd" class="r34 r">arg</span>)
+        {
+            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>, <b>null</b>);
+        }
+ 
+        <b>private void</b> <a id="2089179ddf46dc63" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoReconnect</a>(<b>object</b> <span id="r35 rd" class="r35 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r36 rd" class="r36 r">arg</span>)
+        {
+            <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#183c36493d939baa" class="i field">Reconnecting</a>, <b>null</b>);
+        }
+ 
+        <b>private void</b> <a id="7fcb4cef2f217f08" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoRCDisconnectStarted</a>(<b>object</b> <span id="r37 rd" class="r37 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r38 rd" class="r38 r">arg</span>)
+        {
+            <b>if</b> (<a href="#f9016af4ea5ec99d" class="i property">State</a> != <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a> &amp;&amp;
+                <a href="#f9016af4ea5ec99d" class="i property">State</a> != <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>)
+            {
+                <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7684106e39f8202" class="i field">RCDisconnecting</a>, <b>null</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the handler for Close event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">arg</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This parameter contains the FSM event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">arg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the parameter </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">arg</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> does not contain remote data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="cc3dc1f3b9db8b43" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoClose</a>(<b>object</b> <span id="r39 rd" class="r39 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r40 rd" class="r40 r">arg</span>)
+        {
+            <b>using</b> (<a href="#b12316625d83bf17" class="i field">s_trace</a>.<a href="../../../utils/StructuredTraceSource.cs.html#a7463a7f51bc0952" class="i method">TraceEventHandlers</a>())
+            {
+                <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a> <span id="r41 rd" class="r41 r">oldState</span> = <a href="#e0f642b51ed02c2c" class="i field">_state</a>;
+ 
+                <b>switch</b> (<span class="r41 r">oldState</span>)
+                {
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5e7bbe4ce8336771" class="i field">ClosingConnection</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#7436cd78255d3040" class="i field">Closed</a>:
+                        <span class="c">// do nothing</span>
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#619fda3f57045099" class="i field">Connecting</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#424ec7ae9be7e81a" class="i field">Connected</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#8d4705ab67b3b753" class="i field">Established</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#eaa2a7383a2a2830" class="i field">EstablishedAndKeyReceived</a>:  <span class="c">// TODO - Client session would never get into this state... to be removed</span>
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#ee433adb6c18340e" class="i field">EstablishedAndKeySent</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#d955b86cdbdb4e87" class="i field">NegotiationReceived</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#fc1e5bdf5a5d6c93" class="i field">NegotiationSent</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#02873a55aa6133c3" class="i field">NegotiationSending</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7e3451dd912571c" class="i field">Disconnected</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#71f847fefe34fd8a" class="i field">Disconnecting</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#183c36493d939baa" class="i field">Reconnecting</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#e7684106e39f8202" class="i field">RCDisconnecting</a>:
+                        <a href="#af4c18b9fe27abf6" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#5e7bbe4ce8336771" class="i field">ClosingConnection</a>, <span class="r40 r">arg</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>);
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#9b2f27eacc9ec7e9" class="i field">Idle</a>:
+                    <b>case</b> <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#45d554a7e813abc5" class="i field">UndefinedState</a>:
+                    <b>default</b>:
+                        <a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a> <span id="r42 rd" class="r42 r">forceClosedException</span> = <b>new</b> <span class="t">PSRemotingTransportException</span>(<span class="r40 r">arg</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>, <span class="i">RemotingErrorIdStrings</span>.<span class="i">ForceClosed</span>);
+                        <span class="i">SetState</span>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a>.<a href="../common/misc.cs.html#7436cd78255d3040" class="i field">Closed</a>, <span class="r42 r">forceClosedException</span>);
+                        <b>break</b>;
+                }
+ 
+                <a href="#240e4b09040e802b" class="i method">CleanAll</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles a fatal error message. Throws a well defined error message,</span>
+        <span class="c">///</span><span class="c"> which contains the reason for the fatal error as an inner exception.</span>
+        <span class="c">///</span><span class="c"> This way the internal details are not surfaced to the user.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="989e8232e6d00c07" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">DoFatal</a>(<b>object</b> <span id="r43 rd" class="r43 r">sender</span>, <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r44 rd" class="r44 r">eventArgs</span>)
+        {
+            <a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a> <span id="r45 rd" class="r45 r">fatalError</span> =
+                <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="r44 r">eventArgs</span>.<a href="../common/misc.cs.html#39ef8714f5d0816f" class="i property">Reason</a>, <span class="i">RemotingErrorIdStrings</span>.<span class="i">FatalErrorCausingClose</span>);
+ 
+            <a href="../common/misc.cs.html#e012d9ffab9d7da0" class="t t">RemoteSessionStateMachineEventArgs</a> <span id="r46 rd" class="r46 r">closeEvent</span> =
+                <b>new</b> <span class="t">RemoteSessionStateMachineEventArgs</span>(<a href="../common/misc.cs.html#75ac2ac4117af9a2" class="t t">RemoteSessionEvent</a>.<a href="../common/misc.cs.html#5f2a20db247782f7" class="i field">Close</a>, <span class="r45 r">fatalError</span>);
+ 
+            <a href="#0f71c1a2e194203d" class="i method">RaiseEvent</a>(<span class="r46 r">closeEvent</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Event Handlers
+ 
+        <b>private static void</b> <a id="240e4b09040e802b" href="../../../R/240e4b09040e802b.html" target="n" data-glyph="76,1" class="i method">CleanAll</a>()
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Sets the state of the state machine. Since only</span>
+        <span class="c">///</span><span class="c"> one thread can be manipulating the state at a time</span>
+        <span class="c">///</span><span class="c"> the state is not synchronized.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">newState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">New state of the state machine.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">reason</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">reason why the state machine is set</span>
+        <span class="c">///</span><span class="c"> to the new state</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="af4c18b9fe27abf6" href="../../../R/af4c18b9fe27abf6.html" target="n" data-glyph="76,1" class="i method">SetState</a>(<a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a> <span id="r47 rd" class="r47 r">newState</span>, <span class="i">Exception</span> <span id="r48 rd" class="r48 r">reason</span>)
+        {
+            <a href="../common/misc.cs.html#278607b7d2274446" class="t t">RemoteSessionState</a> <span id="r49 rd" class="r49 r">oldState</span> = <a href="#e0f642b51ed02c2c" class="i field">_state</a>;
+ 
+            <b>if</b> (<span class="r47 r">newState</span> != <span class="r49 r">oldState</span>)
+            {
+                <a href="#e0f642b51ed02c2c" class="i field">_state</a> = <span class="r47 r">newState</span>;
+                <a href="#b12316625d83bf17" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;state machine state transition: from state {0} to state {1}&quot;</span>, <span class="r49 r">oldState</span>, <a href="#e0f642b51ed02c2c" class="i field">_state</a>);
+ 
+                <a href="../common/misc.cs.html#0f20d5de4b122a0f" class="t t">RemoteSessionStateInfo</a> <span id="r50 rd" class="r50 r">stateInfo</span> = <b>new</b> <a href="../common/misc.cs.html#745c8c11c741ab08" class="t constructor">RemoteSessionStateInfo</a>(<a href="#e0f642b51ed02c2c" class="i field">_state</a>, <span class="r48 r">reason</span>);
+                <a href="../common/misc.cs.html#7e5c4afe334f8fc9" class="t t">RemoteSessionStateEventArgs</a> <span id="r51 rd" class="r51 r">sessionStateEventArg</span> = <b>new</b> <a href="../common/misc.cs.html#1f7fb79f08327947" class="t constructor">RemoteSessionStateEventArgs</a>(<span class="r50 r">stateInfo</span>);
+ 
+                <a href="#a5bb510282a86135" class="i field">_clientRemoteSessionStateChangeQueue</a>.<span class="i">Enqueue</span>(<span class="r51 r">sessionStateEventArg</span>);
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

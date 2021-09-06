@@ -1,0 +1,425 @@
+﻿<!DOCTYPE html>
+<html><head><title>WSManPluginTransportManager.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(416);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/fanin/WSManPluginTransportManager.cs" target="_top">engine\remoting\fanin\WSManPluginTransportManager.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="c">// ----------------------------------------------------------------------</span>
+<span class="c">//  Contents:  Entry points for managed PowerShell plugin worker used to</span>
+<span class="c">//  host powershell in a WSMan service.</span>
+<span class="c">// ----------------------------------------------------------------------</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Client</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Server</span>;
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Win32</span>.<span class="i">SafeHandles</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <b>internal class</b> <a id="deee4e3fe9fcc9c7" href="../../../R/deee4e3fe9fcc9c7.html" target="n" data-glyph="2,0" class="t t">WSManPluginServerTransportManager</a> : <a href="BaseTransportManager.cs.html#18630eb940dac0a0" class="t t">AbstractServerSessionTransportManager</a>
+    {
+        <b>private</b> <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#07d21d2cee8c9d82" class="t t">WSManPluginRequest</a> <a id="174532a0727a990a" href="../../../R/174532a0727a990a.html" target="n" data-glyph="46,1" class="i field">_requestDetails</a>;
+ 
+        <span class="c">// the following variables are used to block thread from sending</span>
+        <span class="c">// data to the client until the client sends a receive request.</span>
+        <b>private bool</b> <a id="f936444874fb8d64" href="../../../R/f936444874fb8d64.html" target="n" data-glyph="46,1" class="i field">_isRequestPending</a>;
+        <b>private readonly object</b> <a id="2de0c71fe02b2b9f" href="../../../R/2de0c71fe02b2b9f.html" target="n" data-glyph="46,1" class="i field">_syncObject</a>;
+        <b>private readonly</b> <span class="i">ManualResetEvent</span> <a id="9217204fe6c5a322" href="../../../R/9217204fe6c5a322.html" target="n" data-glyph="46,1" class="i field">_waitHandle</a>;
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="#deee4e3fe9fcc9c7" class="t t">WSManPluginServerTransportManager</a>&gt; <a id="1021c54131c7152d" href="../../../R/1021c54131c7152d.html" target="n" data-glyph="46,1" class="i field">_activeCmdTransportManagers</a>;
+        <b>private bool</b> <a id="68b89012310a509a" href="../../../R/68b89012310a509a.html" target="n" data-glyph="46,1" class="i field">_isClosed</a>;
+        <span class="c">// used to keep track of last error..this will be used</span>
+        <span class="c">// for reporting operation complete to WSMan.</span>
+        <b>private</b> <span class="i">Exception</span> <a id="cf702053811cf3e7" href="../../../R/cf702053811cf3e7.html" target="n" data-glyph="46,1" class="i field">_lastErrorReported</a>;
+        <span class="c">// used with RegisterWaitForSingleObject. This object needs to be freed</span>
+        <span class="c">// upon close</span>
+        <b>private</b> <a href="WSManPlugin.cs.html#3e5455aa49779e8c" class="t t">WSManPluginOperationShutdownContext</a> <a id="73ea6576701b3113" href="../../../R/73ea6576701b3113.html" target="n" data-glyph="46,1" class="i field">_shutDownContext</a>;
+ 
+        <span class="c">// tracker used in conjunction with WSMan API to identify a particular</span>
+        <span class="c">// shell context.</span>
+        <b>private</b> <span class="i">RegisteredWaitHandle</span> <a id="1b521dd0371c0fb3" href="../../../R/1b521dd0371c0fb3.html" target="n" data-glyph="46,1" class="i field">_registeredShutDownWaitHandle</a>;
+ 
+        <span class="c">// event that gets raised when Prepare is called. Respective Session</span>
+        <span class="c">// object can use this callback to ReportContext to client.</span>
+        <b>public event</b> <span class="i">EventHandler</span>&lt;<span class="i">EventArgs</span>&gt; <a id="32fcdefcdce6af40" href="../../../R/32fcdefcdce6af40.html" target="n" data-glyph="30,1" class="i">PrepareCalled</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <b>internal</b> <a id="c2f0349ba359555e" href="../../../R/c2f0349ba359555e.html" target="n" data-glyph="74,1" class="t constructor">WSManPluginServerTransportManager</a>(
+            <b>int</b> <span id="r0 rd" class="r0 r">fragmentSize</span>,
+            <a href="../../../utils/CryptoUtils.cs.html#1999dfb2439af5a0" class="t t">PSRemotingCryptoHelper</a> <span id="r1 rd" class="r1 r">cryptoHelper</span>)
+            : <a href="BaseTransportManager.cs.html#0789ba713b2eb040" class="k">base</a>(<span class="r0 r">fragmentSize</span>, <span class="r1 r">cryptoHelper</span>)
+        {
+            <a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+            <a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="#deee4e3fe9fcc9c7" class="t t">WSManPluginServerTransportManager</a>&gt;();
+            <a href="#9217204fe6c5a322" class="i field">_waitHandle</a> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>false</b>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Inherited_from_AbstractServerSessionTransportManager
+        <b>internal override void</b> <a id="9c3f4b5510c171ff" href="../../../R/9c3f4b5510c171ff.html" target="n" data-glyph="74,1" class="i method">Close</a>(
+            <span class="i">Exception</span> <span id="r2 rd" class="r2 r">reasonForClose</span>)
+        {
+            <a href="#45bbeb04491016e8" class="i method">DoClose</a>(<b>false</b>, <span class="r2 r">reasonForClose</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">isShuttingDown</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">true if the method is called from RegisterWaitForSingleObject</span>
+        <span class="c">///</span><span class="c"> callback. This boolean is used to decide whether to UnregisterWait or</span>
+        <span class="c">///</span><span class="c"> UnregisterWaitEx</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">reasonForClose</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Usage&quot;</span>, <span class="s">&quot;CA1806:DoNotIgnoreMethodResults&quot;</span>, <span class="i">Justification</span> = <span class="s">&quot;The WSManPluginReceiveResult return value is not documented and is not needed in this case.&quot;</span>)]
+        <b>internal void</b> <a id="45bbeb04491016e8" href="../../../R/45bbeb04491016e8.html" target="n" data-glyph="74,1" class="i method">DoClose</a>(
+            <b>bool</b> <span id="r3 rd" class="r3 r">isShuttingDown</span>,
+            <span class="i">Exception</span> <span id="r4 rd" class="r4 r">reasonForClose</span>)
+        {
+            <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>lock</b> (<a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <a href="#68b89012310a509a" class="i field">_isClosed</a> = <b>true</b>;
+                <a href="#cf702053811cf3e7" class="i field">_lastErrorReported</a> = <span class="r4 r">reasonForClose</span>;
+ 
+                <b>if</b> (!<a href="#f936444874fb8d64" class="i field">_isRequestPending</a>)
+                {
+                    <span class="c">// release threads blocked on the sending data to client if any</span>
+                    <a href="#9217204fe6c5a322" class="i field">_waitHandle</a>.<span class="i">Set</span>();
+                }
+            }
+ 
+            <span class="c">// only one thread will reach here</span>
+ 
+            <span class="c">// let everyone know that we are about to close</span>
+            <b>try</b>
+            {
+                <a href="BaseTransportManager.cs.html#26773d85900651e4" class="i method">RaiseClosingEvent</a>();
+ 
+                <b>foreach</b> (<b>var</b> <span id="r5 rd" class="r5 r">cmdTransportKvp</span> <b>in</b> <a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a>)
+                {
+                    <span class="r5 r">cmdTransportKvp</span>.<span class="i">Value</span>.<span class="i">Close</span>(<span class="r4 r">reasonForClose</span>);
+                }
+ 
+                <a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a>.<span class="i">Clear</span>();
+ 
+                <b>if</b> (<a href="#1b521dd0371c0fb3" class="i field">_registeredShutDownWaitHandle</a> != <b>null</b>)
+                {
+                    <span class="c">// This will not wait for the callback to complete.</span>
+                    <a href="#1b521dd0371c0fb3" class="i field">_registeredShutDownWaitHandle</a>.<span class="i">Unregister</span>(<b>null</b>);
+                    <a href="#1b521dd0371c0fb3" class="i field">_registeredShutDownWaitHandle</a> = <b>null</b>;
+                }
+ 
+                <span class="c">// Delete the context only if isShuttingDown != true. isShuttingDown will</span>
+                <span class="c">// be true only when the method is called from RegisterWaitForSingleObject</span>
+                <span class="c">// handler..in which case the context will be freed from the callback.</span>
+                <b>if</b> (<a href="#73ea6576701b3113" class="i field">_shutDownContext</a> != <b>null</b>)
+                {
+                    <a href="#73ea6576701b3113" class="i field">_shutDownContext</a> = <b>null</b>;
+                }
+ 
+                <span class="c">// This might happen when client did not send a receive request</span>
+                <span class="c">// but the server is closing</span>
+                <b>if</b> (<a href="#174532a0727a990a" class="i field">_requestDetails</a> != <b>null</b>)
+                {
+                    <span class="c">// Notify that no more data is being sent on this transport.</span>
+                    <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<span class="i">WSManPluginReceiveResult</span>(
+                        <a href="#174532a0727a990a" class="i field">_requestDetails</a>.<a href="WSManNativeAPI.cs.html#0bd4e014382d2f95" class="i field">unmanagedHandle</a>,
+                        (<b>int</b>)<a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#0914bb5568e06c25" class="t t">WSManFlagReceive</a>.<a href="WSManNativeAPI.cs.html#db04fefbf7738165" class="i field">WSMAN_FLAG_RECEIVE_RESULT_NO_MORE_DATA</a>,
+                        <a href="WSManPlugin.cs.html#f1ff81f0faba1926" class="t t">WSManPluginConstants</a>.<a href="WSManPlugin.cs.html#3fcff45979da9258" class="i field">SupportedOutputStream</a>,
+                        <span class="i">IntPtr</span>.<span class="i">Zero</span>,
+                        <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#ee0499f993694daf" class="i field">WSMAN_COMMAND_STATE_DONE</a>,
+                        0);
+ 
+                    <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#22822c39bf35704d" class="i method">ReportWSManOperationComplete</a>(<a href="#174532a0727a990a" class="i field">_requestDetails</a>, <span class="r4 r">reasonForClose</span>);
+                    <span class="c">// We should not use request details again after reporting operation complete</span>
+                    <span class="c">// so releasing the resource. Remember not to free this memory as this memory</span>
+                    <span class="c">// is allocated and owned by WSMan.</span>
+                    <a href="#174532a0727a990a" class="i field">_requestDetails</a> = <b>null</b>;
+                }
+            }
+            <b>finally</b>
+            {
+                <span class="c">// dispose resources</span>
+                <a href="#9217204fe6c5a322" class="i field">_waitHandle</a>.<span class="i">Dispose</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Used by powershell DS handler. notifies transport that powershell is back to running state</span>
+        <span class="c">///</span><span class="c"> no payload.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="cbd1581c9abc71fc" href="../../../R/cbd1581c9abc71fc.html" target="n" data-glyph="74,1" class="i method">ReportExecutionStatusAsRunning</a>()
+        {
+            <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>int</b> <span id="r6 rd" class="r6 r">result</span> = (<b>int</b>)<a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#39442c3488d17250" class="i field">NoError</a>;
+ 
+            <span class="c">// there should have been a receive request in place already</span>
+ 
+            <b>lock</b> (<a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (!<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+                {
+                    <span class="r6 r">result</span> = <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<span class="i">WSManPluginReceiveResult</span>(
+                        <a href="#174532a0727a990a" class="i field">_requestDetails</a>.<a href="WSManNativeAPI.cs.html#0bd4e014382d2f95" class="i field">unmanagedHandle</a>,
+                        0,
+                        <b>null</b>,
+                        <span class="i">IntPtr</span>.<span class="i">Zero</span>,
+                        <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#7e5693823c5af2c4" class="i field">WSMAN_COMMAND_STATE_RUNNING</a>,
+                        0);
+                }
+            }
+ 
+            <b>if</b> (<span class="r6 r">result</span> != (<b>int</b>)<a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#39442c3488d17250" class="i field">NoError</a>)
+            {
+                <a href="BaseTransportManager.cs.html#5fb547c0ef9c383b" class="i method">ReportError</a>(<span class="r6 r">result</span>, <span class="s">&quot;WSManPluginReceiveResult&quot;</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If flush is true, data will be sent immediately to the client. This is accomplished</span>
+        <span class="c">///</span><span class="c"> by using WSMAN_FLAG_RECEIVE_FLUSH flag provided by WSMan API.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">flush</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">reportAsPending</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">reportAsDataBoundary</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="611a92f60e241736" href="../../../R/611a92f60e241736.html" target="n" data-glyph="75,1" class="i method">SendDataToClient</a>(
+            <b>byte</b>[] <span id="r7 rd" class="r7 r">data</span>,
+            <b>bool</b> <span id="r8 rd" class="r8 r">flush</span>,
+            <b>bool</b> <span id="r9 rd" class="r9 r">reportAsPending</span>,
+            <b>bool</b> <span id="r10 rd" class="r10 r">reportAsDataBoundary</span>)
+        {
+            <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// double-check locking mechanism is used here to avoid entering into lock</span>
+            <span class="c">// every time data is sent..entering/exiting from lock is costly.</span>
+            <b>if</b> (!<a href="#f936444874fb8d64" class="i field">_isRequestPending</a>)
+            {
+                <span class="c">// Dont send data until we have received request from client.</span>
+                <span class="c">// The following blocks the calling thread. The thread is</span>
+                <span class="c">// unblocked once a request from client arrives.</span>
+                <a href="#9217204fe6c5a322" class="i field">_waitHandle</a>.<span class="i">WaitOne</span>();
+                <a href="#f936444874fb8d64" class="i field">_isRequestPending</a> = <b>true</b>;
+                <span class="c">// at this point request must be pending..so dispose waitHandle</span>
+                <a href="#9217204fe6c5a322" class="i field">_waitHandle</a>.<span class="i">Dispose</span>();
+            }
+ 
+            <b>int</b> <span id="r11 rd" class="r11 r">result</span> = (<b>int</b>)<a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#39442c3488d17250" class="i field">NoError</a>;
+            <span class="c">// at this point we have pending request from client. so it is safe</span>
+            <span class="c">// to send data to client using WSMan API.</span>
+            <b>using</b> (<a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#c08fd7c84904da7c" class="t t">WSManData_ManToUn</a> <span id="r12 rd" class="r12 r">dataToBeSent</span> = <b>new</b> <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#53bab55b828c8016" class="t constructor">WSManData_ManToUn</a>(<span class="r7 r">data</span>))
+            {
+                <b>lock</b> (<a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (!<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+                    {
+                        <b>int</b> <span id="r13 rd" class="r13 r">flags</span> = 0;
+                        <b>if</b> (<span class="r8 r">flush</span>)
+                            <span class="r13 r">flags</span> |= (<b>int</b>)<a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#0914bb5568e06c25" class="t t">WSManFlagReceive</a>.<a href="WSManNativeAPI.cs.html#fd1cb36a6ea939f5" class="i field">WSMAN_FLAG_RECEIVE_FLUSH</a>;
+                        <b>if</b> (<span class="r10 r">reportAsDataBoundary</span>)
+                            <span class="c">// currently assigning hardcoded value for this flag, this is a new change in wsman.h and needs to be replaced with the actual definition once</span>
+                            <span class="c">// modified wsman.h is in public headers</span>
+                            <span class="r13 r">flags</span> |= (<b>int</b>)<a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#0914bb5568e06c25" class="t t">WSManFlagReceive</a>.<a href="WSManNativeAPI.cs.html#198520b5995e5ab1" class="i field">WSMAN_FLAG_RECEIVE_RESULT_DATA_BOUNDARY</a>;
+ 
+                        <span class="r11 r">result</span> = <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#29c9f0e64f6ea87d" class="i method">WSManPluginReceiveResult</a>(
+                            <a href="#174532a0727a990a" class="i field">_requestDetails</a>.<a href="WSManNativeAPI.cs.html#0bd4e014382d2f95" class="i field">unmanagedHandle</a>,
+                            <span class="r13 r">flags</span>,
+                            <a href="WSManPlugin.cs.html#f1ff81f0faba1926" class="t t">WSManPluginConstants</a>.<a href="WSManPlugin.cs.html#3fcff45979da9258" class="i field">SupportedOutputStream</a>,
+                            <span class="r12 r">dataToBeSent</span>,
+                            <span class="r9 r">reportAsPending</span> ? <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#81b24dd2db284598" class="i field">WSMAN_COMMAND_STATE_PENDING</a> : <b>null</b>,
+                            0);
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r11 r">result</span> != (<b>int</b>)<a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#39442c3488d17250" class="i field">NoError</a>)
+            {
+                <a href="BaseTransportManager.cs.html#5fb547c0ef9c383b" class="i method">ReportError</a>(<span class="r11 r">result</span>, <span class="s">&quot;WSManPluginReceiveResult&quot;</span>);
+            }
+        }
+ 
+        <b>internal override void</b> <a id="35590423b4402682" href="../../../R/35590423b4402682.html" target="n" data-glyph="74,1" class="i method">Prepare</a>()
+        {
+            <span class="c">// let the base class prepare itself.</span>
+            <a href="BaseTransportManager.cs.html#18630eb940dac0a0" class="k">base</a>.<a href="BaseTransportManager.cs.html#800a08f5b7eaeef4" class="i method">Prepare</a>();
+            <span class="c">// raise PrepareCalled event and let dependent code to ReportContext.</span>
+            <span class="c">// null check is not performed here because Managed C++ will take care of this.</span>
+            <a href="#32fcdefcdce6af40" class="i">PrepareCalled</a>(<a href="#deee4e3fe9fcc9c7" class="k">this</a>, <span class="i">EventArgs</span>.<span class="i">Empty</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">powerShellCmdId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal override</b> <a href="BaseTransportManager.cs.html#3beeadac29de3a80" class="t t">AbstractServerTransportManager</a> <a id="11532232872bdf09" href="../../../R/11532232872bdf09.html" target="n" data-glyph="74,1" class="i method">GetCommandTransportManager</a>(
+            <span class="i">Guid</span> <span id="r14 rd" class="r14 r">powerShellCmdId</span>)
+        {
+            <b>return</b> <a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a>[<span class="r14 r">powerShellCmdId</span>];
+        }
+ 
+        <span class="c">// Used by command transport manager to manage cmd transport manager instances by session.</span>
+        <b>internal void</b> <a id="f3bac2b58274d271" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ReportTransportMgrForCmd</a>(
+            <span class="i">Guid</span> <span id="r15 rd" class="r15 r">cmdId</span>,
+            <a href="#deee4e3fe9fcc9c7" class="t t">WSManPluginServerTransportManager</a> <span id="r16 rd" class="r16 r">transportManager</span>)
+        {
+            <b>lock</b> (<a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (!<a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a>.<span class="i">ContainsKey</span>(<span class="r15 r">cmdId</span>))
+                {
+                    <a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a>.<span class="i">Add</span>(<span class="r15 r">cmdId</span>, <span class="r16 r">transportManager</span>);
+                }
+            }
+        }
+ 
+        <b>internal override void</b> <a id="83c21d78fdd09c7e" href="../../../R/83c21d78fdd09c7e.html" target="n" data-glyph="74,1" class="i method">RemoveCommandTransportManager</a>(
+            <span class="i">Guid</span> <span id="r17 rd" class="r17 r">cmdId</span>)
+        {
+            <b>lock</b> (<a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <a href="#1021c54131c7152d" class="i field">_activeCmdTransportManagers</a>.<span class="i">Remove</span>(<span class="r17 r">cmdId</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+        <b>internal bool</b> <a id="7f7e13ebb448136a" href="../../../R/7f7e13ebb448136a.html" target="n" data-glyph="74,1" class="i method">EnableTransportManagerSendDataToClient</a>(
+            <a href="WSManNativeAPI.cs.html#46dd878f72638b32" class="t t">WSManNativeApi</a>.<a href="WSManNativeAPI.cs.html#07d21d2cee8c9d82" class="t t">WSManPluginRequest</a> <span id="r18 rd" class="r18 r">requestDetails</span>,
+            <a href="WSManPlugin.cs.html#3e5455aa49779e8c" class="t t">WSManPluginOperationShutdownContext</a> <span id="r19 rd" class="r19 r">ctxtToReport</span>)
+        {
+            <a href="#73ea6576701b3113" class="i field">_shutDownContext</a> = <span class="r19 r">ctxtToReport</span>;
+            <b>bool</b> <span id="r20 rd" class="r20 r">isRegisterWaitForSingleObjectSucceeded</span> = <b>true</b>;
+            <b>lock</b> (<a href="#2de0c71fe02b2b9f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#f936444874fb8d64" class="i field">_isRequestPending</a>)
+                {
+                    <span class="c">// if a request is already pending..ignore this.</span>
+                    <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#27a43fd6d5b8200e" class="i method">ReportWSManOperationComplete</a>(
+                        <span class="r18 r">requestDetails</span>,
+                        <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#39442c3488d17250" class="i field">NoError</a>);
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>if</b> (<a href="#68b89012310a509a" class="i field">_isClosed</a>)
+                {
+                    <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#22822c39bf35704d" class="i method">ReportWSManOperationComplete</a>(<span class="r18 r">requestDetails</span>, <a href="#cf702053811cf3e7" class="i field">_lastErrorReported</a>);
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <a href="#f936444874fb8d64" class="i field">_isRequestPending</a> = <b>true</b>;
+                <a href="#174532a0727a990a" class="i field">_requestDetails</a> = <span class="r18 r">requestDetails</span>;
+ 
+                <b>if</b> (<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+                {
+                    <span class="c">// Wrap the provided handle so it can be passed to the registration function</span>
+                    <span class="i">SafeWaitHandle</span> <span id="r21 rd" class="r21 r">safeWaitHandle</span> = <b>new</b> <span class="i">SafeWaitHandle</span>(<span class="r18 r">requestDetails</span>.<a href="WSManNativeAPI.cs.html#0e238bf7e1d2305e" class="i property">shutdownNotificationHandle</a>, <b>false</b>); <span class="c">// Owned by WinRM</span>
+                    <span class="i">EventWaitHandle</span> <span id="r22 rd" class="r22 r">eventWaitHandle</span> = <b>new</b> <span class="i">EventWaitHandle</span>(<b>false</b>, <span class="i">EventResetMode</span>.<span class="i">AutoReset</span>);
+                    <span class="r22 r">eventWaitHandle</span>.<span class="i">SafeWaitHandle</span> = <span class="r21 r">safeWaitHandle</span>;
+ 
+                    <a href="#1b521dd0371c0fb3" class="i field">_registeredShutDownWaitHandle</a> = <span class="i">ThreadPool</span>.<span class="i">RegisterWaitForSingleObject</span>(
+                            <span class="r22 r">eventWaitHandle</span>,
+                            <b>new</b> <span class="i">WaitOrTimerCallback</span>(<a href="WSManPluginFacade.cs.html#7abe8df412b63829" class="t t">WSManPluginManagedEntryWrapper</a>.<span class="i">PSPluginOperationShutdownCallback</span>),
+                            <a href="#73ea6576701b3113" class="i field">_shutDownContext</a>,
+                            -1, <span class="c">// INFINITE</span>
+                            <b>true</b>); <span class="c">// TODO: Do I need to worry not being able to set missing WT_TRANSFER_IMPERSONATION?</span>
+                    <b>if</b> (<a href="#1b521dd0371c0fb3" class="i field">_registeredShutDownWaitHandle</a> == <b>null</b>)
+                    {
+                        <span class="r20 r">isRegisterWaitForSingleObjectSucceeded</span> = <b>false</b>;
+                    }
+                }
+                <span class="c">// release thread waiting to send data to the client.</span>
+                <a href="#9217204fe6c5a322" class="i field">_waitHandle</a>.<span class="i">Set</span>();
+            }
+ 
+            <b>if</b> (!<span class="r20 r">isRegisterWaitForSingleObjectSucceeded</span>)
+            {
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#2103a47783d6d1c5" class="i method">PerformCloseOperation</a>(<span class="r19 r">ctxtToReport</span>);
+                <a href="WSManPlugin.cs.html#23ee55d6d8a367a2" class="t t">WSManPluginInstance</a>.<a href="WSManPlugin.cs.html#34bada9077aac474" class="i method">ReportOperationComplete</a>(
+                    <span class="r18 r">requestDetails</span>,
+                    <a href="WSManPlugin.cs.html#a42b50e40ac07da8" class="t t">WSManPluginErrorCodes</a>.<a href="WSManPlugin.cs.html#02606e5208484f85" class="i field">ShutdownRegistrationFailed</a>,
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                        <span class="i">RemotingErrorIdStrings</span>.<span class="i">WSManPluginShutdownRegistrationFailed</span>));
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">// This will either RaiseClosingEvent or calls DoClose()</span>
+        <span class="c">// RaiseClosingEvent will be called if Client has already put a receive request,</span>
+        <span class="c">// Otherwise DoClose() is called.</span>
+        <span class="c">// This is to make sure server sends all the data it has to Client w.r.t stopping</span>
+        <span class="c">// a command like StateChangedInfo etc.</span>
+        <b>internal void</b> <a id="c0f1789a791691fa" href="../../../R/c0f1789a791691fa.html" target="n" data-glyph="74,1" class="i method">PerformStop</a>()
+        {
+            <b>if</b> (<a href="#f936444874fb8d64" class="i field">_isRequestPending</a>)
+            {
+                <a href="BaseTransportManager.cs.html#26773d85900651e4" class="i method">RaiseClosingEvent</a>();
+            }
+            <b>else</b>
+            {
+                <a href="#45bbeb04491016e8" class="i method">DoClose</a>(<b>false</b>, <b>null</b>);
+            }
+        }
+    }
+ 
+    <b>internal class</b> <a id="f2074674445a949f" href="../../../R/f2074674445a949f.html" target="n" data-glyph="2,0" class="t t">WSManPluginCommandTransportManager</a> : <a href="#deee4e3fe9fcc9c7" class="t t">WSManPluginServerTransportManager</a>
+    {
+        <b>private readonly</b> <a href="#deee4e3fe9fcc9c7" class="t t">WSManPluginServerTransportManager</a> <a id="2be5b4a0dd6d00b5" href="../../../R/2be5b4a0dd6d00b5.html" target="n" data-glyph="46,1" class="i field">_serverTransportMgr</a>;
+        <b>private</b> <span class="i n">System</span>.<span class="i">Guid</span> <a id="674e5237368ab082" href="../../../R/674e5237368ab082.html" target="n" data-glyph="46,1" class="i field">_cmdId</a>;
+ 
+        <span class="c">// Create Cmd Transport Manager for this sessn transport manager</span>
+        <b>internal</b> <a id="2c20adb37c46678b" href="../../../R/2c20adb37c46678b.html" target="n" data-glyph="74,1" class="t constructor">WSManPluginCommandTransportManager</a>(<a href="#deee4e3fe9fcc9c7" class="t t">WSManPluginServerTransportManager</a> <span id="r23 rd" class="r23 r">srvrTransportMgr</span>)
+            : <a href="#c2f0349ba359555e" class="k">base</a>(<span class="r23 r">srvrTransportMgr</span>.<a href="BaseTransportManager.cs.html#0597b18306926355" class="i property">Fragmentor</a>.<a href="../common/fragmentor.cs.html#a4fa6a799e0782de" class="i property">FragmentSize</a>, <span class="r23 r">srvrTransportMgr</span>.<a href="BaseTransportManager.cs.html#30975a92e0bc8f5d" class="i property">CryptoHelper</a>)
+        {
+            <a href="#2be5b4a0dd6d00b5" class="i field">_serverTransportMgr</a> = <span class="r23 r">srvrTransportMgr</span>;
+            <a href="#f2074674445a949f" class="k">this</a>.<a href="BaseTransportManager.cs.html#0ded339d7f7c59f8" class="i property">TypeTable</a> = <span class="r23 r">srvrTransportMgr</span>.<a href="BaseTransportManager.cs.html#0ded339d7f7c59f8" class="i property">TypeTable</a>;
+        }
+ 
+        <b>internal void</b> <a id="f70535ad849abc8b" href="../../../R/f70535ad849abc8b.html" target="n" data-glyph="74,1" class="i method">Initialize</a>()
+        {
+            <a href="#f2074674445a949f" class="k">this</a>.<a href="BaseTransportManager.cs.html#94a8f941e97a279c" class="i">PowerShellGuidObserver</a> += <span class="i">OnPowershellGuidReported</span>;
+            <a href="#f2074674445a949f" class="k">this</a>.<a href="BaseTransportManager.cs.html#3b30f5a51ce0cc61" class="i method">MigrateDataReadyEventHandlers</a>(<a href="#2be5b4a0dd6d00b5" class="i field">_serverTransportMgr</a>);
+        }
+ 
+        <b>private void</b> <a id="f3cc7848ffe9418b" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OnPowershellGuidReported</a>(<b>object</b> <span id="r24 rd" class="r24 r">src</span>, <span class="i n">System</span>.<span class="i">EventArgs</span> <span id="r25 rd" class="r25 r">args</span>)
+        {
+            <a href="#674e5237368ab082" class="i field">_cmdId</a> = (<span class="i n">System</span>.<span class="i">Guid</span>)<span class="r24 r">src</span>;
+            <a href="#2be5b4a0dd6d00b5" class="i field">_serverTransportMgr</a>.<span class="i">ReportTransportMgrForCmd</span>(<a href="#674e5237368ab082" class="i field">_cmdId</a>, <a href="#f2074674445a949f" class="k">this</a>);
+            <a href="#f2074674445a949f" class="k">this</a>.<a href="BaseTransportManager.cs.html#94a8f941e97a279c" class="i">PowerShellGuidObserver</a> -= <a href="#f2074674445a949f" class="k">this</a>.<span class="i">OnPowershellGuidReported</span>;
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

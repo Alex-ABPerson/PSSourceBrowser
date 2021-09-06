@@ -1,0 +1,853 @@
+﻿<!DOCTYPE html>
+<html><head><title>ServerPowerShellDriver.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(844);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/server/ServerPowerShellDriver.cs" target="_top">engine\remoting\server\ServerPowerShellDriver.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class wraps a PowerShell object. It is used to function</span>
+    <span class="c">///</span><span class="c"> as a server side powershell.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="01c478dd3d4d317b" href="../../../R/01c478dd3d4d317b.html" target="n" data-glyph="2,0" class="t t">ServerPowerShellDriver</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Members
+ 
+        <b>private bool</b> <a id="73194ca013310d76" href="../../../R/73194ca013310d76.html" target="n" data-glyph="46,1" class="i field">_extraPowerShellAlreadyScheduled</a>;
+ 
+        <span class="c">// extra PowerShell at the server to be run after localPowerShell</span>
+        <b>private readonly</b> <a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="f42a71dd312079b6" href="../../../R/f42a71dd312079b6.html" target="n" data-glyph="46,1" class="i field">_extraPowerShell</a>;
+ 
+        <span class="c">// output buffer for the local PowerShell that is associated with this powershell driver</span>
+        <span class="c">// associated with this powershell data structure handler object to handle all communications with the client</span>
+        <b>private readonly</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="4a6a070053873ed9" href="../../../R/4a6a070053873ed9.html" target="n" data-glyph="46,1" class="i field">_localPowerShellOutput</a>;
+ 
+        <span class="c">// if the remaining data has been sent to the client before sending state information</span>
+        <b>private readonly bool</b>[] <a id="6532d372f2f78b60" href="../../../R/6532d372f2f78b60.html" target="n" data-glyph="46,1" class="i field">_datasent</a> = <b>new</b> <b>bool</b>[2];
+ 
+        <span class="c">// sync object for synchronizing sending data to client</span>
+        <b>private readonly object</b> <a id="88958129fb952389" href="../../../R/88958129fb952389.html" target="n" data-glyph="46,1" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+ 
+        <span class="c">// there is no input when this driver was created</span>
+        <b>private readonly bool</b> <a id="02f1f0d9f73aa319" href="../../../R/02f1f0d9f73aa319.html" target="n" data-glyph="46,1" class="i field">_noInput</a>;
+        <b>private readonly bool</b> <a id="f8454369d4d57fa7" href="../../../R/f8454369d4d57fa7.html" target="n" data-glyph="46,1" class="i field">_addToHistory</a>;
+ 
+        <span class="c">// the server remote host instance</span>
+        <span class="c">// associated with this powershell</span>
+        <b>private readonly</b> <a href="ServerRemoteHost.cs.html#ecbb655f955c09fc" class="t t">ServerRemoteHost</a> <a id="57cc223222fcc845" href="../../../R/57cc223222fcc845.html" target="n" data-glyph="46,1" class="i field">_remoteHost</a>;
+ 
+        <span class="c">// apartment state for this powershell</span>
+        <b>private readonly</b> <span class="i">ApartmentState</span> <a id="33c2b55ba20b5947" href="../../../R/33c2b55ba20b5947.html" target="n" data-glyph="46,1" class="i field">apartmentState</a>;
+ 
+        <span class="c">// Handles nested invocation of PS drivers.</span>
+        <b>private readonly</b> <a href="ServerRunspacePoolDriver.cs.html#074cec5d5aeffa31" class="t t">IRSPDriverInvoke</a> <a id="39893f7305fca9d3" href="../../../R/39893f7305fca9d3.html" target="n" data-glyph="46,1" class="i field">_psDriverInvoker</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private Members
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Default constructor for creating ServerPowerShellDrivers.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">powershell</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Decoded powershell object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">extraPowerShell</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Extra pipeline to be run after </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">powershell</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> completes.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">noInput</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether there is input for this powershell.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">clientPowerShellId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The client powershell id.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">clientRunspacePoolId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The client runspacepool id.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">runspacePoolDriver</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">runspace pool driver</span>
+        <span class="c">///</span><span class="c"> which is creating this powershell driver</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">apartmentState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Apartment state for this powershell.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">hostInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">host info using which the host for</span>
+        <span class="c">///</span><span class="c"> this powershell will be constructed</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">streamOptions</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Serialization options for the streams in this powershell.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">addToHistory</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true if the command is to be added to history list of the runspace. false, otherwise.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">rsToUse</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If not null, this Runspace will be used to invoke Powershell.</span>
+        <span class="c">///</span><span class="c"> If null, the RunspacePool pointed by </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">runspacePoolDriver</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> will be used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="d30703a851584f60" href="../../../R/d30703a851584f60.html" target="n" data-glyph="74,1" class="t constructor">ServerPowerShellDriver</a>(<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r0 rd" class="r0 r">powershell</span>, <a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r1 rd" class="r1 r">extraPowerShell</span>, <b>bool</b> <span id="r2 rd" class="r2 r">noInput</span>, <span class="i">Guid</span> <span id="r3 rd" class="r3 r">clientPowerShellId</span>,
+            <span class="i">Guid</span> <span id="r4 rd" class="r4 r">clientRunspacePoolId</span>, <a href="ServerRunspacePoolDriver.cs.html#a13c57c874abb0c5" class="t t">ServerRunspacePoolDriver</a> <span id="r5 rd" class="r5 r">runspacePoolDriver</span>,
+            <span class="i">ApartmentState</span> <span id="r6 rd" class="r6 r">apartmentState</span>, <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#4fc7c4b336de518c" class="t t">HostInfo</a> <span id="r7 rd" class="r7 r">hostInfo</span>, <a href="../../hostifaces/PowerShell.cs.html#3a466dc47c692c8e" class="t t">RemoteStreamOptions</a> <span id="r8 rd" class="r8 r">streamOptions</span>,
+            <b>bool</b> <span id="r9 rd" class="r9 r">addToHistory</span>, <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r10 rd" class="r10 r">rsToUse</span>)
+            : <a href="#e4fa03ed95a60f62" class="k">this</a>(<span class="r0 r">powershell</span>, <span class="r1 r">extraPowerShell</span>, <span class="r2 r">noInput</span>, <span class="r3 r">clientPowerShellId</span>, <span class="r4 r">clientRunspacePoolId</span>, <span class="r5 r">runspacePoolDriver</span>,
+                   <span class="r6 r">apartmentState</span>, <span class="r7 r">hostInfo</span>, <span class="r8 r">streamOptions</span>, <span class="r9 r">addToHistory</span>, <span class="r10 r">rsToUse</span>, <b>null</b>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Default constructor for creating ServerPowerShellDrivers.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">powershell</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Decoded powershell object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">extraPowerShell</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Extra pipeline to be run after </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">powershell</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> completes.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">noInput</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether there is input for this powershell.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">clientPowerShellId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The client powershell id.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">clientRunspacePoolId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The client runspacepool id.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">runspacePoolDriver</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">runspace pool driver</span>
+        <span class="c">///</span><span class="c"> which is creating this powershell driver</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">apartmentState</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Apartment state for this powershell.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">hostInfo</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">host info using which the host for</span>
+        <span class="c">///</span><span class="c"> this powershell will be constructed</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">streamOptions</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Serialization options for the streams in this powershell.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">addToHistory</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true if the command is to be added to history list of the runspace. false, otherwise.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">rsToUse</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If not null, this Runspace will be used to invoke Powershell.</span>
+        <span class="c">///</span><span class="c"> If null, the RunspacePool pointed by </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">runspacePoolDriver</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> will be used.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">output</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If not null, this is used as another source of output sent to the client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="e4fa03ed95a60f62" href="../../../R/e4fa03ed95a60f62.html" target="n" data-glyph="74,1" class="t constructor">ServerPowerShellDriver</a>(<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r11 rd" class="r11 r">powershell</span>, <a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r12 rd" class="r12 r">extraPowerShell</span>, <b>bool</b> <span id="r13 rd" class="r13 r">noInput</span>, <span class="i">Guid</span> <span id="r14 rd" class="r14 r">clientPowerShellId</span>,
+            <span class="i">Guid</span> <span id="r15 rd" class="r15 r">clientRunspacePoolId</span>, <a href="ServerRunspacePoolDriver.cs.html#a13c57c874abb0c5" class="t t">ServerRunspacePoolDriver</a> <span id="r16 rd" class="r16 r">runspacePoolDriver</span>,
+            <span class="i">ApartmentState</span> <span id="r17 rd" class="r17 r">apartmentState</span>, <a href="../common/WireDataFormat/RemoteSessionCapability.cs.html#4fc7c4b336de518c" class="t t">HostInfo</a> <span id="r18 rd" class="r18 r">hostInfo</span>, <a href="../../hostifaces/PowerShell.cs.html#3a466dc47c692c8e" class="t t">RemoteStreamOptions</a> <span id="r19 rd" class="r19 r">streamOptions</span>,
+            <b>bool</b> <span id="r20 rd" class="r20 r">addToHistory</span>, <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r21 rd" class="r21 r">rsToUse</span>, <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r22 rd" class="r22 r">output</span>)
+        {
+            <a href="#1b26125662346650" class="i property">InstanceId</a> = <span class="r14 r">clientPowerShellId</span>;
+            <a href="#f234ece97ccfdaf0" class="i property">RunspacePoolId</a> = <span class="r15 r">clientRunspacePoolId</span>;
+            <a href="#8cb3fff1395bd73e" class="i property">RemoteStreamOptions</a> = <span class="r19 r">streamOptions</span>;
+            <a href="#01c478dd3d4d317b" class="k">this</a>.<a href="#33c2b55ba20b5947" class="i field">apartmentState</a> = <span class="r17 r">apartmentState</span>;
+            <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a> = <span class="r11 r">powershell</span>;
+            <a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a> = <span class="r12 r">extraPowerShell</span>;
+            <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a> = <b>new</b> <a href="../../hostifaces/PSDataCollection.cs.html#ee85ce3306fe4e5b" class="t constructor">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;();
+            <a href="#02f1f0d9f73aa319" class="i field">_noInput</a> = <span class="r13 r">noInput</span>;
+            <a href="#f8454369d4d57fa7" class="i field">_addToHistory</a> = <span class="r20 r">addToHistory</span>;
+            <a href="#39893f7305fca9d3" class="i field">_psDriverInvoker</a> = <span class="r16 r">runspacePoolDriver</span>;
+ 
+            <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a> = <span class="r16 r">runspacePoolDriver</span>.<a href="ServerRunspacePoolDriver.cs.html#8c8ba41ef94b9086" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#bcac18c640e1f5d6" class="i method">CreatePowerShellDataStructureHandler</a>(<span class="r14 r">clientPowerShellId</span>, <span class="r15 r">clientRunspacePoolId</span>, <a href="#8cb3fff1395bd73e" class="i property">RemoteStreamOptions</a>, <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>);
+            <a href="#57cc223222fcc845" class="i field">_remoteHost</a> = <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#8fcc1adbca1c758a" class="i method">GetHostAssociatedWithPowerShell</a>(<span class="r18 r">hostInfo</span>, <span class="r16 r">runspacePoolDriver</span>.<a href="ServerRunspacePoolDriver.cs.html#4549b5f9b57aa1af" class="i property">ServerRemoteHost</a>);
+ 
+            <b>if</b> (!<span class="r13 r">noInput</span>)
+            {
+                <a href="#19184dbef75d3bcb" class="i property">InputCollection</a> = <b>new</b> <a href="../../hostifaces/PSDataCollection.cs.html#ee85ce3306fe4e5b" class="t constructor">PSDataCollection</a>&lt;<b>object</b>&gt;();
+                <a href="#19184dbef75d3bcb" class="i property">InputCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#964a56f986986159" class="i property">ReleaseOnEnumeration</a> = <b>true</b>;
+                <a href="#19184dbef75d3bcb" class="i property">InputCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#b559750a12dea9d1" class="i">IdleEvent</a> += <span class="i">HandleIdleEvent</span>;
+            }
+ 
+            <a href="#63ad914fdd0cdbdc" class="i method">RegisterPipelineOutputEventHandlers</a>(<a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>);
+ 
+            <b>if</b> (<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a> != <b>null</b>)
+            {
+                <a href="#9755216218e23446" class="i method">RegisterPowerShellEventHandlers</a>(<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>);
+                <a href="#6532d372f2f78b60" class="i field">_datasent</a>[0] = <b>false</b>;
+            }
+ 
+            <b>if</b> (<span class="r12 r">extraPowerShell</span> != <b>null</b>)
+            {
+                <a href="#9755216218e23446" class="i method">RegisterPowerShellEventHandlers</a>(<span class="r12 r">extraPowerShell</span>);
+                <a href="#6532d372f2f78b60" class="i field">_datasent</a>[1] = <b>false</b>;
+            }
+ 
+            <a href="#b801b48d854df822" class="i method">RegisterDataStructureHandlerEventHandlers</a>(<a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>);
+ 
+            <span class="c">// set the runspace pool and invoke this powershell</span>
+            <b>if</b> (<span class="r21 r">rsToUse</span> != <b>null</b>)
+            {
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#ccf57242c9d46642" class="i property">Runspace</a> = <span class="r21 r">rsToUse</span>;
+                <b>if</b> (<span class="r12 r">extraPowerShell</span> != <b>null</b>)
+                {
+                    <span class="r12 r">extraPowerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#ccf57242c9d46642" class="i property">Runspace</a> = <span class="r21 r">rsToUse</span>;
+                }
+            }
+            <b>else</b>
+            {
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#04184898f9307df6" class="i property">RunspacePool</a> = <span class="r16 r">runspacePoolDriver</span>.<a href="ServerRunspacePoolDriver.cs.html#02717dc375abd3bb" class="i property">RunspacePool</a>;
+                <b>if</b> (<span class="r12 r">extraPowerShell</span> != <b>null</b>)
+                {
+                    <span class="r12 r">extraPowerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#04184898f9307df6" class="i property">RunspacePool</a> = <span class="r16 r">runspacePoolDriver</span>.<a href="ServerRunspacePoolDriver.cs.html#02717dc375abd3bb" class="i property">RunspacePool</a>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r22 r">output</span> != <b>null</b>)
+            {
+                <span class="r22 r">output</span>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += (<span id="r23 rd" class="r23 r">sender</span>, <span id="r24 rd" class="r24 r">args</span>) =&gt;
+                    {
+                        <b>if</b> (<a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>)
+                        {
+                            <b>var</b> <span id="r25 rd" class="r25 r">items</span> = <span class="r22 r">output</span>.<a href="../../hostifaces/PSDataCollection.cs.html#403be942120e2d89" class="i method">ReadAll</a>();
+                            <b>foreach</b> (<b>var</b> <span id="r26 rd" class="r26 r">item</span> <b>in</b> <span class="r25 r">items</span>)
+                            {
+                                <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>.<span class="i">Add</span>(<span class="r26 r">item</span>);
+                            }
+                        }
+                    };
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Constructors
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Input collection sync object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<b>object</b>&gt; <a id="19184dbef75d3bcb" href="../../../R/19184dbef75d3bcb.html" target="n" data-glyph="104,1" class="i property">InputCollection</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Local PowerShell instance.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="87ef9380811e202f" href="../../../R/87ef9380811e202f.html" target="n" data-glyph="104,1" class="i property">LocalPowerShell</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Instance id by which this powershell driver is</span>
+        <span class="c">///</span><span class="c"> identified. This is the same as the id of the</span>
+        <span class="c">///</span><span class="c"> powershell on the client side.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Guid</span> <a id="1b26125662346650" href="../../../R/1b26125662346650.html" target="n" data-glyph="104,1" class="i property">InstanceId</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Serialization options for the streams in this powershell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../hostifaces/PowerShell.cs.html#3a466dc47c692c8e" class="t t">RemoteStreamOptions</a> <a id="8cb3fff1395bd73e" href="../../../R/8cb3fff1395bd73e.html" target="n" data-glyph="104,1" class="i property">RemoteStreamOptions</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Id of the runspace pool driver which created</span>
+        <span class="c">///</span><span class="c"> this object. This is the same as the id of</span>
+        <span class="c">///</span><span class="c"> the runspace pool at the client side which</span>
+        <span class="c">///</span><span class="c"> is associated with the powershell on the</span>
+        <span class="c">///</span><span class="c"> client side.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Guid</span> <a id="f234ece97ccfdaf0" href="../../../R/f234ece97ccfdaf0.html" target="n" data-glyph="104,1" class="i property">RunspacePoolId</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ServerPowerShellDataStructureHandler associated with this</span>
+        <span class="c">///</span><span class="c"> powershell driver.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="ServerRemotingProtocol2.cs.html#21dc790594e0a9f8" class="t t">ServerPowerShellDataStructureHandler</a> <a id="a3212ff6496989c8" href="../../../R/a3212ff6496989c8.html" target="n" data-glyph="104,1" class="i property">DataStructureHandler</a> { <b>get</b>; }
+ 
+        <b>private</b> <a href="../../hostifaces/PowerShell.cs.html#ce65c0834aa6f0ea" class="t t">PSInvocationSettings</a> <a id="1cbf43dd006f6372" href="../../../R/1cbf43dd006f6372.html" target="n" data-glyph="76,1" class="i method">PrepInvoke</a>(<b>bool</b> <span id="r27 rd" class="r27 r">startMainPowerShell</span>)
+        {
+            <b>if</b> (<span class="r27 r">startMainPowerShell</span>)
+            {
+                <span class="c">// prepare transport manager for sending and receiving data.</span>
+                <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#8c0131b96308481c" class="i method">Prepare</a>();
+            }
+ 
+            <a href="../../hostifaces/PowerShell.cs.html#ce65c0834aa6f0ea" class="t t">PSInvocationSettings</a> <span id="r28 rd" class="r28 r">settings</span> = <b>new</b> <a href="../../hostifaces/PowerShell.cs.html#3f472392b2d45c15" class="t constructor">PSInvocationSettings</a>();
+            <span class="r28 r">settings</span>.<a href="../../hostifaces/PowerShell.cs.html#2b73a864082de936" class="i property">ApartmentState</a> = <a href="#33c2b55ba20b5947" class="i field">apartmentState</a>;
+            <span class="r28 r">settings</span>.<a href="../../hostifaces/PowerShell.cs.html#2088d9ba09399d1e" class="i property">Host</a> = <a href="#57cc223222fcc845" class="i field">_remoteHost</a>;
+ 
+            <span class="c">// Flow the impersonation policy to pipeline execution thread</span>
+            <span class="c">// only if the current thread is impersonated (Delegation is</span>
+            <span class="c">// also a kind of impersonation).</span>
+            <b>if</b> (<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+            {
+                <span class="i">WindowsIdentity</span> <span id="r29 rd" class="r29 r">currentThreadIdentity</span> = <span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>();
+                <b>switch</b> (<span class="r29 r">currentThreadIdentity</span>.<span class="i">ImpersonationLevel</span>)
+                {
+                    <b>case</b> <span class="i">TokenImpersonationLevel</span>.<span class="i">Impersonation</span>:
+                    <b>case</b> <span class="i">TokenImpersonationLevel</span>.<span class="i">Delegation</span>:
+                        <span class="r28 r">settings</span>.<a href="../../hostifaces/PowerShell.cs.html#265dd5f8987b7aa1" class="i property">FlowImpersonationPolicy</a> = <b>true</b>;
+                        <b>break</b>;
+                    <b>default</b>:
+                        <span class="r28 r">settings</span>.<a href="../../hostifaces/PowerShell.cs.html#265dd5f8987b7aa1" class="i property">FlowImpersonationPolicy</a> = <b>false</b>;
+                        <b>break</b>;
+                }
+            }
+            <b>else</b>
+            {
+                <span class="r28 r">settings</span>.<a href="../../hostifaces/PowerShell.cs.html#265dd5f8987b7aa1" class="i property">FlowImpersonationPolicy</a> = <b>false</b>;
+            }
+ 
+            <span class="r28 r">settings</span>.<a href="../../hostifaces/PowerShell.cs.html#27a80b1485d6fbda" class="i property">AddToHistory</a> = <a href="#f8454369d4d57fa7" class="i field">_addToHistory</a>;
+            <b>return</b> <span class="r28 r">settings</span>;
+        }
+ 
+        <b>private</b> <span class="i">IAsyncResult</span> <a id="b2d62a700f896dc1" href="../../../R/b2d62a700f896dc1.html" target="n" data-glyph="76,1" class="i method">Start</a>(<b>bool</b> <span id="r30 rd" class="r30 r">startMainPowerShell</span>)
+        {
+            <a href="../../hostifaces/PowerShell.cs.html#ce65c0834aa6f0ea" class="t t">PSInvocationSettings</a> <span id="r31 rd" class="r31 r">settings</span> = <a href="#1cbf43dd006f6372" class="i method">PrepInvoke</a>(<span class="r30 r">startMainPowerShell</span>);
+ 
+            <b>if</b> (<span class="r30 r">startMainPowerShell</span>)
+            {
+                <b>return</b> <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#1168e8243b07d8cf" class="i method">BeginInvoke</a>&lt;<b>object</b>, <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;(<a href="#19184dbef75d3bcb" class="i property">InputCollection</a>, <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>, <span class="r31 r">settings</span>, <b>null</b>, <b>null</b>);
+            }
+            <b>else</b>
+            {
+                <b>return</b> <a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#1168e8243b07d8cf" class="i method">BeginInvoke</a>&lt;<b>object</b>, <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;(<a href="#19184dbef75d3bcb" class="i property">InputCollection</a>, <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>, <span class="r31 r">settings</span>, <b>null</b>, <b>null</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Invokes the powershell asynchronously.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">IAsyncResult</span> <a id="a712659a5bf2b683" href="../../../R/a712659a5bf2b683.html" target="n" data-glyph="74,1" class="i method">Start</a>()
+        {
+            <b>return</b> <a href="#b2d62a700f896dc1" class="i method">Start</a>(<b>true</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Runs no command but allows the PowerShell object on the client</span>
+        <span class="c">///</span><span class="c"> to complete.  This is used for running &quot;virtual&quot; remote debug</span>
+        <span class="c">///</span><span class="c"> commands that sets debugger state but doesn&#39;t run any command</span>
+        <span class="c">///</span><span class="c"> on the server runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">output</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The output from preprocessing that we want to send to the client.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="bc5f74d73ec445c4" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">RunNoOpCommand</a>(<span class="i">IReadOnlyCollection</span>&lt;<b>object</b>&gt; <span id="r32 rd" class="r32 r">output</span>)
+        {
+            <b>if</b> (<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a> != <b>null</b>)
+            {
+                <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">ThreadPool</span>.<span class="i">QueueUserWorkItem</span>(
+                    (<span id="r33 rd" class="r33 r">state</span>) =&gt;
+                        {
+                            <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#8bc5b0d04eada2b1" class="i method">SetStateChanged</a>(
+                                <b>new</b> <a href="../../hostifaces/PowerShell.cs.html#db44bd87590c83f5" class="t constructor">PSInvocationStateInfo</a>(
+                                    <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#7142407e9e49cf13" class="i field">Running</a>, <b>null</b>));
+ 
+                            <b>foreach</b> (<b>var</b> <span id="r34 rd" class="r34 r">item</span> <b>in</b> <span class="r32 r">output</span>)
+                            {
+                                <b>if</b> (<span class="r34 r">item</span> != <b>null</b>)
+                                {
+                                    <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<span class="i">AsPSObject</span>(<span class="r34 r">item</span>));
+                                }
+                            }
+ 
+                            <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#8bc5b0d04eada2b1" class="i method">SetStateChanged</a>(
+                                <b>new</b> <a href="../../hostifaces/PowerShell.cs.html#db44bd87590c83f5" class="t constructor">PSInvocationStateInfo</a>(
+                                    <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#89ec15a2a933a2b6" class="i field">Completed</a>, <b>null</b>));
+                        });
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Invokes the Main PowerShell object synchronously.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="dceac032d52bcb04" href="../../../R/dceac032d52bcb04.html" target="n" data-glyph="74,1" class="i method">InvokeMain</a>()
+        {
+            <a href="../../hostifaces/PowerShell.cs.html#ce65c0834aa6f0ea" class="t t">PSInvocationSettings</a> <span id="r35 rd" class="r35 r">settings</span> = <a href="#1cbf43dd006f6372" class="i method">PrepInvoke</a>(<b>true</b>);
+ 
+            <span class="i">Exception</span> <span id="r36 rd" class="r36 r">ex</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<span class="i">InvokeWithDebugger</span>(<a href="#19184dbef75d3bcb" class="i property">InputCollection</a>, <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>, <span class="r35 r">settings</span>, <b>true</b>);
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r37 rd" class="r37 r">e</span>)
+            {
+                <span class="r36 r">ex</span> = <span class="r37 r">e</span>;
+            }
+ 
+            <b>if</b> (<span class="r36 r">ex</span> != <b>null</b>)
+            {
+                <span class="c">// Since this is being invoked asynchronously on a single pipeline thread</span>
+                <span class="c">// any invoke failures (such as possible debugger failures) need to be</span>
+                <span class="c">// passed back to client or the original client invoke request will not respond.</span>
+                <b>string</b> <span id="r38 rd" class="r38 r">failedCommand</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#7bde27452e045465" class="i property">Commands</a>.<a href="../../hostifaces/PSCommand.cs.html#cc9b22e4391a9870" class="i property">Commands</a>[0].<span class="i">CommandText</span>;
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#7bde27452e045465" class="i property">Commands</a>.<a href="../../hostifaces/PSCommand.cs.html#15970659c9fe6157" class="i method">Clear</a>();
+                <b>string</b> <span id="r39 rd" class="r39 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(
+                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">ServerSideNestedCommandInvokeFailed</span>,
+                    <span class="r38 r">failedCommand</span> ?? <b>string</b>.<span class="i">Empty</span>,
+                    <span class="r36 r">ex</span>.<span class="i">Message</span> ?? <b>string</b>.<span class="i">Empty</span>);
+ 
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#9cc79c297f6cced9" class="i method">AddCommand</a>(<span class="s">&quot;Write-Error&quot;</span>).<a href="../../hostifaces/PowerShell.cs.html#b2931353596991a4" class="i method">AddArgument</a>(<span class="r39 r">msg</span>);
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#184e23c46120523e" class="i method">Invoke</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Internal Methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <b>private void</b> <a id="9755216218e23446" href="../../../R/9755216218e23446.html" target="n" data-glyph="76,1" class="i method">RegisterPowerShellEventHandlers</a>(<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r40 rd" class="r40 r">powerShell</span>)
+        {
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#c66682d1287920a2" class="i">InvocationStateChanged</a> += <span class="i">HandlePowerShellInvocationStateChanged</span>;
+ 
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleErrorDataAdded</span>;
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#96bfebc26e0f381d" class="i property">Debug</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleDebugAdded</span>;
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#8e878317a3e80c79" class="i property">Verbose</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleVerboseAdded</span>;
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#a0a7066f9b712955" class="i property">Warning</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleWarningAdded</span>;
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#c29a7555dab6febc" class="i property">Progress</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleProgressAdded</span>;
+            <span class="r40 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#afec31161428f7a7" class="i property">Information</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleInformationAdded</span>;
+        }
+ 
+        <b>private void</b> <a id="61cefd54097a5683" href="../../../R/61cefd54097a5683.html" target="n" data-glyph="76,1" class="i method">UnregisterPowerShellEventHandlers</a>(<a href="../../hostifaces/PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r41 rd" class="r41 r">powerShell</span>)
+        {
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#c66682d1287920a2" class="i">InvocationStateChanged</a> -= <span class="i">HandlePowerShellInvocationStateChanged</span>;
+ 
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleErrorDataAdded</span>;
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#96bfebc26e0f381d" class="i property">Debug</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleDebugAdded</span>;
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#8e878317a3e80c79" class="i property">Verbose</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleVerboseAdded</span>;
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#a0a7066f9b712955" class="i property">Warning</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleWarningAdded</span>;
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#c29a7555dab6febc" class="i property">Progress</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleProgressAdded</span>;
+            <span class="r41 r">powerShell</span>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#afec31161428f7a7" class="i property">Information</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleInformationAdded</span>;
+        }
+ 
+        <b>private void</b> <a id="b801b48d854df822" href="../../../R/b801b48d854df822.html" target="n" data-glyph="76,1" class="i method">RegisterDataStructureHandlerEventHandlers</a>(<a href="ServerRemotingProtocol2.cs.html#21dc790594e0a9f8" class="t t">ServerPowerShellDataStructureHandler</a> <span id="r42 rd" class="r42 r">dsHandler</span>)
+        {
+            <span class="r42 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#26bf08683394fb4f" class="i">InputEndReceived</a> += <span class="i">HandleInputEndReceived</span>;
+            <span class="r42 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#ccb6a545458d9971" class="i">InputReceived</a> += <span class="i">HandleInputReceived</span>;
+            <span class="r42 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#9035f98228459fbf" class="i">StopPowerShellReceived</a> += <span class="i">HandleStopReceived</span>;
+            <span class="r42 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#7610139ddbd61e24" class="i">HostResponseReceived</a> += <span class="i">HandleHostResponseReceived</span>;
+            <span class="r42 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#6a03b726ee82cc8b" class="i">OnSessionConnected</a> += <span class="i">HandleSessionConnected</span>;
+        }
+ 
+        <b>private void</b> <a id="6c98de626fc13af9" href="../../../R/6c98de626fc13af9.html" target="n" data-glyph="76,1" class="i method">UnregisterDataStructureHandlerEventHandlers</a>(<a href="ServerRemotingProtocol2.cs.html#21dc790594e0a9f8" class="t t">ServerPowerShellDataStructureHandler</a> <span id="r43 rd" class="r43 r">dsHandler</span>)
+        {
+            <span class="r43 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#26bf08683394fb4f" class="i">InputEndReceived</a> -= <span class="i">HandleInputEndReceived</span>;
+            <span class="r43 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#ccb6a545458d9971" class="i">InputReceived</a> -= <span class="i">HandleInputReceived</span>;
+            <span class="r43 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#9035f98228459fbf" class="i">StopPowerShellReceived</a> -= <span class="i">HandleStopReceived</span>;
+            <span class="r43 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#7610139ddbd61e24" class="i">HostResponseReceived</a> -= <span class="i">HandleHostResponseReceived</span>;
+            <span class="r43 r">dsHandler</span>.<a href="ServerRemotingProtocol2.cs.html#6a03b726ee82cc8b" class="i">OnSessionConnected</a> -= <span class="i">HandleSessionConnected</span>;
+        }
+ 
+        <b>private void</b> <a id="63ad914fdd0cdbdc" href="../../../R/63ad914fdd0cdbdc.html" target="n" data-glyph="76,1" class="i method">RegisterPipelineOutputEventHandlers</a>(<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r44 rd" class="r44 r">pipelineOutput</span>)
+        {
+            <span class="r44 r">pipelineOutput</span>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">HandleOutputDataAdded</span>;
+        }
+ 
+        <b>private void</b> <a id="166d6f61560c2937" href="../../../R/166d6f61560c2937.html" target="n" data-glyph="76,1" class="i method">UnregisterPipelineOutputEventHandlers</a>(<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r45 rd" class="r45 r">pipelineOutput</span>)
+        {
+            <span class="r45 r">pipelineOutput</span>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">HandleOutputDataAdded</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handle state changed information from PowerShell</span>
+        <span class="c">///</span><span class="c"> and send it to the client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">arguments describing state changed</span>
+        <span class="c">///</span><span class="c"> information for this powershell</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="d889ff4f013553ba" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandlePowerShellInvocationStateChanged</a>(<b>object</b> <span id="r46 rd" class="r46 r">sender</span>,
+            <a href="../../hostifaces/PowerShell.cs.html#b125d9adbaf88d43" class="t t">PSInvocationStateChangedEventArgs</a> <span id="r47 rd" class="r47 r">eventArgs</span>)
+        {
+            <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a> <span id="r48 rd" class="r48 r">state</span> = <span class="r47 r">eventArgs</span>.<a href="../../hostifaces/PowerShell.cs.html#7ec9f6a06e861118" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a>;
+            <b>switch</b> (<span class="r48 r">state</span>)
+            {
+                <b>case</b> <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#89ec15a2a933a2b6" class="i field">Completed</a>:
+                <b>case</b> <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#35065a8449cad351" class="i field">Failed</a>:
+                <b>case</b> <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#6a6866e7df063875" class="i field">Stopped</a>:
+                    {
+                        <b>if</b> (<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#90e4778239a93806" class="i property">RunningExtraCommands</a>)
+                        {
+                            <span class="c">// If completed successfully then allow extra commands to run.</span>
+                            <b>if</b> (<span class="r48 r">state</span> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#89ec15a2a933a2b6" class="i field">Completed</a>) { <b>return</b>; }
+ 
+                            <span class="c">// For failed or stopped state, extra commands cannot run and</span>
+                            <span class="c">// we allow this command invocation to finish.</span>
+                        }
+ 
+                        <span class="c">// send the remaining data before sending in</span>
+                        <span class="c">// state information. This is required because</span>
+                        <span class="c">// the client side runspace pool will remove</span>
+                        <span class="c">// the association with the client side powershell</span>
+                        <span class="c">// once the powershell reaches a terminal state.</span>
+                        <span class="c">// If the association is removed, then any data</span>
+                        <span class="c">// sent to the powershell will be discarded by</span>
+                        <span class="c">// the runspace pool data structure handler on the client side</span>
+                        <a href="#de244125fd55e07e" class="i method">SendRemainingData</a>();
+ 
+                        <b>if</b> (<span class="r48 r">state</span> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#89ec15a2a933a2b6" class="i field">Completed</a> &amp;&amp;
+                            (<a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a> != <b>null</b>) &amp;&amp;
+                            !<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>)
+                        {
+                            <a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a> = <b>true</b>;
+                            <a href="#b2d62a700f896dc1" class="i method">Start</a>(<b>false</b>);
+                        }
+                        <b>else</b>
+                        {
+                            <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#e1015deefedc6893" class="i method">RaiseRemoveAssociationEvent</a>();
+ 
+                            <span class="c">// send the state change notification to the client</span>
+                            <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#46f1edf9010fb3d7" class="i method">SendStateChangedInformationToClient</a>(
+                                <span class="r47 r">eventArgs</span>.<a href="../../hostifaces/PowerShell.cs.html#7ec9f6a06e861118" class="i property">InvocationStateInfo</a>);
+ 
+                            <a href="#61cefd54097a5683" class="i method">UnregisterPowerShellEventHandlers</a>(<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>);
+                            <b>if</b> (<a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a> != <b>null</b>)
+                            {
+                                <a href="#61cefd54097a5683" class="i method">UnregisterPowerShellEventHandlers</a>(<a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>);
+                            }
+ 
+                            <a href="#6c98de626fc13af9" class="i method">UnregisterDataStructureHandlerEventHandlers</a>(<a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>);
+                            <a href="#166d6f61560c2937" class="i method">UnregisterPipelineOutputEventHandlers</a>(<a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>);
+ 
+                            <span class="c">// BUGBUG: currently the local powershell cannot</span>
+                            <span class="c">// be disposed as raising the events is</span>
+                            <span class="c">// not done towards the end. Need to fix</span>
+                            <span class="c">// powershell in order to get this enabled</span>
+                            <span class="c">// localPowerShell.Dispose();</span>
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#a9d235bf0dc5bfce" class="i field">Stopping</a>:
+                    {
+                        <span class="c">// abort all pending host calls</span>
+                        <a href="#57cc223222fcc845" class="i field">_remoteHost</a>.<a href="ServerRemoteHost.cs.html#f7e839b2399b6cb0" class="i property">ServerMethodExecutor</a>.<a href="ServerMethodExecutor.cs.html#ca47eca9f181a31f" class="i method">AbortAllCalls</a>();
+                    }
+ 
+                    <b>break</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded event from the Output of the powershell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r50 r">e</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="6fdf812a7536c8b8" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleOutputDataAdded</a>(<b>object</b> <span id="r49 rd" class="r49 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r50 rd" class="r50 r">e</span>)
+        {
+            <b>int</b> <span id="r51 rd" class="r51 r">index</span> = <span class="r50 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r52 rd" class="r52 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r52 r">indexIntoDataSent</span>])
+                {
+                    <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r53 rd" class="r53 r">data</span> = <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r51 r">index</span>];
+                    <span class="c">// once send the output is removed so that the same</span>
+                    <span class="c">// is not sent again by SendRemainingData() method</span>
+                    <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r51 r">index</span>);
+ 
+                    <span class="c">// send the output data to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#70ae6724d0f4c16b" class="i method">SendOutputDataToClient</a>(<span class="r53 r">data</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded event from Error of the PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r54 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">e</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="aeb11f383fdfbb66" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleErrorDataAdded</a>(<b>object</b> <span id="r54 rd" class="r54 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r55 rd" class="r55 r">e</span>)
+        {
+            <b>int</b> <span id="r56 rd" class="r56 r">index</span> = <span class="r55 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r57 rd" class="r57 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> ((<span class="r57 r">indexIntoDataSent</span> == 0) &amp;&amp; (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r57 r">indexIntoDataSent</span>]))
+                {
+                    <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r58 rd" class="r58 r">errorRecord</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r56 r">index</span>];
+                    <span class="c">// once send the error record is removed so that the same</span>
+                    <span class="c">// is not sent again by SendRemainingData() method</span>
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r56 r">index</span>);
+ 
+                    <span class="c">// send the error record to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#004da7550b9cbc80" class="i method">SendErrorRecordToClient</a>(<span class="r58 r">errorRecord</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded event from Progress of PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r59 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="5cac52897c2c8f25" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleProgressAdded</a>(<b>object</b> <span id="r59 rd" class="r59 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r60 rd" class="r60 r">eventArgs</span>)
+        {
+            <b>int</b> <span id="r61 rd" class="r61 r">index</span> = <span class="r60 r">eventArgs</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r62 rd" class="r62 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> ((<span class="r62 r">indexIntoDataSent</span> == 0) &amp;&amp; (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r62 r">indexIntoDataSent</span>]))
+                {
+                    <a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r63 rd" class="r63 r">data</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#c29a7555dab6febc" class="i property">Progress</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r61 r">index</span>];
+                    <span class="c">// once the debug message is sent, it is removed so that</span>
+                    <span class="c">// the same is not sent again by SendRemainingData() method</span>
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#c29a7555dab6febc" class="i property">Progress</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r61 r">index</span>);
+ 
+                    <span class="c">// send the output data to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#74acd3b5ad20dd74" class="i method">SendProgressRecordToClient</a>(<span class="r63 r">data</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded event from Warning of PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r64 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="9dae55e7773fedcf" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleWarningAdded</a>(<b>object</b> <span id="r64 rd" class="r64 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r65 rd" class="r65 r">eventArgs</span>)
+        {
+            <b>int</b> <span id="r66 rd" class="r66 r">index</span> = <span class="r65 r">eventArgs</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r67 rd" class="r67 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> ((<span class="r67 r">indexIntoDataSent</span> == 0) &amp;&amp; (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r67 r">indexIntoDataSent</span>]))
+                {
+                    <a href="../../hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a> <span id="r68 rd" class="r68 r">data</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#a0a7066f9b712955" class="i property">Warning</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r66 r">index</span>];
+                    <span class="c">// once the debug message is sent, it is removed so that</span>
+                    <span class="c">// the same is not sent again by SendRemainingData() method</span>
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#a0a7066f9b712955" class="i property">Warning</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r66 r">index</span>);
+ 
+                    <span class="c">// send the output data to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#a72d8b6e35f7ed34" class="i method">SendWarningRecordToClient</a>(<span class="r68 r">data</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded from Verbose of PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="48014df262250ad0" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleVerboseAdded</a>(<b>object</b> <span id="r69 rd" class="r69 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r70 rd" class="r70 r">eventArgs</span>)
+        {
+            <b>int</b> <span id="r71 rd" class="r71 r">index</span> = <span class="r70 r">eventArgs</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r72 rd" class="r72 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> ((<span class="r72 r">indexIntoDataSent</span> == 0) &amp;&amp; (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r72 r">indexIntoDataSent</span>]))
+                {
+                    <a href="../../hostifaces/InformationalRecord.cs.html#5d56339940b0040b" class="t t">VerboseRecord</a> <span id="r73 rd" class="r73 r">data</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#8e878317a3e80c79" class="i property">Verbose</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r71 r">index</span>];
+                    <span class="c">// once the debug message is sent, it is removed so that</span>
+                    <span class="c">// the same is not sent again by SendRemainingData() method</span>
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#8e878317a3e80c79" class="i property">Verbose</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r71 r">index</span>);
+ 
+                    <span class="c">// send the output data to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#90af8e2a21b9a42d" class="i method">SendVerboseRecordToClient</a>(<span class="r73 r">data</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded from Debug of PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r74 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r75 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="90210f1b21cee125" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleDebugAdded</a>(<b>object</b> <span id="r74 rd" class="r74 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r75 rd" class="r75 r">eventArgs</span>)
+        {
+            <b>int</b> <span id="r76 rd" class="r76 r">index</span> = <span class="r75 r">eventArgs</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r77 rd" class="r77 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> ((<span class="r77 r">indexIntoDataSent</span> == 0) &amp;&amp; (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r77 r">indexIntoDataSent</span>]))
+                {
+                    <a href="../../hostifaces/InformationalRecord.cs.html#8954d4e40287d3de" class="t t">DebugRecord</a> <span id="r78 rd" class="r78 r">data</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#96bfebc26e0f381d" class="i property">Debug</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r76 r">index</span>];
+                    <span class="c">// once the debug message is sent, it is removed so that</span>
+                    <span class="c">// the same is not sent again by SendRemainingData() method</span>
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#96bfebc26e0f381d" class="i property">Debug</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r76 r">index</span>);
+ 
+                    <span class="c">// send the output data to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#0e39ffca7145c068" class="i method">SendDebugRecordToClient</a>(<span class="r78 r">data</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles DataAdded from Information of PowerShell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="35a32603c737e983" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleInformationAdded</a>(<b>object</b> <span id="r79 rd" class="r79 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r80 rd" class="r80 r">eventArgs</span>)
+        {
+            <b>int</b> <span id="r81 rd" class="r81 r">index</span> = <span class="r80 r">eventArgs</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>;
+ 
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <b>int</b> <span id="r82 rd" class="r82 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+                <b>if</b> ((<span class="r82 r">indexIntoDataSent</span> == 0) &amp;&amp; (!<a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r82 r">indexIntoDataSent</span>]))
+                {
+                    <a href="../../InformationRecord.cs.html#508a9dbac37ec093" class="t t">InformationRecord</a> <span id="r83 rd" class="r83 r">data</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#afec31161428f7a7" class="i property">Information</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r81 r">index</span>];
+                    <span class="c">// once the Information message is sent, it is removed so that</span>
+                    <span class="c">// the same is not sent again by SendRemainingData() method</span>
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#afec31161428f7a7" class="i property">Information</a>.<a href="../../hostifaces/PSDataCollection.cs.html#cba7d5244153db55" class="i method">RemoveAt</a>(<span class="r81 r">index</span>);
+ 
+                    <span class="c">// send the output data to the client</span>
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#01a4fb787a592907" class="i method">SendInformationRecordToClient</a>(<span class="r83 r">data</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Send the remaining output and error information to</span>
+        <span class="c">///</span><span class="c"> client.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">This method should be called before</span>
+        <span class="c">///</span><span class="c"> sending the state information. The client will</span>
+        <span class="c">///</span><span class="c"> remove the association between a powershell and</span>
+        <span class="c">///</span><span class="c"> runspace pool if it receives any of the terminal</span>
+        <span class="c">///</span><span class="c"> states. Hence all the remaining data should be</span>
+        <span class="c">///</span><span class="c"> sent before this happens. Else the data will be</span>
+        <span class="c">///</span><span class="c"> discarded</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="de244125fd55e07e" href="../../../R/de244125fd55e07e.html" target="n" data-glyph="76,1" class="i method">SendRemainingData</a>()
+        {
+            <b>int</b> <span id="r84 rd" class="r84 r">indexIntoDataSent</span> = (!<a href="#73194ca013310d76" class="i field">_extraPowerShellAlreadyScheduled</a>) ? 0 : 1;
+            <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+            {
+                <a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r84 r">indexIntoDataSent</span>] = <b>true</b>;
+            }
+ 
+            <b>try</b>
+            {
+                <span class="c">// BUGBUG: change this code to use enumerator</span>
+                <span class="c">// blocked on bug #108824, to be fixed by Kriscv</span>
+                <b>for</b> (<b>int</b> <span id="r85 rd" class="r85 r">i</span> = 0; <span class="r85 r">i</span> &lt; <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>.<a href="../../hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a>; <span class="r85 r">i</span>++)
+                {
+                    <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r86 rd" class="r86 r">data</span> = <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r85 r">i</span>];
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#70ae6724d0f4c16b" class="i method">SendOutputDataToClient</a>(<span class="r86 r">data</span>);
+                }
+ 
+                <a href="#4a6a070053873ed9" class="i field">_localPowerShellOutput</a>.<a href="../../hostifaces/PSDataCollection.cs.html#8358de7f8ecc84ec" class="i method">Clear</a>();
+ 
+                <span class="c">// foreach (ErrorRecord errorRecord in localPowerShell.Error)</span>
+                <b>for</b> (<b>int</b> <span id="r87 rd" class="r87 r">i</span> = 0; <span class="r87 r">i</span> &lt; <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a>; <span class="r87 r">i</span>++)
+                {
+                    <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r88 rd" class="r88 r">errorRecord</span> = <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r87 r">i</span>];
+                    <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#004da7550b9cbc80" class="i method">SendErrorRecordToClient</a>(<span class="r88 r">errorRecord</span>);
+                }
+ 
+                <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#622ebeade9b6ada7" class="i property">Streams</a>.<a href="../../hostifaces/PowerShell.cs.html#ae04a604c26c6f7d" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#8358de7f8ecc84ec" class="i method">Clear</a>();
+            }
+            <b>finally</b>
+            {
+                <b>lock</b> (<a href="#88958129fb952389" class="i field">_syncObject</a>)
+                {
+                    <span class="c">// reset to original state so other pipelines can stream.</span>
+                    <a href="#6532d372f2f78b60" class="i field">_datasent</a>[<span class="r84 r">indexIntoDataSent</span>] = <b>true</b>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Stop the local powershell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r89 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="76209b83934bc643" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleStopReceived</a>(<b>object</b> <span id="r89 rd" class="r89 r">sender</span>, <span class="i">EventArgs</span> <span id="r90 rd" class="r90 r">eventArgs</span>)
+        {
+            <b>do</b> <span class="c">// false loop</span>
+            {
+                <b>if</b> (<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#6a6866e7df063875" class="i field">Stopped</a> ||
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#89ec15a2a933a2b6" class="i field">Completed</a> ||
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#35065a8449cad351" class="i field">Failed</a> ||
+                    <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#a9d235bf0dc5bfce" class="i field">Stopping</a>)
+                {
+                    <b>break</b>;
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Ensure that the local PowerShell command is not stopped in debug mode.</span>
+                    <b>bool</b> <span id="r91 rd" class="r91 r">handledByDebugger</span> = <b>false</b>;
+                    <b>if</b> (!<a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#32c156c0cba25702" class="i property">IsNested</a> &amp;&amp;
+                        <a href="#39893f7305fca9d3" class="i field">_psDriverInvoker</a> != <b>null</b>)
+                    {
+                        <span class="r91 r">handledByDebugger</span> = <a href="#39893f7305fca9d3" class="i field">_psDriverInvoker</a>.<a href="ServerRunspacePoolDriver.cs.html#b9a284d74aa0dc53" class="i method">HandleStopSignal</a>();
+                    }
+ 
+                    <b>if</b> (!<span class="r91 r">handledByDebugger</span>)
+                    {
+                        <a href="#87ef9380811e202f" class="i property">LocalPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#417fd1f64732b2ef" class="i method">Stop</a>();
+                    }
+                }
+            } <b>while</b> (<b>false</b>);
+ 
+            <b>if</b> (<a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a> != <b>null</b>)
+            {
+                <b>do</b> <span class="c">// false loop</span>
+                {
+                    <b>if</b> (<a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#6a6866e7df063875" class="i field">Stopped</a> ||
+                        <a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#89ec15a2a933a2b6" class="i field">Completed</a> ||
+                        <a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#35065a8449cad351" class="i field">Failed</a> ||
+                        <a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#39b81acd3aeb1582" class="i property">InvocationStateInfo</a>.<a href="../../hostifaces/PowerShell.cs.html#7a70ff5163d0f044" class="i property">State</a> == <a href="../../hostifaces/PowerShell.cs.html#24cc37ccdc118b7a" class="t t">PSInvocationState</a>.<a href="../../hostifaces/PowerShell.cs.html#a9d235bf0dc5bfce" class="i field">Stopping</a>)
+                    {
+                        <b>break</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#f42a71dd312079b6" class="i field">_extraPowerShell</a>.<a href="../../hostifaces/PowerShell.cs.html#417fd1f64732b2ef" class="i method">Stop</a>();
+                    }
+                } <b>while</b> (<b>false</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add input to the local powershell&#39;s input collection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r92 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="5c61512ce301f212" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleInputReceived</a>(<b>object</b> <span id="r92 rd" class="r92 r">sender</span>, <a href="../common/misc.cs.html#16d1e16a7ed9f8cc" class="t t">RemoteDataEventArgs</a>&lt;<b>object</b>&gt; <span id="r93 rd" class="r93 r">eventArgs</span>)
+        {
+            <span class="c">// This can be called in pushed runspace scenarios for error reporting (pipeline stopped).</span>
+            <span class="c">// Ignore for noInput.</span>
+            <b>if</b> (!<a href="#02f1f0d9f73aa319" class="i field">_noInput</a> &amp;&amp; (<a href="#19184dbef75d3bcb" class="i property">InputCollection</a> != <b>null</b>))
+            {
+                <a href="#19184dbef75d3bcb" class="i property">InputCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<span class="r93 r">eventArgs</span>.<a href="../common/misc.cs.html#0896dbbd394ce2e6" class="i property">Data</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Close the input collection of the local powershell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r94 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r95 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="af7eebd4416ce913" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleInputEndReceived</a>(<b>object</b> <span id="r94 rd" class="r94 r">sender</span>, <span class="i">EventArgs</span> <span id="r95 rd" class="r95 r">eventArgs</span>)
+        {
+            <span class="c">// This can be called in pushed runspace scenarios for error reporting (pipeline stopped).</span>
+            <span class="c">// Ignore for noInput.</span>
+            <b>if</b> (!<a href="#02f1f0d9f73aa319" class="i field">_noInput</a> &amp;&amp; (<a href="#19184dbef75d3bcb" class="i property">InputCollection</a> != <b>null</b>))
+            {
+                <a href="#19184dbef75d3bcb" class="i property">InputCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+            }
+        }
+ 
+        <b>private void</b> <a id="285e17075bdd0942" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleSessionConnected</a>(<b>object</b> <span id="r96 rd" class="r96 r">sender</span>, <span class="i">EventArgs</span> <span id="r97 rd" class="r97 r">eventArgs</span>)
+        {
+            <span class="c">// Close input if its active. no need to synchronize as input stream would have already been processed</span>
+            <span class="c">// when connect call came into PS plugin</span>
+            <b>if</b> (<a href="#19184dbef75d3bcb" class="i property">InputCollection</a> != <b>null</b>)
+            {
+                <span class="c">// TODO: Post an ETW event</span>
+                <a href="#19184dbef75d3bcb" class="i property">InputCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handle a host message response received.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r98 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r99 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Arguments describing this event.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="27b6f39c6d1cd1c5" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleHostResponseReceived</a>(<b>object</b> <span id="r98 rd" class="r98 r">sender</span>, <a href="../common/misc.cs.html#16d1e16a7ed9f8cc" class="t t">RemoteDataEventArgs</a>&lt;<a href="../common/WireDataFormat/RemoteHost.cs.html#2088d050a88e3ac6" class="t t">RemoteHostResponse</a>&gt; <span id="r99 rd" class="r99 r">eventArgs</span>)
+        {
+            <a href="#57cc223222fcc845" class="i field">_remoteHost</a>.<a href="ServerRemoteHost.cs.html#f7e839b2399b6cb0" class="i property">ServerMethodExecutor</a>.<a href="ServerMethodExecutor.cs.html#826b0e13ea0c9e9d" class="i method">HandleRemoteHostResponseFromClient</a>(<span class="r99 r">eventArgs</span>.<a href="../common/misc.cs.html#0896dbbd394ce2e6" class="i property">Data</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles the PSDataCollection idle event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r100 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r101 r">args</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="a6a983a6c6645b41" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleIdleEvent</a>(<b>object</b> <span id="r100 rd" class="r100 r">sender</span>, <span class="i">EventArgs</span> <span id="r101 rd" class="r101 r">args</span>)
+        {
+            <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r102 rd" class="r102 r">rs</span> = <a href="#a3212ff6496989c8" class="i property">DataStructureHandler</a>.<a href="ServerRemotingProtocol2.cs.html#5398b179efa4b91f" class="i property">RunspaceUsedToInvokePowerShell</a>;
+            <b>if</b> (<span class="r102 r">rs</span> != <b>null</b>)
+            {
+                <a href="../../EventManager.cs.html#88db4bace82161f0" class="t t">PSLocalEventManager</a> <span id="r103 rd" class="r103 r">events</span> = (<b>object</b>)<span class="r102 r">rs</span>.<a href="../../hostifaces/Connection.cs.html#76f15a0f04e941d7" class="i property">Events</a> <b>as</b> <a href="../../EventManager.cs.html#88db4bace82161f0" class="t t">PSLocalEventManager</a>;
+ 
+                <b>if</b> (<span class="r103 r">events</span> != <b>null</b>)
+                {
+                    <b>foreach</b> (<a href="../../EventManager.cs.html#b185773a8f107fac" class="t t">PSEventSubscriber</a> <span id="r104 rd" class="r104 r">subscriber</span> <b>in</b> <span class="r103 r">events</span>.<a href="../../EventManager.cs.html#2556cfcc281e68ab" class="i property">Subscribers</a>)
+                    {
+                        <span class="c">// Use the synchronous version</span>
+                        <span class="r103 r">events</span>.<a href="../../EventManager.cs.html#15aa85b30d11d1d1" class="i method">DrainPendingActions</a>(<span class="r104 r">subscriber</span>);
+                    }
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private Methods
+    }
+}
+</pre></td></tr></table></div></body></html>

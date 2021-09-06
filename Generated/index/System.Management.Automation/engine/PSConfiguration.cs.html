@@ -1,0 +1,742 @@
+﻿<!DOCTYPE html>
+<html><head><title>PSConfiguration.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(733);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/PSConfiguration.cs" target="_top">engine\PSConfiguration.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i">Newtonsoft</span>.<span class="i">Json</span>;
+<b>using</b> <span class="i">Newtonsoft</span>.<span class="i">Json</span>.<span class="i">Linq</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Configuration</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The scope of the configuration file.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public enum</b> <a id="377f34beb5e362cf" href="../R/377f34beb5e362cf.html" target="n" data-glyph="18,0" class="t t"><span id="f6808e7752b11fb5">ConfigScope</span></a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> AllUsers configuration applies to all users.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="378339620026a80d" href="../R/378339620026a80d.html" target="n" data-glyph="24,1" class="i field">AllUsers</a> = 0,
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> CurrentUser configuration applies to the current user.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <a id="2486a7ab834532b3" href="../R/2486a7ab834532b3.html" target="n" data-glyph="24,1" class="i field">CurrentUser</a> = 1
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Reads from and writes to the JSON configuration files.</span>
+    <span class="c">///</span><span class="c"> The config values were originally stored in the Windows registry.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The config file access APIs are designed to avoid hitting the disk as much as possible.</span>
+    <span class="c">///</span><span class="c"> - For the first read request targeting a config file, the config data is read from the file and then cached as a &#39;JObject&#39; instance;</span>
+    <span class="c">///</span><span class="c">     * the first read request happens very early during the startup of &#39;pwsh&#39;.</span>
+    <span class="c">///</span><span class="c"> - For the subsequent read requests targeting the same config file, they will then work with that &#39;JObject&#39; instance;</span>
+    <span class="c">///</span><span class="c"> - For the write request targeting a config file, the cached config data corresponding to that config file will be refreshed after the write operation is successfully done.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> To summarize the expected behavior:</span>
+    <span class="c">///</span><span class="c"> Once a &#39;pwsh&#39; process starts up -</span>
+    <span class="c">///</span><span class="c">   1. any changes made to the config file from outside this &#39;pwsh&#39; process is not guaranteed to be seen by it (most likely won&#39;t be seen).</span>
+    <span class="c">///</span><span class="c">   2. any changes to the config file by this &#39;pwsh&#39; process via the config file access APIs will be seen by it, if it chooses to read those changes afterwards.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="9641e95401c2a85d" href="../R/9641e95401c2a85d.html" target="n" data-glyph="2,0" class="t t">PowerShellConfig</a>
+    {
+        <b>private const string</b> <a id="dc8f5e8903ff1a1c" href="../R/dc8f5e8903ff1a1c.html" target="n" data-glyph="10,1" class="i field">ConfigFileName</a> = <span class="s">&quot;powershell.config.json&quot;</span>;
+        <b>private const string</b> <a id="0b65eaf667477540" href="../R/0b65eaf667477540.html" target="n" data-glyph="10,1" class="i field">ExecutionPolicyDefaultShellKey</a> = <span class="s">&quot;Microsoft.PowerShell:ExecutionPolicy&quot;</span>;
+        <b>private const string</b> <a id="5b69ae3e548328b9" href="../R/5b69ae3e548328b9.html" target="n" data-glyph="10,1" class="i field">DisableImplicitWinCompatKey</a> = <span class="s">&quot;DisableImplicitWinCompat&quot;</span>;
+        <b>private const string</b> <a id="35baef5e79147f9d" href="../R/35baef5e79147f9d.html" target="n" data-glyph="10,1" class="i field">WindowsPowerShellCompatibilityModuleDenyListKey</a> = <span class="s">&quot;WindowsPowerShellCompatibilityModuleDenyList&quot;</span>;
+        <b>private const string</b> <a id="bb9a4df03f064d21" href="../R/bb9a4df03f064d21.html" target="n" data-glyph="10,1" class="i field">WindowsPowerShellCompatibilityNoClobberModuleListKey</a> = <span class="s">&quot;WindowsPowerShellCompatibilityNoClobberModuleList&quot;</span>;
+ 
+        <span class="c">// Provide a singleton</span>
+        <b>internal static readonly</b> <a href="#9641e95401c2a85d" class="t t">PowerShellConfig</a> <a id="e4c913e160567f04" href="../R/e4c913e160567f04.html" target="n" data-glyph="44,1" class="i field">Instance</a> = <b>new</b> <a href="#cf6e300081efd033" class="t constructor">PowerShellConfig</a>();
+ 
+        <span class="c">// The json file containing system-wide configuration settings.</span>
+        <span class="c">// When passed as a pwsh command-line option, overrides the system wide configuration file.</span>
+        <b>private string</b> <a id="b0ed3a80b0df6145" href="../R/b0ed3a80b0df6145.html" target="n" data-glyph="46,1" class="i field">systemWideConfigFile</a>;
+        <b>private string</b> <a id="257352d9056acebf" href="../R/257352d9056acebf.html" target="n" data-glyph="46,1" class="i field">systemWideConfigDirectory</a>;
+ 
+        <span class="c">// The json file containing the per-user configuration settings.</span>
+        <b>private readonly string</b> <a id="f46c342b21096349" href="../R/f46c342b21096349.html" target="n" data-glyph="46,1" class="i field">perUserConfigFile</a>;
+        <b>private readonly string</b> <a id="3da00f5091385071" href="../R/3da00f5091385071.html" target="n" data-glyph="46,1" class="i field">perUserConfigDirectory</a>;
+ 
+        <span class="c">// Note: JObject and JsonSerializer are thread safe.</span>
+        <span class="c">// Root Json objects corresponding to the configuration file for &#39;AllUsers&#39; and &#39;CurrentUser&#39; respectively.</span>
+        <span class="c">// They are used as a cache to avoid hitting the disk for every read operation.</span>
+        <b>private readonly</b> <span class="i">JObject</span>[] <a id="73ca8e22ad1a32ee" href="../R/73ca8e22ad1a32ee.html" target="n" data-glyph="46,1" class="i field">configRoots</a>;
+        <b>private readonly</b> <span class="i">JObject</span> <a id="df8c2d54476245fe" href="../R/df8c2d54476245fe.html" target="n" data-glyph="46,1" class="i field">emptyConfig</a>;
+        <b>private readonly</b> <span class="i">JsonSerializer</span> <a id="5cb55411a987055b" href="../R/5cb55411a987055b.html" target="n" data-glyph="46,1" class="i field">serializer</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Lock used to enable multiple concurrent readers and singular write locks within a single process.</span>
+        <span class="c">///</span><span class="c"> TODO: This solution only works for IO from a single process.</span>
+        <span class="c">///</span><span class="c">       A more robust solution is needed to enable ReaderWriterLockSlim behavior between processes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">ReaderWriterLockSlim</span> <a id="970305b100bc2a5d" href="../R/970305b100bc2a5d.html" target="n" data-glyph="46,1" class="i field">fileLock</a>;
+ 
+        <b>private</b> <a id="cf6e300081efd033" href="../R/cf6e300081efd033.html" target="n" data-glyph="76,1" class="t constructor">PowerShellConfig</a>()
+        {
+            <span class="c">// Sets the system-wide configuration file.</span>
+            <a href="#257352d9056acebf" class="i field">systemWideConfigDirectory</a> = <a href="Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="Utils.cs.html#c677cc800603f8f5" class="i property">DefaultPowerShellAppBase</a>;
+            <a href="#b0ed3a80b0df6145" class="i field">systemWideConfigFile</a> = <span class="i">Path</span>.<span class="i">Combine</span>(<a href="#257352d9056acebf" class="i field">systemWideConfigDirectory</a>, <a href="#dc8f5e8903ff1a1c" class="i field">ConfigFileName</a>);
+ 
+            <span class="c">// Sets the per-user configuration directory</span>
+            <span class="c">// Note: This directory may or may not exist depending upon the execution scenario.</span>
+            <span class="c">// Writes will attempt to create the directory if it does not already exist.</span>
+            <a href="#3da00f5091385071" class="i field">perUserConfigDirectory</a> = <a href="../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../CoreCLR/CorePsPlatform.cs.html#2a4e129e24ec4ad7" class="i field">ConfigDirectory</a>;
+            <a href="#f46c342b21096349" class="i field">perUserConfigFile</a> = <span class="i">Path</span>.<span class="i">Combine</span>(<a href="#3da00f5091385071" class="i field">perUserConfigDirectory</a>, <a href="#dc8f5e8903ff1a1c" class="i field">ConfigFileName</a>);
+ 
+            <a href="#df8c2d54476245fe" class="i field">emptyConfig</a> = <b>new</b> <span class="i">JObject</span>();
+            <a href="#73ca8e22ad1a32ee" class="i field">configRoots</a> = <b>new</b> <span class="i">JObject</span>[2];
+            <a href="#5cb55411a987055b" class="i field">serializer</a> = <span class="i">JsonSerializer</span>.<span class="i">Create</span>(<b>new</b> <span class="i">JsonSerializerSettings</span> { <span class="i">TypeNameHandling</span> = <span class="i">TypeNameHandling</span>.<span class="i">None</span>, <span class="i">MaxDepth</span> = 10 });
+ 
+            <a href="#970305b100bc2a5d" class="i field">fileLock</a> = <b>new</b> <span class="i">ReaderWriterLockSlim</span>();
+        }
+ 
+        <b>private string</b> <a id="92ebddebbe69b281" href="../R/92ebddebbe69b281.html" target="n" data-glyph="76,1" class="i method">GetConfigFilePath</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r0 rd" class="r0 r">scope</span>)
+        {
+            <b>return</b> (<span class="r0 r">scope</span> == <a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#2486a7ab834532b3" class="i field">CurrentUser</a>) ? <a href="#f46c342b21096349" class="i field">perUserConfigFile</a> : <a href="#b0ed3a80b0df6145" class="i field">systemWideConfigFile</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Sets the system wide configuration file path.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A fully qualified path to the system wide configuration file.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">FileNotFoundException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">value</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is a null reference or the associated file does not exist.</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is for use when processing the -SettingsFile configuration setting and should not be used for any other purpose.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="901f7b57f9f39fca" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">SetSystemConfigFilePath</a>(<b>string</b> <span id="r1 rd" class="r1 r">value</span>)
+        {
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r1 r">value</span>) &amp;&amp; !<span class="i">File</span>.<span class="i">Exists</span>(<span class="r1 r">value</span>))
+            {
+                <b>throw</b> <b>new</b> <span class="i">FileNotFoundException</span>(<span class="r1 r">value</span>);
+            }
+ 
+            <span class="i">FileInfo</span> <span id="r2 rd" class="r2 r">info</span> = <b>new</b> <span class="i">FileInfo</span>(<span class="r1 r">value</span>);
+            <a href="#b0ed3a80b0df6145" class="i field">systemWideConfigFile</a> = <span class="r2 r">info</span>.<span class="i">FullName</span>;
+            <a href="#257352d9056acebf" class="i field">systemWideConfigDirectory</a> = <span class="r2 r">info</span>.<span class="i">Directory</span>.<span class="i">FullName</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Existing Key = HKLM:\System\CurrentControlSet\Control\Session Manager\Environment</span>
+        <span class="c">///</span><span class="c"> Proposed value = %ProgramFiles%\PowerShell\Modules by default</span>
+        <span class="c">///</span><span class="c"> Note: There is no setter because this value is immutable.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether this is a system-wide or per-user setting.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Value if found, null otherwise. The behavior matches ModuleIntrinsics.GetExpandedEnvironmentVariable().</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="bdbbbcbc10c32338" href="../R/bdbbbcbc10c32338.html" target="n" data-glyph="74,1" class="i method">GetModulePath</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r3 rd" class="r3 r">scope</span>)
+        {
+            <b>string</b> <span id="r4 rd" class="r4 r">modulePath</span> = <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>string</b>&gt;(<span class="r3 r">scope</span>, <a href="Modules/ModuleIntrinsics.cs.html#ed7549e40b469e9f" class="t t">Constants</a>.<a href="Modules/ModuleIntrinsics.cs.html#21c1e0b05c7ef699" class="i field">PSModulePathEnvVar</a>);
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r4 r">modulePath</span>))
+            {
+                <span class="r4 r">modulePath</span> = <span class="i">Environment</span>.<span class="i">ExpandEnvironmentVariables</span>(<span class="r4 r">modulePath</span>);
+            }
+ 
+            <b>return</b> <span class="r4 r">modulePath</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Existing Key = HKCU and HKLM\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell</span>
+        <span class="c">///</span><span class="c"> Proposed value = Existing default execution policy if not already specified</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Schema:</span>
+        <span class="c">///</span><span class="c"> {</span>
+        <span class="c">///</span><span class="c">     &quot;shell-ID-string:ExecutionPolicy&quot; : &quot;execution policy string&quot;</span>
+        <span class="c">///</span><span class="c"> }</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> TODO: In a single config file, it might be better to nest this. It is unnecessary complexity until a need arises for more nested values.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether this is a system-wide or per-user setting.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r6 r">shellId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The shell associated with this policy. Typically, it is &quot;Microsoft.PowerShell&quot;.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The execution policy if found. Null otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="b6455f8da1415cfa" href="../R/b6455f8da1415cfa.html" target="n" data-glyph="74,1" class="i method">GetExecutionPolicy</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r5 rd" class="r5 r">scope</span>, <b>string</b> <span id="r6 rd" class="r6 r">shellId</span>)
+        {
+            <b>string</b> <span id="r7 rd" class="r7 r">key</span> = <a href="#867bd06655683e3a" class="i method">GetExecutionPolicySettingKey</a>(<span class="r6 r">shellId</span>);
+            <b>string</b> <span id="r8 rd" class="r8 r">execPolicy</span> = <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>string</b>&gt;(<span class="r5 r">scope</span>, <span class="r7 r">key</span>);
+            <b>return</b> <b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r8 r">execPolicy</span>) ? <b>null</b> : <span class="r8 r">execPolicy</span>;
+        }
+ 
+        <b>internal void</b> <a id="9cc894ab9201f241" href="../R/9cc894ab9201f241.html" target="n" data-glyph="74,1" class="i method">RemoveExecutionPolicy</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r9 rd" class="r9 r">scope</span>, <b>string</b> <span id="r10 rd" class="r10 r">shellId</span>)
+        {
+            <b>string</b> <span id="r11 rd" class="r11 r">key</span> = <a href="#867bd06655683e3a" class="i method">GetExecutionPolicySettingKey</a>(<span class="r10 r">shellId</span>);
+            <a href="#69c5666dce5f66eb" class="i method">RemoveValueFromFile</a>&lt;<b>string</b>&gt;(<span class="r9 r">scope</span>, <span class="r11 r">key</span>);
+        }
+ 
+        <b>internal void</b> <a id="a4e9ab2f59a5e27f" href="../R/a4e9ab2f59a5e27f.html" target="n" data-glyph="74,1" class="i method">SetExecutionPolicy</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r12 rd" class="r12 r">scope</span>, <b>string</b> <span id="r13 rd" class="r13 r">shellId</span>, <b>string</b> <span id="r14 rd" class="r14 r">executionPolicy</span>)
+        {
+            <b>string</b> <span id="r15 rd" class="r15 r">key</span> = <a href="#867bd06655683e3a" class="i method">GetExecutionPolicySettingKey</a>(<span class="r13 r">shellId</span>);
+            <a href="#15313f00d7d3638c" class="i method">WriteValueToFile</a>&lt;<b>string</b>&gt;(<span class="r12 r">scope</span>, <span class="r15 r">key</span>, <span class="r14 r">executionPolicy</span>);
+        }
+ 
+        <b>private static string</b> <a id="867bd06655683e3a" href="../R/867bd06655683e3a.html" target="n" data-glyph="76,1" class="i method">GetExecutionPolicySettingKey</a>(<b>string</b> <span id="r16 rd" class="r16 r">shellId</span>)
+        {
+            <b>return</b> <b>string</b>.<span class="i">Equals</span>(<span class="r16 r">shellId</span>, <a href="Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="Utils.cs.html#afe3ed92dba2b2b0" class="i field">DefaultPowerShellShellID</a>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>)
+                ? <a href="#0b65eaf667477540" class="i field">ExecutionPolicyDefaultShellKey</a>
+                : <b>string</b>.<span class="i">Concat</span>(<span class="r16 r">shellId</span>, <span class="s">&quot;:&quot;</span>, <span class="s">&quot;ExecutionPolicy&quot;</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> Get the names of experimental features enabled in the config file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/summary&gt;</span>
+        <b>internal string</b>[] <a id="c32e2733f8f14af8" href="../R/c32e2733f8f14af8.html" target="n" data-glyph="74,1" class="i method">GetExperimentalFeatures</a>()
+        {
+            <b>string</b>[] <span id="r17 rd" class="r17 r">features</span> = <span class="i">ReadValueFromFile</span>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#2486a7ab834532b3" class="i field">CurrentUser</a>, <span class="s">&quot;ExperimentalFeatures&quot;</span>, <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>string</b>&gt;());
+ 
+            <b>if</b> (<span class="r17 r">features</span>.<span class="i">Length</span> == 0)
+            {
+                <span class="r17 r">features</span> = <span class="i">ReadValueFromFile</span>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#378339620026a80d" class="i field">AllUsers</a>, <span class="s">&quot;ExperimentalFeatures&quot;</span>, <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>string</b>&gt;());
+            }
+ 
+            <b>return</b> <span class="r17 r">features</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set the enabled list of experimental features in the config file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The ConfigScope of the configuration file to update.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">featureName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name of the experimental feature to change in the configuration.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r20 r">setEnabled</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, add to configuration; otherwise, remove from configuration.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="e033d3e086d2df7f" href="../R/e033d3e086d2df7f.html" target="n" data-glyph="74,1" class="i method">SetExperimentalFeatures</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r18 rd" class="r18 r">scope</span>, <b>string</b> <span id="r19 rd" class="r19 r">featureName</span>, <b>bool</b> <span id="r20 rd" class="r20 r">setEnabled</span>)
+        {
+            <b>var</b> <span id="r21 rd" class="r21 r">features</span> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;(<a href="#c32e2733f8f14af8" class="i method">GetExperimentalFeatures</a>());
+            <b>bool</b> <span id="r22 rd" class="r22 r">containsFeature</span> = <span class="r21 r">features</span>.<span class="i">Contains</span>(<span class="r19 r">featureName</span>);
+            <b>if</b> (<span class="r20 r">setEnabled</span> &amp;&amp; !<span class="r22 r">containsFeature</span>)
+            {
+                <span class="r21 r">features</span>.<span class="i">Add</span>(<span class="r19 r">featureName</span>);
+                <span class="i">WriteValueToFile</span>&lt;<b>string</b>[]&gt;(<span class="r18 r">scope</span>, <span class="s">&quot;ExperimentalFeatures&quot;</span>, <span class="r21 r">features</span>.<span class="i">ToArray</span>());
+            }
+            <b>else</b> <b>if</b> (!<span class="r20 r">setEnabled</span> &amp;&amp; <span class="r22 r">containsFeature</span>)
+            {
+                <span class="r21 r">features</span>.<span class="i">Remove</span>(<span class="r19 r">featureName</span>);
+                <span class="i">WriteValueToFile</span>&lt;<b>string</b>[]&gt;(<span class="r18 r">scope</span>, <span class="s">&quot;ExperimentalFeatures&quot;</span>, <span class="r21 r">features</span>.<span class="i">ToArray</span>());
+            }
+        }
+ 
+        <b>internal bool</b> <a id="036f416f18662a20" href="../R/036f416f18662a20.html" target="n" data-glyph="74,1" class="i method">IsImplicitWinCompatEnabled</a>()
+        {
+            <b>bool</b> <span id="r23 rd" class="r23 r">settingValue</span> = <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>bool</b>?&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#2486a7ab834532b3" class="i field">CurrentUser</a>, <a href="#5b69ae3e548328b9" class="i field">DisableImplicitWinCompatKey</a>)
+                ?? <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>bool</b>?&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#378339620026a80d" class="i field">AllUsers</a>, <a href="#5b69ae3e548328b9" class="i field">DisableImplicitWinCompatKey</a>)
+                ?? <b>false</b>;
+ 
+            <b>return</b> !<span class="r23 r">settingValue</span>;
+        }
+ 
+        <b>internal string</b>[] <a id="d81d38452a5eea56" href="../R/d81d38452a5eea56.html" target="n" data-glyph="74,1" class="i method">GetWindowsPowerShellCompatibilityModuleDenyList</a>()
+        {
+            <b>return</b> <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>string</b>[]&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#2486a7ab834532b3" class="i field">CurrentUser</a>, <a href="#35baef5e79147f9d" class="i field">WindowsPowerShellCompatibilityModuleDenyListKey</a>)
+                ?? <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>string</b>[]&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#378339620026a80d" class="i field">AllUsers</a>, <a href="#35baef5e79147f9d" class="i field">WindowsPowerShellCompatibilityModuleDenyListKey</a>);
+        }
+ 
+        <b>internal string</b>[] <a id="d958ca6ae3445874" href="../R/d958ca6ae3445874.html" target="n" data-glyph="74,1" class="i method">GetWindowsPowerShellCompatibilityNoClobberModuleList</a>()
+        {
+            <b>return</b> <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>string</b>[]&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#2486a7ab834532b3" class="i field">CurrentUser</a>, <a href="#bb9a4df03f064d21" class="i field">WindowsPowerShellCompatibilityNoClobberModuleListKey</a>)
+                ?? <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<b>string</b>[]&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#378339620026a80d" class="i field">AllUsers</a>, <a href="#bb9a4df03f064d21" class="i field">WindowsPowerShellCompatibilityNoClobberModuleListKey</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Corresponding settings of the original Group Policies.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="#e7c16de5b71ffcc1" class="t t">PowerShellPolicies</a> <a id="8ab7d27aca20bb75" href="../R/8ab7d27aca20bb75.html" target="n" data-glyph="74,1" class="i method">GetPowerShellPolicies</a>(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r24 rd" class="r24 r">scope</span>)
+        {
+            <b>return</b> <a href="#24212de9fcdb4ffa" class="i method">ReadValueFromFile</a>&lt;<a href="#e7c16de5b71ffcc1" class="t t">PowerShellPolicies</a>&gt;(<span class="r24 r">scope</span>, <b>nameof</b>(<a href="#e7c16de5b71ffcc1" class="t t">PowerShellPolicies</a>));
+        }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">        /// &lt;summary&gt;
+        /// Gets the identity name to use for writing to syslog.
+        /// &lt;/summary&gt;
+        /// &lt;returns&gt;
+        /// The string identity to use for writing to syslog. The default value is &#39;powershell&#39;.
+        /// &lt;/returns&gt;
+        internal string GetSysLogIdentity()
+        {
+            string identity = ReadValueFromFile&lt;string&gt;(ConfigScope.AllUsers, &quot;LogIdentity&quot;);
+ 
+            if (string.IsNullOrEmpty(identity) ||
+                identity.Equals(LogDefaultValue, StringComparison.OrdinalIgnoreCase))
+            {
+                identity = &quot;powershell&quot;;
+            }
+ 
+            return identity;
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets the log level filter.
+        /// &lt;/summary&gt;
+        /// &lt;returns&gt;
+        /// One of the PSLevel values indicating the level to log. The default value is PSLevel.Informational.
+        /// &lt;/returns&gt;
+        internal PSLevel GetLogLevel()
+        {
+            string levelName = ReadValueFromFile&lt;string&gt;(ConfigScope.AllUsers, &quot;LogLevel&quot;);
+            PSLevel level;
+ 
+            if (string.IsNullOrEmpty(levelName) ||
+                levelName.Equals(LogDefaultValue, StringComparison.OrdinalIgnoreCase) ||
+                !Enum.TryParse&lt;PSLevel&gt;(levelName, true, out level))
+            {
+                level = PSLevel.Informational;
+            }
+ 
+            return level;
+        }
+ 
+        /// &lt;summary&gt;
+        /// The supported separator characters for listing channels and keywords in configuration.
+        /// &lt;/summary&gt;
+        private static readonly char[] s_valueSeparators = new char[] {&#39; &#39;, &#39;,&#39;, &#39;|&#39;};
+ 
+        /// &lt;summary&gt;
+        /// Provides a string name to indicate the default for a configuration setting.
+        /// &lt;/summary&gt;
+        private const string LogDefaultValue = &quot;default&quot;;
+ 
+        /// &lt;summary&gt;
+        /// Gets the bitmask of the PSChannel values to log.
+        /// &lt;/summary&gt;
+        /// &lt;returns&gt;
+        /// A bitmask of PSChannel.Operational and/or PSChannel.Analytic. The default value is PSChannel.Operational.
+        /// &lt;/returns&gt;
+        internal PSChannel GetLogChannels()
+        {
+            string values = ReadValueFromFile&lt;string&gt;(ConfigScope.AllUsers, &quot;LogChannels&quot;);
+ 
+            PSChannel result = 0;
+            if (!string.IsNullOrEmpty(values))
+            {
+                string[] names = values.Split(s_valueSeparators, StringSplitOptions.RemoveEmptyEntries);
+ 
+                foreach (string name in names)
+                {
+                    if (name.Equals(LogDefaultValue, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result = 0;
+                        break;
+                    }
+ 
+                    PSChannel value;
+                    if (Enum.TryParse&lt;PSChannel&gt;(name, true, out value))
+                    {
+                        result |= value;
+                    }
+                }
+            }
+ 
+            if (result == 0)
+            {
+                result = System.Management.Automation.Tracing.PSSysLogProvider.DefaultChannels;
+            }
+ 
+            return result;
+        }
+ 
+        /// &lt;summary&gt;
+        /// Gets the bitmask of keywords to log.
+        /// &lt;/summary&gt;
+        /// &lt;returns&gt;
+        /// A bitmask of PSKeyword values. The default value is all keywords other than UseAlwaysAnalytic.
+        /// &lt;/returns&gt;
+        internal PSKeyword GetLogKeywords()
+        {
+            string values = ReadValueFromFile&lt;string&gt;(ConfigScope.AllUsers, &quot;LogKeywords&quot;);
+ 
+            PSKeyword result = 0;
+            if (!string.IsNullOrEmpty(values))
+            {
+                string[] names = values.Split(s_valueSeparators, StringSplitOptions.RemoveEmptyEntries);
+ 
+                foreach (string name in names)
+                {
+                    if (name.Equals(LogDefaultValue, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result = 0;
+                        break;
+                    }
+ 
+                    PSKeyword value;
+                    if (Enum.TryParse&lt;PSKeyword&gt;(name, true, out value))
+                    {
+                        result |= value;
+                    }
+                }
+            }
+ 
+            if (result == 0)
+            {
+                result = System.Management.Automation.Tracing.PSSysLogProvider.DefaultKeywords;
+            }
+ 
+            return result;
+        }
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span> <span class="c">// UNIX</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read a value from the configuration file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The type of the value</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The ConfigScope of the configuration file to update.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">key</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The string key of the value.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">defaultValue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The default value to return if the key is not present.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private</b> <span class="r25 r t">T</span> <a id="24212de9fcdb4ffa" href="../R/24212de9fcdb4ffa.html" target="n" data-glyph="76,1" class="i method">ReadValueFromFile</a>&lt;<span id="r25 rd t" class="r25 r t">T</span>&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r26 rd" class="r26 r">scope</span>, <b>string</b> <span id="r27 rd" class="r27 r">key</span>, <span class="r25 r t">T</span> <span id="r28 rd" class="r28 r">defaultValue</span> = <b>default</b>)
+        {
+            <b>string</b> <span id="r29 rd" class="r29 r">fileName</span> = <a href="#92ebddebbe69b281" class="i method">GetConfigFilePath</a>(<span class="r26 r">scope</span>);
+            <span class="i">JObject</span> <span id="r30 rd" class="r30 r">configData</span> = <a href="#73ca8e22ad1a32ee" class="i field">configRoots</a>[(<b>int</b>)<span class="r26 r">scope</span>];
+ 
+            <b>if</b> (<span class="r30 r">configData</span> == <b>null</b>)
+            {
+                <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r29 r">fileName</span>))
+                {
+                    <b>try</b>
+                    {
+                        <span class="c">// Open file for reading, but allow multiple readers</span>
+                        <a href="#970305b100bc2a5d" class="i field">fileLock</a>.<span class="i">EnterReadLock</span>();
+ 
+                        <b>using</b> <b>var</b> <span id="r31 rd" class="r31 r">stream</span> = <span class="i">OpenFileStreamWithRetry</span>(<span class="r29 r">fileName</span>, <span class="i">FileMode</span>.<span class="i">Open</span>, <span class="i">FileAccess</span>.<span class="i">Read</span>, <span class="i">FileShare</span>.<span class="i">ReadWrite</span>);
+                        <b>using</b> <b>var</b> <span id="r32 rd" class="r32 r">jsonReader</span> = <b>new</b> <span class="i">JsonTextReader</span>(<b>new</b> <span class="i">StreamReader</span>(<span class="r31 r">stream</span>));
+ 
+                        <span class="r30 r">configData</span> = <a href="#5cb55411a987055b" class="i field">serializer</a>.<span class="i">Deserialize</span>&lt;<span class="i">JObject</span>&gt;(<span class="r32 r">jsonReader</span>) ?? <a href="#df8c2d54476245fe" class="i field">emptyConfig</a>;
+                    }
+                    <b>catch</b> (<span class="i">Exception</span> <span id="r33 rd" class="r33 r">exc</span>)
+                    {
+                        <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="r33 r">exc</span>, <span class="i">PSConfigurationStrings</span>.<span class="i">CanNotConfigurationFile</span>, <span class="i">args</span>: <span class="r29 r">fileName</span>);
+                    }
+                    <b>finally</b>
+                    {
+                        <a href="#970305b100bc2a5d" class="i field">fileLock</a>.<span class="i">ExitReadLock</span>();
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="r30 r">configData</span> = <a href="#df8c2d54476245fe" class="i field">emptyConfig</a>;
+                }
+ 
+                <span class="c">// Set the configuration cache.</span>
+                <span class="i">JObject</span> <span id="r34 rd" class="r34 r">originalValue</span> = <span class="i">Interlocked</span>.<span class="i">CompareExchange</span>(<b>ref</b> <a href="#73ca8e22ad1a32ee" class="i field">configRoots</a>[(<b>int</b>)<span class="r26 r">scope</span>], <span class="r30 r">configData</span>, <b>null</b>);
+                <b>if</b> (<span class="r34 r">originalValue</span> != <b>null</b>)
+                {
+                    <span class="r30 r">configData</span> = <span class="r34 r">originalValue</span>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r30 r">configData</span> != <a href="#df8c2d54476245fe" class="i field">emptyConfig</a> &amp;&amp; <span class="r30 r">configData</span>.<span class="i">TryGetValue</span>(<span class="r27 r">key</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>, <b>out</b> <span class="i">JToken</span> <span id="r35 rd" class="r35 r">jToken</span>))
+            {
+                <b>return</b> <span class="r35 r">jToken</span>.<span class="i">ToObject</span>&lt;<span class="r25 r t">T</span>&gt;(<a href="#5cb55411a987055b" class="i field">serializer</a>) ?? <span class="r28 r">defaultValue</span>;
+            }
+ 
+            <b>return</b> <span class="r28 r">defaultValue</span>;
+        }
+ 
+        <b>private static</b> <span class="i">FileStream</span> <a id="e65edffd57450ced" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OpenFileStreamWithRetry</a>(<b>string</b> <span id="r36 rd" class="r36 r">fullPath</span>, <span class="i">FileMode</span> <span id="r37 rd" class="r37 r">mode</span>, <span class="i">FileAccess</span> <span id="r38 rd" class="r38 r">access</span>, <span class="i">FileShare</span> <span id="r39 rd" class="r39 r">share</span>)
+        {
+            <b>const int</b> <span id="r40 rd" class="r40 r">MaxTries</span> = 5;
+            <b>for</b> (<b>int</b> <span id="r41 rd" class="r41 r">numTries</span> = 0; <span class="r41 r">numTries</span> &lt; <span class="r40 r">MaxTries</span>; <span class="r41 r">numTries</span>++)
+            {
+                <b>try</b>
+                {
+                    <b>return</b> <b>new</b> <span class="i">FileStream</span>(<span class="r36 r">fullPath</span>, <span class="r37 r">mode</span>, <span class="r38 r">access</span>, <span class="r39 r">share</span>);
+                }
+                <b>catch</b> (<span class="i">IOException</span>)
+                {
+                    <b>if</b> (<span class="r41 r">numTries</span> == (<span class="r40 r">MaxTries</span> - 1))
+                    {
+                        <b>throw</b>;
+                    }
+ 
+                    <span class="i">Thread</span>.<span class="i">Sleep</span>(50);
+                }
+            }
+ 
+            <b>throw</b> <b>new</b> <span class="i">IOException</span>(<b>nameof</b>(<span class="i">OpenFileStreamWithRetry</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Update a value in the configuration file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The type of the value</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The ConfigScope of the configuration file to update.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">key</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The string key of the value.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The value to set.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">addValue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether the key-value pair should be added to or removed from the file.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="b23f21ac6943a49c" href="../R/b23f21ac6943a49c.html" target="n" data-glyph="76,1" class="i method">UpdateValueInFile</a>&lt;<span id="r42 rd t" class="r42 r t">T</span>&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r43 rd" class="r43 r">scope</span>, <b>string</b> <span id="r44 rd" class="r44 r">key</span>, <span class="r42 r t">T</span> <span id="r45 rd" class="r45 r">value</span>, <b>bool</b> <span id="r46 rd" class="r46 r">addValue</span>)
+        {
+            <b>try</b>
+            {
+                <b>string</b> <span id="r47 rd" class="r47 r">fileName</span> = <a href="#92ebddebbe69b281" class="i method">GetConfigFilePath</a>(<span class="r43 r">scope</span>);
+                <a href="#970305b100bc2a5d" class="i field">fileLock</a>.<span class="i">EnterWriteLock</span>();
+ 
+                <span class="c">// Since multiple properties can be in a single file, replacement is required instead of overwrite if a file already exists.</span>
+                <span class="c">// Handling the read and write operations within a single FileStream prevents other processes from reading or writing the file while</span>
+                <span class="c">// the update is in progress. It also locks out readers during write operations.</span>
+ 
+                <span class="i">JObject</span> <span id="r48 rd" class="r48 r">jsonObject</span> = <b>null</b>;
+                <b>using</b> <span class="i">FileStream</span> <span id="r49 rd" class="r49 r">fs</span> = <span class="i">OpenFileStreamWithRetry</span>(<span class="r47 r">fileName</span>, <span class="i">FileMode</span>.<span class="i">OpenOrCreate</span>, <span class="i">FileAccess</span>.<span class="i">ReadWrite</span>, <span class="i">FileShare</span>.<span class="i">None</span>);
+ 
+                <span class="c">// UTF8, BOM detection, and bufferSize are the same as the basic stream constructor.</span>
+                <span class="c">// The most important parameter here is the last one, which keeps underlying stream open after StreamReader is disposed</span>
+                <span class="c">// so that it can be reused for the subsequent write operation.</span>
+                <b>using</b> (<span class="i">StreamReader</span> <span id="r50 rd" class="r50 r">streamRdr</span> = <b>new</b> <span class="i">StreamReader</span>(<span class="r49 r">fs</span>, <span class="i">Encoding</span>.<span class="i">UTF8</span>, <span class="i">detectEncodingFromByteOrderMarks</span>: <b>true</b>, <span class="i">bufferSize</span>: 1024, <span class="i">leaveOpen</span>: <b>true</b>))
+                <b>using</b> (<span class="i">JsonTextReader</span> <span id="r51 rd" class="r51 r">jsonReader</span> = <b>new</b> <span class="i">JsonTextReader</span>(<span class="r50 r">streamRdr</span>))
+                {
+                    <span class="c">// Safely determines whether there is content to read from the file</span>
+                    <b>bool</b> <span id="r52 rd" class="r52 r">isReadSuccess</span> = <span class="r51 r">jsonReader</span>.<span class="i">Read</span>();
+                    <b>if</b> (<span class="r52 r">isReadSuccess</span>)
+                    {
+                        <span class="c">// Read the stream into a root JObject for manipulation</span>
+                        <span class="r48 r">jsonObject</span> = <a href="#5cb55411a987055b" class="i field">serializer</a>.<span class="i">Deserialize</span>&lt;<span class="i">JObject</span>&gt;(<span class="r51 r">jsonReader</span>);
+                        <span class="i">JProperty</span> <span id="r53 rd" class="r53 r">propertyToModify</span> = <span class="r48 r">jsonObject</span>.<span class="i">Property</span>(<span class="r44 r">key</span>);
+ 
+                        <b>if</b> (<span class="r53 r">propertyToModify</span> == <b>null</b>)
+                        {
+                            <span class="c">// The property doesn&#39;t exist, so add it</span>
+                            <b>if</b> (<span class="r46 r">addValue</span>)
+                            {
+                                <span class="r48 r">jsonObject</span>.<span class="i">Add</span>(<b>new</b> <span class="i">JProperty</span>(<span class="r44 r">key</span>, <span class="r45 r">value</span>));
+                            }
+                            <span class="c">// else the property doesn&#39;t exist so there is nothing to remove</span>
+                        }
+                        <b>else</b>
+                        {
+                            <span class="c">// The property exists</span>
+                            <b>if</b> (<span class="r46 r">addValue</span>)
+                            {
+                                <span class="r53 r">propertyToModify</span>.<span class="i">Replace</span>(<b>new</b> <span class="i">JProperty</span>(<span class="r44 r">key</span>, <span class="r45 r">value</span>));
+                            }
+                            <b>else</b>
+                            {
+                                <span class="r53 r">propertyToModify</span>.<span class="i">Remove</span>();
+                            }
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// The file doesn&#39;t already exist and we want to write to it or it exists with no content.</span>
+                        <span class="c">// A new file will be created that contains only this value.</span>
+                        <span class="c">// If the file doesn&#39;t exist and a we don&#39;t want to write to it, no action is needed.</span>
+                        <b>if</b> (<span class="r46 r">addValue</span>)
+                        {
+                            <span class="r48 r">jsonObject</span> = <b>new</b> <span class="i">JObject</span>(<b>new</b> <span class="i">JProperty</span>(<span class="r44 r">key</span>, <span class="r45 r">value</span>));
+                        }
+                        <b>else</b>
+                        {
+                            <b>return</b>;
+                        }
+                    }
+                }
+ 
+                <span class="c">// Reset the stream position to the beginning so that the</span>
+                <span class="c">// changes to the file can be written to disk</span>
+                <span class="r49 r">fs</span>.<span class="i">Seek</span>(0, <span class="i">SeekOrigin</span>.<span class="i">Begin</span>);
+ 
+                <span class="c">// Update the file with new content</span>
+                <b>using</b> (<span class="i">StreamWriter</span> <span id="r54 rd" class="r54 r">streamWriter</span> = <b>new</b> <span class="i">StreamWriter</span>(<span class="r49 r">fs</span>))
+                <b>using</b> (<span class="i">JsonTextWriter</span> <span id="r55 rd" class="r55 r">jsonWriter</span> = <b>new</b> <span class="i">JsonTextWriter</span>(<span class="r54 r">streamWriter</span>))
+                {
+                    <span class="c">// The entire document exists within the root JObject.</span>
+                    <span class="c">// I just need to write that object to produce the document.</span>
+                    <span class="r48 r">jsonObject</span>.<span class="i">WriteTo</span>(<span class="r55 r">jsonWriter</span>);
+ 
+                    <span class="c">// This trims the file if the file shrank. If the file grew,</span>
+                    <span class="c">// it is a no-op. The purpose is to trim extraneous characters</span>
+                    <span class="c">// from the file stream when the resultant JObject is smaller</span>
+                    <span class="c">// than the input JObject.</span>
+                    <span class="r49 r">fs</span>.<span class="i">SetLength</span>(<span class="r49 r">fs</span>.<span class="i">Position</span>);
+                }
+ 
+                <span class="c">// Refresh the configuration cache.</span>
+                <span class="i">Interlocked</span>.<span class="i">Exchange</span>(<b>ref</b> <a href="#73ca8e22ad1a32ee" class="i field">configRoots</a>[(<b>int</b>)<span class="r43 r">scope</span>], <span class="r48 r">jsonObject</span>);
+            }
+            <b>finally</b>
+            {
+                <a href="#970305b100bc2a5d" class="i field">fileLock</a>.<span class="i">ExitWriteLock</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> TODO: Should this return success, fail, or throw?</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r56 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The type of value to write.</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The ConfigScope of the file to update.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r58 r">key</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The string key of the value.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r59 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The value to write.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="15313f00d7d3638c" href="../R/15313f00d7d3638c.html" target="n" data-glyph="76,1" class="i method">WriteValueToFile</a>&lt;<span id="r56 rd t" class="r56 r t">T</span>&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r57 rd" class="r57 r">scope</span>, <b>string</b> <span id="r58 rd" class="r58 r">key</span>, <span class="r56 r t">T</span> <span id="r59 rd" class="r59 r">value</span>)
+        {
+            <b>if</b> (<span class="r57 r">scope</span> == <a href="#377f34beb5e362cf" class="t t">ConfigScope</a>.<a href="#2486a7ab834532b3" class="i field">CurrentUser</a> &amp;&amp; !<span class="i">Directory</span>.<span class="i">Exists</span>(<a href="#3da00f5091385071" class="i field">perUserConfigDirectory</a>))
+            {
+                <span class="i">Directory</span>.<span class="i">CreateDirectory</span>(<a href="#3da00f5091385071" class="i field">perUserConfigDirectory</a>);
+            }
+ 
+            <a href="#b23f21ac6943a49c" class="i method">UpdateValueInFile</a>&lt;<span class="r56 r t">T</span>&gt;(<span class="r57 r">scope</span>, <span class="r58 r">key</span>, <span class="r59 r">value</span>, <b>true</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> TODO: Should this return success, fail, or throw?</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">typeparam</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r t">T</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The type of value to remove.</span><span class="c">&lt;/</span><span class="c">typeparam</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">scope</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The ConfigScope of the file to update.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">key</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The string key of the value.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="69c5666dce5f66eb" href="../R/69c5666dce5f66eb.html" target="n" data-glyph="76,1" class="i method">RemoveValueFromFile</a>&lt;<span id="r60 rd t" class="r60 r t">T</span>&gt;(<a href="#377f34beb5e362cf" class="t t">ConfigScope</a> <span id="r61 rd" class="r61 r">scope</span>, <b>string</b> <span id="r62 rd" class="r62 r">key</span>)
+        {
+            <b>string</b> <span id="r63 rd" class="r63 r">fileName</span> = <a href="#92ebddebbe69b281" class="i method">GetConfigFilePath</a>(<span class="r61 r">scope</span>);
+            <span class="c">// Optimization: If the file doesn&#39;t exist, there is nothing to remove</span>
+            <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r63 r">fileName</span>))
+            {
+                <a href="#b23f21ac6943a49c" class="i method">UpdateValueInFile</a>&lt;<span class="r60 r t">T</span>&gt;(<span class="r61 r">scope</span>, <span class="r62 r">key</span>, <b>default</b>(<span class="r60 r t">T</span>), <b>false</b>);
+            }
+        }
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> GroupPolicy Configs
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The GroupPolicy related settings used in PowerShell are as follows in Registry:</span>
+    <span class="c">///</span><span class="c">  - Software\Policies\Microsoft\PowerShellCore -- { EnableScripts (0 or 1); ExecutionPolicy (string) }</span>
+    <span class="c">///</span><span class="c">      SubKeys                  Name-Value-Pairs</span>
+    <span class="c">///</span><span class="c">      - ScriptBlockLogging     { EnableScriptBlockLogging (0 or 1); EnableScriptBlockInvocationLogging (0 or 1) }</span>
+    <span class="c">///</span><span class="c">      - ModuleLogging          { EnableModuleLogging (0 or 1); ModuleNames (string[]) }</span>
+    <span class="c">///</span><span class="c">      - Transcription          { EnableTranscripting (0 or 1); OutputDirectory (string); EnableInvocationHeader (0 or 1) }</span>
+    <span class="c">///</span><span class="c">      - UpdatableHelp          { DefaultSourcePath (string) }</span>
+    <span class="c">///</span><span class="c">      - ConsoleSessionConfiguration { EnableConsoleSessionConfiguration (0 or 1); ConsoleSessionConfigurationName (string) }</span>
+    <span class="c">///</span><span class="c">  - Software\Policies\Microsoft\Windows\EventLog</span>
+    <span class="c">///</span><span class="c">     SubKeys                   Name-Value-Pairs</span>
+    <span class="c">///</span><span class="c">      - ProtectedEventLogging  { EnableProtectedEventLogging (0 or 1); EncryptionCertificate (string[]) }</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> The JSON representation is in sync with the &#39;PowerShellPolicies&#39; type. Here is an example:</span>
+    <span class="c">///</span><span class="c"> {</span>
+    <span class="c">///</span><span class="c">   &quot;PowerShellPolicies&quot;: {</span>
+    <span class="c">///</span><span class="c">     &quot;ScriptExecution&quot;: {</span>
+    <span class="c">///</span><span class="c">       &quot;ExecutionPolicy&quot;: &quot;RemoteSigned&quot;</span>
+    <span class="c">///</span><span class="c">     },</span>
+    <span class="c">///</span><span class="c">     &quot;ScriptBlockLogging&quot;: {</span>
+    <span class="c">///</span><span class="c">       &quot;EnableScriptBlockInvocationLogging&quot;: true,</span>
+    <span class="c">///</span><span class="c">       &quot;EnableScriptBlockLogging&quot;: false</span>
+    <span class="c">///</span><span class="c">     },</span>
+    <span class="c">///</span><span class="c">     &quot;ProtectedEventLogging&quot;: {</span>
+    <span class="c">///</span><span class="c">       &quot;EnableProtectedEventLogging&quot;: false,</span>
+    <span class="c">///</span><span class="c">       &quot;EncryptionCertificate&quot;: [</span>
+    <span class="c">///</span><span class="c">         &quot;Joe&quot;</span>
+    <span class="c">///</span><span class="c">       ]</span>
+    <span class="c">///</span><span class="c">     },</span>
+    <span class="c">///</span><span class="c">     &quot;Transcription&quot;: {</span>
+    <span class="c">///</span><span class="c">       &quot;EnableTranscripting&quot;: true,</span>
+    <span class="c">///</span><span class="c">       &quot;EnableInvocationHeader&quot;: true,</span>
+    <span class="c">///</span><span class="c">       &quot;OutputDirectory&quot;: &quot;c:\\tmp&quot;</span>
+    <span class="c">///</span><span class="c">     },</span>
+    <span class="c">///</span><span class="c">     &quot;UpdatableHelp&quot;: {</span>
+    <span class="c">///</span><span class="c">       &quot;DefaultSourcePath&quot;: &quot;f:\\temp&quot;</span>
+    <span class="c">///</span><span class="c">     },</span>
+    <span class="c">///</span><span class="c">     &quot;ConsoleSessionConfiguration&quot;: {</span>
+    <span class="c">///</span><span class="c">       &quot;EnableConsoleSessionConfiguration&quot;: true,</span>
+    <span class="c">///</span><span class="c">       &quot;ConsoleSessionConfigurationName&quot;: &quot;name&quot;</span>
+    <span class="c">///</span><span class="c">     }</span>
+    <span class="c">///</span><span class="c">   }</span>
+    <span class="c">///</span><span class="c"> }</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="e7c16de5b71ffcc1" href="../R/e7c16de5b71ffcc1.html" target="n" data-glyph="2,0" class="t t"><span id="bbc1941dc049821a">PowerShellPolicies</span></a>
+    {
+        <b>public</b> <a href="#e6a5eb5440f63458" class="t t">ScriptExecution</a> <a id="f2ea1eba8b279f4e" href="../R/f2ea1eba8b279f4e.html" target="n" data-glyph="102,1" class="i property">ScriptExecution</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public</b> <a href="#77a0f8dab4448573" class="t t">ScriptBlockLogging</a> <a id="e850bc12e3db81cf" href="../R/e850bc12e3db81cf.html" target="n" data-glyph="102,1" class="i property">ScriptBlockLogging</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public</b> <a href="#6a0db7ae0b44cb93" class="t t">ModuleLogging</a> <a id="dac515fd04e45e6e" href="../R/dac515fd04e45e6e.html" target="n" data-glyph="102,1" class="i property">ModuleLogging</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public</b> <a href="#b80e130b16229ecc" class="t t">ProtectedEventLogging</a> <a id="455b654df4e7f120" href="../R/455b654df4e7f120.html" target="n" data-glyph="102,1" class="i property">ProtectedEventLogging</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public</b> <a href="#d275218ef3d9ed7d" class="t t">Transcription</a> <a id="3eb9c8a49e62b42b" href="../R/3eb9c8a49e62b42b.html" target="n" data-glyph="102,1" class="i property">Transcription</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public</b> <a href="#212375668f08d542" class="t t">UpdatableHelp</a> <a id="ff78d7401e9556ab" href="../R/ff78d7401e9556ab.html" target="n" data-glyph="102,1" class="i property">UpdatableHelp</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public</b> <a href="#8b911683783ef1aa" class="t t">ConsoleSessionConfiguration</a> <a id="168d66565d36487b" href="../R/168d66565d36487b.html" target="n" data-glyph="102,1" class="i property">ConsoleSessionConfiguration</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <b>internal abstract class</b> <a id="9f84b38dbcf6f535" href="../R/9f84b38dbcf6f535.html" target="n" data-glyph="2,0" class="t t"><span id="8f943eff4385ee7f">PolicyBase</span></a> { }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about ScriptExecution.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="e6a5eb5440f63458" href="../R/e6a5eb5440f63458.html" target="n" data-glyph="2,0" class="t t"><span id="2b9ed434f89513cf">ScriptExecution</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public string</b> <a id="cd8bc0b249cea0f0" href="../R/cd8bc0b249cea0f0.html" target="n" data-glyph="102,1" class="i property">ExecutionPolicy</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public bool</b>? <a id="ca722736c69691a0" href="../R/ca722736c69691a0.html" target="n" data-glyph="102,1" class="i property">EnableScripts</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about ScriptBlockLogging.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="77a0f8dab4448573" href="../R/77a0f8dab4448573.html" target="n" data-glyph="2,0" class="t t"><span id="9377212c97f92695">ScriptBlockLogging</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public bool</b>? <a id="9d95dbdd96e5f65b" href="../R/9d95dbdd96e5f65b.html" target="n" data-glyph="102,1" class="i property">EnableScriptBlockInvocationLogging</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public bool</b>? <a id="86de5873845e657b" href="../R/86de5873845e657b.html" target="n" data-glyph="102,1" class="i property">EnableScriptBlockLogging</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about ModuleLogging.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="6a0db7ae0b44cb93" href="../R/6a0db7ae0b44cb93.html" target="n" data-glyph="2,0" class="t t"><span id="9fcfa9a7c793b516">ModuleLogging</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public bool</b>? <a id="5aefa87f5b75f17f" href="../R/5aefa87f5b75f17f.html" target="n" data-glyph="102,1" class="i property">EnableModuleLogging</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public string</b>[] <a id="4370c7dc54327998" href="../R/4370c7dc54327998.html" target="n" data-glyph="102,1" class="i property">ModuleNames</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about Transcription.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="d275218ef3d9ed7d" href="../R/d275218ef3d9ed7d.html" target="n" data-glyph="2,0" class="t t"><span id="fa9e28f2f5db6214">Transcription</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public bool</b>? <a id="b95f4913258ff578" href="../R/b95f4913258ff578.html" target="n" data-glyph="102,1" class="i property">EnableTranscripting</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public bool</b>? <a id="17c9dbd86d7b8dbf" href="../R/17c9dbd86d7b8dbf.html" target="n" data-glyph="102,1" class="i property">EnableInvocationHeader</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public string</b> <a id="10bfc69615da1c88" href="../R/10bfc69615da1c88.html" target="n" data-glyph="102,1" class="i property">OutputDirectory</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about UpdatableHelp.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="212375668f08d542" href="../R/212375668f08d542.html" target="n" data-glyph="2,0" class="t t"><span id="01b4b920e3c79268">UpdatableHelp</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public bool</b>? <a id="a1518fcdd1619f36" href="../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">EnableUpdateHelpDefaultSourcePath</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public string</b> <a id="226a0fc2c22cd6ba" href="../R/226a0fc2c22cd6ba.html" target="n" data-glyph="102,1" class="i property">DefaultSourcePath</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about ConsoleSessionConfiguration.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="8b911683783ef1aa" href="../R/8b911683783ef1aa.html" target="n" data-glyph="2,0" class="t t"><span id="cc9b2caad7ded953">ConsoleSessionConfiguration</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public bool</b>? <a id="825b43fc0d2c5b03" href="../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">EnableConsoleSessionConfiguration</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public string</b> <a id="86b3db3d96500e2a" href="../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">ConsoleSessionConfigurationName</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Setting about ProtectedEventLogging.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="b80e130b16229ecc" href="../R/b80e130b16229ecc.html" target="n" data-glyph="2,0" class="t t"><span id="4c6ac53a0b4c2f60">ProtectedEventLogging</span></a> : <a href="#9f84b38dbcf6f535" class="t t">PolicyBase</a>
+    {
+        <b>public bool</b>? <a id="faef4e99db8e36a1" href="../R/faef4e99db8e36a1.html" target="n" data-glyph="102,1" class="i property">EnableProtectedEventLogging</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>public string</b>[] <a id="5611c7a6791c44f9" href="../R/5611c7a6791c44f9.html" target="n" data-glyph="102,1" class="i property">EncryptionCertificate</a> { <b>get</b>; <b>set</b>; }
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+}
+</pre></td></tr></table></div></body></html>

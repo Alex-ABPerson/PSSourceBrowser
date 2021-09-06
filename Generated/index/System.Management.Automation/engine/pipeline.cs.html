@@ -1,0 +1,1605 @@
+﻿<!DOCTYPE html>
+<html><head><title>pipeline.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(1596);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/pipeline.cs" target="_top">engine\pipeline.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">ExceptionServices</span>;
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Telemetry</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 1634, 1691 <span class="c">// Stops compiler from warning about unknown warnings</span>
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Loads InternalCommand objects and executes them.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The PipelineProcessor class is not thread-safe, so methods such as</span>
+    <span class="c">///</span><span class="c"> AddCommand and SynchronousExecute should not be called</span>
+    <span class="c">///</span><span class="c"> simultaneously.  While SynchronousExecute is running, it may access</span>
+    <span class="c">///</span><span class="c"> ExternalInput, ExternalSuccessOutput and ExternalErrorOutput, and</span>
+    <span class="c">///</span><span class="c"> those objects are thread-safe.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="5e576bcabfa5c82b" href="../R/5e576bcabfa5c82b.html" target="n" data-glyph="2,0" class="t t"><span id="e10044f5197bf4f2">PipelineProcessor</span></a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> private_members
+ 
+        <b>private</b> <span class="i">List</span>&lt;<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a>&gt; <a id="0b6f0cf08a6ad2ad" href="../R/0b6f0cf08a6ad2ad.html" target="n" data-glyph="46,1" class="i field">_commands</a> = <b>new</b> <span class="i">List</span>&lt;<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a>&gt;();
+        <b>private</b> <span class="i">List</span>&lt;<a href="#5e576bcabfa5c82b" class="t t">PipelineProcessor</a>&gt; <a id="b0a3a8b9cb215fe7" href="../R/b0a3a8b9cb215fe7.html" target="n" data-glyph="46,1" class="i field">_redirectionPipes</a>;
+        <b>private</b> <a href="../utils/IObjectReader.cs.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<b>object</b>&gt; <a id="eae9fdf990b6f303" href="../R/eae9fdf990b6f303.html" target="n" data-glyph="46,1" class="i field">_externalInputPipe</a>;
+        <b>private</b> <a href="../utils/IObjectWriter.cs.html#37301df630b2ae9a" class="t t">PipelineWriter</a> <a id="a11c070f636dd5f1" href="../R/a11c070f636dd5f1.html" target="n" data-glyph="46,1" class="i field">_externalSuccessOutput</a>;
+        <b>private</b> <a href="../utils/IObjectWriter.cs.html#37301df630b2ae9a" class="t t">PipelineWriter</a> <a id="c136d414abe4a656" href="../R/c136d414abe4a656.html" target="n" data-glyph="46,1" class="i field">_externalErrorOutput</a>;
+        <b>private bool</b> <a id="b1f62184c9bd8e60" href="../R/b1f62184c9bd8e60.html" target="n" data-glyph="46,1" class="i field">_executionStarted</a> = <b>false</b>;
+        <b>private bool</b> <a id="8ebaa6ff4361acf5" href="../R/8ebaa6ff4361acf5.html" target="n" data-glyph="46,1" class="i field">_stopping</a> = <b>false</b>;
+        <b>private</b> <a href="SessionStateScope.cs.html#460261155e0163cb" class="t t">SessionStateScope</a> <a id="9bd44be1f7e20e85" href="../R/9bd44be1f7e20e85.html" target="n" data-glyph="46,1" class="i field">_executionScope</a>;
+ 
+        <b>private</b> <span class="i">ExceptionDispatchInfo</span> <a id="571fb85ca58af908" href="../R/571fb85ca58af908.html" target="n" data-glyph="46,1" class="i field">_firstTerminatingError</a> = <b>null</b>;
+ 
+        <b>private bool</b> <a id="2ed0d608ac77f10b" href="../R/2ed0d608ac77f10b.html" target="n" data-glyph="46,1" class="i field">_linkedSuccessOutput</a> = <b>false</b>;
+        <b>private bool</b> <a id="fdec66cf5e97f5ca" href="../R/fdec66cf5e97f5ca.html" target="n" data-glyph="46,1" class="i field">_linkedErrorOutput</a> = <b>false</b>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CORECLR</span> <span class="c">// Impersonation Not Supported On CSS</span>
+<span class="e">        // This is the security context when the pipeline was allocated
+        internal System.Security.SecurityContext SecurityContext =
+            System.Security.SecurityContext.Capture();
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> private_members
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDispose
+ 
+        <b>private bool</b> <a id="aa19ca93e47da4ca" href="../R/aa19ca93e47da4ca.html" target="n" data-glyph="46,1" class="i field">_disposed</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When the command is complete, PipelineProcessor will be</span>
+        <span class="c">///</span><span class="c"> disposed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is only public because it implements an interface method.</span>
+        <span class="c">///</span><span class="c"> The class itself is internal.</span>
+        <span class="c">///</span><span class="c"> We use the standard IDispose pattern.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="3193eaf8bd4e8783" href="../R/3193eaf8bd4e8783.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#734cd7721e5c8872" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#5e576bcabfa5c82b" class="k">this</a>);
+        }
+ 
+        <b>private void</b> <a id="734cd7721e5c8872" href="../R/734cd7721e5c8872.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r0 rd" class="r0 r">disposing</span>)
+        {
+            <b>if</b> (<a href="#aa19ca93e47da4ca" class="i field">_disposed</a>)
+                <b>return</b>;
+ 
+            <b>if</b> (<span class="r0 r">disposing</span>)
+            {
+                <a href="#c96fad1975bcc552" class="i method">DisposeCommands</a>();
+                <a href="#970426a8f51fa86f" class="i field">_localPipeline</a> = <b>null</b>;
+                <a href="#a11c070f636dd5f1" class="i field">_externalSuccessOutput</a> = <b>null</b>;
+                <a href="#c136d414abe4a656" class="i field">_externalErrorOutput</a> = <b>null</b>;
+                <a href="#9bd44be1f7e20e85" class="i field">_executionScope</a> = <b>null</b>;
+                <a href="#f55ff72fb9bb195b" class="i field">_eventLogBuffer</a> = <b>null</b>;
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CORECLR</span> <span class="c">// Impersonation Not Supported On CSS</span>
+<span class="e">                SecurityContext.Dispose();
+                SecurityContext = null;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+            }
+ 
+            <a href="#aa19ca93e47da4ca" class="i field">_disposed</a> = <b>true</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDispose
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Execution Logging
+ 
+        <b>private bool</b> <a id="25c73b6c65892f32" href="../R/25c73b6c65892f32.html" target="n" data-glyph="46,1" class="i field">_executionFailed</a> = <b>false</b>;
+ 
+        <b>internal</b> <span class="i">List</span>&lt;<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a>&gt; <a id="0aa8a898bb66d1ac" href="../R/0aa8a898bb66d1ac.html" target="n" data-glyph="104,1" class="i property">Commands</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>; }
+        }
+ 
+        <b>internal bool</b> <a id="813a2622f5f1116c" href="../R/813a2622f5f1116c.html" target="n" data-glyph="104,1" class="i property">ExecutionFailed</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#25c73b6c65892f32" class="i field">_executionFailed</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#25c73b6c65892f32" class="i field">_executionFailed</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>internal void</b> <a id="16d79ceba031a811" href="../R/16d79ceba031a811.html" target="n" data-glyph="74,1" class="i method">LogExecutionInfo</a>(<a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r1 rd" class="r1 r">invocationInfo</span>, <b>string</b> <span id="r2 rd" class="r2 r">text</span>)
+        {
+            <b>string</b> <span id="r3 rd" class="r3 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">PipelineStrings</span>.<span class="i">PipelineExecutionInformation</span>, <a href="#b8ed4174904b3bed" class="i method">GetCommand</a>(<span class="r1 r">invocationInfo</span>), <span class="r2 r">text</span>);
+            <a href="#8ce4c73b8d3b554b" class="i method">Log</a>(<span class="r3 r">message</span>, <span class="r1 r">invocationInfo</span>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#32a0a11dad40a15d" class="i field">Started</a>);
+        }
+ 
+        <b>internal void</b> <a id="a6769fff89d74a64" href="../R/a6769fff89d74a64.html" target="n" data-glyph="74,1" class="i method">LogExecutionComplete</a>(<a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r4 rd" class="r4 r">invocationInfo</span>, <b>string</b> <span id="r5 rd" class="r5 r">text</span>)
+        {
+            <b>string</b> <span id="r6 rd" class="r6 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">PipelineStrings</span>.<span class="i">PipelineExecutionInformation</span>, <a href="#b8ed4174904b3bed" class="i method">GetCommand</a>(<span class="r4 r">invocationInfo</span>), <span class="r5 r">text</span>);
+            <a href="#8ce4c73b8d3b554b" class="i method">Log</a>(<span class="r6 r">message</span>, <span class="r4 r">invocationInfo</span>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#0a81c53af42e78ca" class="i field">Complete</a>);
+        }
+ 
+        <b>internal void</b> <a id="4be835bee8c12982" href="../R/4be835bee8c12982.html" target="n" data-glyph="74,1" class="i method">LogPipelineComplete</a>()
+        {
+            <a href="#8ce4c73b8d3b554b" class="i method">Log</a>(<b>null</b>, <b>null</b>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#680d1d14f9a3aef2" class="i field">PipelineComplete</a>);
+        }
+ 
+        <b>internal void</b> <a id="1d7dbd966ef093e2" href="../R/1d7dbd966ef093e2.html" target="n" data-glyph="74,1" class="i method">LogExecutionParameterBinding</a>(<a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r7 rd" class="r7 r">invocationInfo</span>, <b>string</b> <span id="r8 rd" class="r8 r">parameterName</span>, <b>string</b> <span id="r9 rd" class="r9 r">parameterValue</span>)
+        {
+            <b>string</b> <span id="r10 rd" class="r10 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">PipelineStrings</span>.<span class="i">PipelineExecutionParameterBinding</span>, <a href="#b8ed4174904b3bed" class="i method">GetCommand</a>(<span class="r7 r">invocationInfo</span>), <span class="r8 r">parameterName</span>, <span class="r9 r">parameterValue</span>);
+            <a href="#8ce4c73b8d3b554b" class="i method">Log</a>(<span class="r10 r">message</span>, <span class="r7 r">invocationInfo</span>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#d1a2cc4b1821c434" class="i field">ParameterBinding</a>);
+        }
+ 
+        <b>internal void</b> <a id="6256b8c3a6666edf" href="../R/6256b8c3a6666edf.html" target="n" data-glyph="74,1" class="i method">LogExecutionError</a>(<a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r11 rd" class="r11 r">invocationInfo</span>, <a href="ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r12 rd" class="r12 r">errorRecord</span>)
+        {
+            <b>if</b> (<span class="r12 r">errorRecord</span> == <b>null</b>)
+                <b>return</b>;
+ 
+            <b>string</b> <span id="r13 rd" class="r13 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">PipelineStrings</span>.<span class="i">PipelineExecutionNonTerminatingError</span>, <a href="#b8ed4174904b3bed" class="i method">GetCommand</a>(<span class="r11 r">invocationInfo</span>), <span class="r12 r">errorRecord</span>.<a href="ErrorPackage.cs.html#cab659be098926dd" class="i method">ToString</a>());
+            <a href="#8ce4c73b8d3b554b" class="i method">Log</a>(<span class="r13 r">message</span>, <span class="r11 r">invocationInfo</span>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#06783564631b9f63" class="i field">Error</a>);
+        }
+ 
+        <b>private bool</b> <a id="881df344b9ccd9d6" href="../R/881df344b9ccd9d6.html" target="n" data-glyph="46,1" class="i field">_terminatingErrorLogged</a> = <b>false</b>;
+ 
+        <b>internal void</b> <a id="fbdb3679f83dd7e5" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">LogExecutionException</a>(<span class="i">Exception</span> <span id="r14 rd" class="r14 r">exception</span>)
+        {
+            <a href="#25c73b6c65892f32" class="i field">_executionFailed</a> = <b>true</b>;
+ 
+            <span class="c">// Only log one terminating error for pipeline execution.</span>
+            <b>if</b> (<a href="#881df344b9ccd9d6" class="i field">_terminatingErrorLogged</a>)
+                <b>return</b>;
+ 
+            <a href="#881df344b9ccd9d6" class="i field">_terminatingErrorLogged</a> = <b>true</b>;
+ 
+            <b>if</b> (<span class="r14 r">exception</span> == <b>null</b>)
+                <b>return</b>;
+ 
+            <b>string</b> <span id="r15 rd" class="r15 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">PipelineStrings</span>.<span class="i">PipelineExecutionTerminatingError</span>, <a href="#a9cfef91002d787f" class="i method">GetCommand</a>(<span class="r14 r">exception</span>), <span class="r14 r">exception</span>.<span class="i">Message</span>);
+            <a href="#8ce4c73b8d3b554b" class="i method">Log</a>(<span class="r15 r">message</span>, <b>null</b>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#06783564631b9f63" class="i field">Error</a>);
+        }
+ 
+        <b>private static string</b> <a id="b8ed4174904b3bed" href="../R/b8ed4174904b3bed.html" target="n" data-glyph="76,1" class="i method">GetCommand</a>(<a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r16 rd" class="r16 r">invocationInfo</span>)
+        {
+            <b>if</b> (<span class="r16 r">invocationInfo</span> == <b>null</b>)
+                <b>return</b> <b>string</b>.<span class="i">Empty</span>;
+ 
+            <b>if</b> (<span class="r16 r">invocationInfo</span>.<a href="InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a> != <b>null</b>)
+            {
+                <b>return</b> <span class="r16 r">invocationInfo</span>.<a href="InvocationInfo.cs.html#8edab65bf1913897" class="i property">MyCommand</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>;
+            }
+ 
+            <b>return</b> <b>string</b>.<span class="i">Empty</span>;
+        }
+ 
+        <b>private static string</b> <a id="a9cfef91002d787f" href="../R/a9cfef91002d787f.html" target="n" data-glyph="76,1" class="i method">GetCommand</a>(<span class="i">Exception</span> <span id="r17 rd" class="r17 r">exception</span>)
+        {
+            <a href="ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a> <span id="r18 rd" class="r18 r">icer</span> = <span class="r17 r">exception</span> <b>as</b> <a href="ErrorPackage.cs.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a>;
+            <b>if</b> (<span class="r18 r">icer</span> != <b>null</b> &amp;&amp; <span class="r18 r">icer</span>.<a href="ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a> != <b>null</b>)
+                <b>return</b> <a href="#b8ed4174904b3bed" class="i method">GetCommand</a>(<span class="r18 r">icer</span>.<a href="ErrorPackage.cs.html#cef340f272a30c6b" class="i property">ErrorRecord</a>.<a href="ErrorPackage.cs.html#fd1ac7b3462d4426" class="i property">InvocationInfo</a>);
+ 
+            <b>return</b> <b>string</b>.<span class="i">Empty</span>;
+        }
+ 
+        <b>private void</b> <a id="8ce4c73b8d3b554b" href="../R/8ce4c73b8d3b554b.html" target="n" data-glyph="76,1" class="i method">Log</a>(<b>string</b> <span id="r19 rd" class="r19 r">logElement</span>, <a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r20 rd" class="r20 r">invocation</span>, <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a> <span id="r21 rd" class="r21 r">pipelineExecutionStatus</span>)
+        {
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>.<a href="hostifaces/MshHostUserInterface.cs.html#3fd0cd9d58631820" class="t t">PSHostUserInterface</a> <span id="r22 rd" class="r22 r">hostInterface</span> = <b>null</b>;
+            <b>if</b> (<a href="#5e576bcabfa5c82b" class="k">this</a>.<a href="#3569b3e63d4a06f7" class="i property">LocalPipeline</a> != <b>null</b>)
+            {
+                <span class="r22 r">hostInterface</span> = <a href="#5e576bcabfa5c82b" class="k">this</a>.<a href="#3569b3e63d4a06f7" class="i property">LocalPipeline</a>.<a href="hostifaces/pipelinebase.cs.html#32c8316e2a0e6851" class="i property">Runspace</a>.<a href="hostifaces/Connection.cs.html#ade98325afa63ad9" class="i property">GetExecutionContext</a>.<a href="ExecutionContext.cs.html#24a4a46de18d1004" class="i property">EngineHostInterface</a>.<a href="hostifaces/InternalHost.cs.html#d35ea6d8b175fa76" class="i property">UI</a>;
+            }
+ 
+            <span class="c">// Acknowledge command completion</span>
+            <b>if</b> (<span class="r22 r">hostInterface</span> != <b>null</b>)
+            {
+                <b>if</b> (<span class="r21 r">pipelineExecutionStatus</span> == <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#0a81c53af42e78ca" class="i field">Complete</a>)
+                {
+                    <span class="r22 r">hostInterface</span>.<a href="hostifaces/MshHostUserInterface.cs.html#8410249b6597a203" class="i method">TranscribeCommandComplete</a>(<span class="r20 r">invocation</span>);
+                    <b>return</b>;
+                }
+                <b>else</b> <b>if</b> (<span class="r21 r">pipelineExecutionStatus</span> == <a href="#afd58a5f44a0aaaa" class="t t">PipelineExecutionStatus</a>.<a href="#680d1d14f9a3aef2" class="i field">PipelineComplete</a>)
+                {
+                    <span class="r22 r">hostInterface</span>.<a href="hostifaces/MshHostUserInterface.cs.html#186e29d2134687da" class="i method">TranscribePipelineComplete</a>();
+                    <b>return</b>;
+                }
+            }
+ 
+            <span class="c">// Log the cmdlet invocation execution details if we didn&#39;t have an associated script line with it.</span>
+            <b>if</b> ((<span class="r20 r">invocation</span> == <b>null</b>) || <b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r20 r">invocation</span>.<a href="InvocationInfo.cs.html#d8a2387de19e4425" class="i property">Line</a>))
+            {
+                <b>if</b> (<span class="r22 r">hostInterface</span> != <b>null</b>)
+                {
+                    <span class="r22 r">hostInterface</span>.<a href="hostifaces/MshHostUserInterface.cs.html#7188fb1935e5bf88" class="i method">TranscribeCommand</a>(<span class="r19 r">logElement</span>, <span class="r20 r">invocation</span>);
+                }
+            }
+ 
+            <b>if</b> (<a href="#866dc3b7e943a0a9" class="i field">_needToLog</a> &amp;&amp; !<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r19 r">logElement</span>))
+            {
+                <a href="#f55ff72fb9bb195b" class="i field">_eventLogBuffer</a> ??= <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+                <a href="#f55ff72fb9bb195b" class="i field">_eventLogBuffer</a>.<span class="i">Add</span>(<span class="r19 r">logElement</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="90e0493c7a60a7bd" href="../R/90e0493c7a60a7bd.html" target="n" data-glyph="76,1" class="i method">LogToEventLog</a>()
+        {
+            <span class="c">// We check to see if there is anything in the buffer before we flush it.</span>
+            <span class="c">// Flushing the empty buffer causes a measurable performance degradation.</span>
+            <b>if</b> (<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>?.<span class="i">Count</span> &gt; 0 &amp;&amp; <a href="#f55ff72fb9bb195b" class="i field">_eventLogBuffer</a>?.<span class="i">Count</span> &gt; 0)
+            {
+                <a href="CommandBase.cs.html#26cb3aadccaa58ac" class="t t">InternalCommand</a> <span id="r23 rd" class="r23 r">firstCmd</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[0].<span class="i">Command</span>;
+                <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../logging/MshLog.cs.html#b39a599902bc101b" class="i method">LogPipelineExecutionDetailEvent</a>(
+                    <span class="r23 r">firstCmd</span>.<a href="CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>,
+                    <a href="#f55ff72fb9bb195b" class="i field">_eventLogBuffer</a>,
+                    <span class="r23 r">firstCmd</span>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+            }
+ 
+            <span class="c">// Clear the log buffer after writing the event.</span>
+            <a href="#f55ff72fb9bb195b" class="i field">_eventLogBuffer</a>?.<span class="i">Clear</span>();
+        }
+ 
+        <b>private bool</b> <a id="866dc3b7e943a0a9" href="../R/866dc3b7e943a0a9.html" target="n" data-glyph="46,1" class="i field">_needToLog</a> = <b>false</b>;
+        <b>private</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="f55ff72fb9bb195b" href="../R/f55ff72fb9bb195b.html" target="n" data-glyph="46,1" class="i field">_eventLogBuffer</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> public_methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a single InternalCommand to the end of the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Results from last pipeline stage.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> see AddCommand</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ObjectDisposedException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal int</b> <a id="b06f99a3f17ecd81" href="../R/b06f99a3f17ecd81.html" target="n" data-glyph="74,1" class="i method">Add</a>(<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r24 rd" class="r24 r">commandProcessor</span>)
+        {
+            <span class="r24 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#895cb9f77d1d9539" class="i property">PipelineProcessor</a> = <a href="#5e576bcabfa5c82b" class="k">this</a>;
+            <b>return</b> <span class="i">AddCommand</span>(<span class="r24 r">commandProcessor</span>, <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>, <span class="i">readErrorQueue</span>: <b>false</b>);
+        }
+ 
+        <b>internal void</b> <a id="498c657664cb737f" href="../R/498c657664cb737f.html" target="n" data-glyph="74,1" class="i method">AddRedirectionPipe</a>(<a href="#5e576bcabfa5c82b" class="t t">PipelineProcessor</a> <span id="r25 rd" class="r25 r">pipelineProcessor</span>)
+        {
+            <b>if</b> (<span class="r25 r">pipelineProcessor</span> == <b>null</b>) <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r25 r">pipelineProcessor</span>));
+            <b>if</b> (<a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a> == <b>null</b>)
+                <a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a> = <b>new</b> <span class="i">List</span>&lt;<a href="#5e576bcabfa5c82b" class="t t">PipelineProcessor</a>&gt;();
+            <a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a>.<span class="i">Add</span>(<span class="r25 r">pipelineProcessor</span>);
+        }
+ 
+        <span class="c">// 2004/02/28-JSnover (from spec review) ReadFromErrorQueue</span>
+        <span class="c">//   should be an int or enum to allow for more queues</span>
+        <span class="c">// 2005/03/08-JonN: This is an internal API</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add a command to the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">commandProcessor</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">readFromCommand</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Reference number of command from which to read, 0 for none.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">readErrorQueue</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Read from error queue of command readFromCommand.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Reference number of this command for use in readFromCommand.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ObjectDisposedException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> FirstCommandCannotHaveInput: </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">readFromCommand</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> must be zero</span>
+        <span class="c">///</span><span class="c">   for the first command in the pipe</span>
+        <span class="c">///</span><span class="c"> InvalidCommandNumber: there is no command numbered </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">readFromCommand</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c">   A command can only read from earlier commands; this prevents circular queues</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExecutionAlreadyStarted: pipeline has already started or completed</span>
+        <span class="c">///</span><span class="c"> PipeAlreadyTaken: the downstream pipe of command </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">readFromCommand</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c">   is already taken</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private int</b> <a id="46f770d1a43c6e43" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">AddCommand</a>(<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r26 rd" class="r26 r">commandProcessor</span>, <b>int</b> <span id="r27 rd" class="r27 r">readFromCommand</span>, <b>bool</b> <span id="r28 rd" class="r28 r">readErrorQueue</span>)
+        {
+            <b>if</b> (<span class="r26 r">commandProcessor</span> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#fbe67220ad7522a0" class="i method">NewArgumentNullException</a>(<b>nameof</b>(<span class="r26 r">commandProcessor</span>));
+            }
+ 
+            <b>if</b> (<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a> == <b>null</b>)
+            {
+                <span class="c">// &quot;_commands == null&quot;</span>
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+            }
+ 
+            <b>if</b> (<a href="#aa19ca93e47da4ca" class="i field">_disposed</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;PipelineProcessor&quot;</span>);
+            }
+ 
+            <b>if</b> (<a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">PipelineStrings</span>.<span class="i">ExecutionAlreadyStarted</span>);
+            }
+ 
+            <b>if</b> (<span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#54564bea0a55d4b0" class="i property">AddedToPipelineAlready</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">PipelineStrings</span>.<span class="i">CommandProcessorAlreadyUsed</span>);
+            }
+ 
+            <b>if</b> (<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> == 0)
+            {
+                <b>if</b> (<span class="r27 r">readFromCommand</span> != 0)
+                {
+                    <span class="c">// &quot;First command cannot have input&quot;</span>
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(
+                        <b>nameof</b>(<span class="r27 r">readFromCommand</span>),
+                        <span class="i">PipelineStrings</span>.<span class="i">FirstCommandCannotHaveInput</span>);
+                }
+ 
+                <span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#54564bea0a55d4b0" class="i property">AddedToPipelineAlready</a> = <b>true</b>;
+            }
+            <span class="c">// 2003/08/11-JonN Subsequent commands must have predecessor</span>
+            <b>else</b> <b>if</b> (<span class="r27 r">readFromCommand</span> &gt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> || <span class="r27 r">readFromCommand</span> &lt;= 0)
+            {
+                <span class="c">// &quot;invalid command number&quot;</span>
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(
+                    <b>nameof</b>(<span class="r27 r">readFromCommand</span>),
+                    <span class="i">PipelineStrings</span>.<span class="i">InvalidCommandNumber</span>);
+            }
+            <b>else</b>
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r29 rd" class="r29 r">prevcommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r27 r">readFromCommand</span> - 1] <b>as</b> <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a>;
+                <b>if</b> (<span class="r29 r">prevcommandProcessor</span> == <b>null</b> || <span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+                {
+                    <span class="c">// &quot;PipelineProcessor.AddCommand(): previous request object == null&quot;</span>
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+ 
+                <a href="Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r30 rd" class="r30 r">UpstreamPipe</span> = (<span class="r28 r">readErrorQueue</span>) ?
+                    <span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a> : <span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a>;
+                <b>if</b> (<span class="r30 r">UpstreamPipe</span> == <b>null</b>)
+                {
+                    <span class="c">// &quot;PipelineProcessor.AddCommand(): UpstreamPipe == null&quot;</span>
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+ 
+                <b>if</b> (<span class="r30 r">UpstreamPipe</span>.<a href="Pipe.cs.html#586d8abd020e1d4d" class="i property">DownstreamCmdlet</a> != <b>null</b>)
+                {
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                        <span class="i">PipelineStrings</span>.<span class="i">PipeAlreadyTaken</span>);
+                }
+ 
+                <span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#54564bea0a55d4b0" class="i property">AddedToPipelineAlready</a> = <b>true</b>;
+ 
+                <span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#2a3306bd1f3917ef" class="i property">InputPipe</a> = <span class="r30 r">UpstreamPipe</span>;
+                <span class="r30 r">UpstreamPipe</span>.<a href="Pipe.cs.html#586d8abd020e1d4d" class="i property">DownstreamCmdlet</a> = <span class="r26 r">commandProcessor</span>;
+ 
+                <span class="c">// 2004/09/14-JonN This code could be moved to SynchronousExecute</span>
+                <span class="c">//  if this setting needed to bind at a later time</span>
+                <span class="c">//  than AddCommand.</span>
+                <b>if</b> (<span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#2b01b0604d7922fc" class="i property">MergeUnclaimedPreviousErrorResults</a>)
+                {
+                    <b>for</b> (<b>int</b> <span id="r31 rd" class="r31 r">i</span> = 0; <span class="r31 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r31 r">i</span>++)
+                    {
+                        <span class="r29 r">prevcommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r31 r">i</span>];
+                        <b>if</b> (<span class="r29 r">prevcommandProcessor</span> == <b>null</b> || <span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+                        {
+                            <span class="c">// &quot;PipelineProcessor.AddCommand(): previous request object == null&quot;</span>
+                            <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                        }
+                        <span class="c">// check whether the error output is already claimed</span>
+                        <b>if</b> (<span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>.<a href="Pipe.cs.html#586d8abd020e1d4d" class="i property">DownstreamCmdlet</a> != <b>null</b>)
+                            <b>continue</b>;
+                        <b>if</b> (<span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>.<a href="Pipe.cs.html#244a8e191e44d453" class="i property">ExternalWriter</a> != <b>null</b>)
+                            <b>continue</b>;
+ 
+                        <span class="c">// Set the upstream cmdlet&#39;s error output to go down</span>
+                        <span class="c">// the same pipe as the downstream cmdlet&#39;s input</span>
+                        <span class="r29 r">prevcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a> = <span class="r30 r">UpstreamPipe</span>;
+                    }
+                }
+            }
+ 
+            <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Add</span>(<span class="r26 r">commandProcessor</span>);
+ 
+            <span class="c">// We will log event(s) about the pipeline execution details if any command in the pipeline requests that.</span>
+            <a href="#866dc3b7e943a0a9" class="i field">_needToLog</a> |= <span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#10aa6c1ae5d83a77" class="i property">LogPipelineExecutionDetail</a>;
+ 
+            <span class="c">// We give the Command a pointer back to the</span>
+            <span class="c">// PipelineProcessor so that it can check whether the</span>
+            <span class="c">// command has been stopped.</span>
+            <span class="r26 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#895cb9f77d1d9539" class="i property">PipelineProcessor</a> = <a href="#5e576bcabfa5c82b" class="k">this</a>;
+ 
+            <b>return</b> <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>;
+        }
+ 
+        <span class="c">// 2005/03/08-JonN: This is an internal API</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Execute the accumulated commands and clear the pipeline.</span>
+        <span class="c">///</span><span class="c"> SynchronousExecute does not return until all commands have</span>
+        <span class="c">///</span><span class="c"> completed.  There is no asynchronous variant; instead, once the</span>
+        <span class="c">///</span><span class="c"> pipeline is set up, the caller can spawn a thread and call</span>
+        <span class="c">///</span><span class="c"> SynchronousExecute from that thread.  This does not mean that</span>
+        <span class="c">///</span><span class="c"> PipelineProcessor is thread-safe; once SynchronousExecute is</span>
+        <span class="c">///</span><span class="c"> running, PipelineProcessor should not be accessed through any</span>
+        <span class="c">///</span><span class="c"> other means. This variant of the routine looks at it&#39;s input</span>
+        <span class="c">///</span><span class="c"> object to see if it&#39;s enumerable or not.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Input objects for first stage. If this is AutomationNull.Value, the</span>
+        <span class="c">///</span><span class="c"> first cmdlet is the beginning of the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Results from last pipeline stage.  This will be empty if</span>
+        <span class="c">///</span><span class="c"> ExternalSuccessOutput is set.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExecutionAlreadyStarted: pipeline has already started or completed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PipelineExecuteRequiresAtLeastOneCommand</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#7b242746a433b370" class="t t">CmdletInvocationException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A cmdlet encountered a terminating error</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline was stopped asynchronously</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#f896df45dff24981" class="t t">ActionPreferenceStopException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The ActionPreference.Stop or ActionPreference.Inquire policy</span>
+        <span class="c">///</span><span class="c"> triggered a terminating error.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If any parameters fail to bind,</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If any mandatory parameters are missing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/MetadataExceptions.cs.html#3bf974090c4e60a1" class="t t">MetadataException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there is an error generating the metadata for dynamic parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="ExtendedTypeSystemException.cs.html#288b83424f7afe8b" class="t t">ExtendedTypeSystemException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An error occurred clearing the error variable.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#ec3d1200bf100d3c" class="t t">HaltCommandException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> HaltCommandException will cause the command</span>
+        <span class="c">///</span><span class="c"> to stop, but should not be reported as an error.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Array</span> <a id="8a9a9e1fb869f895" href="../R/8a9a9e1fb869f895.html" target="n" data-glyph="74,1" class="i method">SynchronousExecuteEnumerate</a>(<b>object</b> <span id="r32 rd" class="r32 r">input</span>)
+        {
+            <b>if</b> (<a href="#23e1d0b242d467ac" class="i property">Stopping</a>)
+            {
+                <b>throw</b> <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#105b0214d3aab114" class="t constructor">PipelineStoppedException</a>();
+            }
+ 
+            <span class="i">ExceptionDispatchInfo</span> <span id="r33 rd" class="r33 r">toRethrowInfo</span>;
+            <b>try</b>
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r34 rd" class="r34 r">commandRequestingUpstreamCommandsToStop</span> = <b>null</b>;
+                <b>try</b>
+                {
+                    <span class="c">// If the caller specified an input object array,</span>
+                    <span class="c">// we run assuming there is an incoming &quot;stream&quot;</span>
+                    <span class="c">// of objects. This will prevent the one default call</span>
+                    <span class="c">// to ProcessRecord on the first command.</span>
+                    <a href="#3f1d3bfe705941b3" class="i method">Start</a>(<span class="r32 r">input</span> != <a href="AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>);
+ 
+                    <span class="c">// Start has already validated firstcommandProcessor</span>
+                    <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r35 rd" class="r35 r">firstCommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[0];
+ 
+                    <span class="c">// Add any input to the first command.</span>
+                    <b>if</b> (<a href="#73b2cc5cdd9cd88a" class="i property">ExternalInput</a> != <b>null</b>)
+                    {
+                        <span class="r35 r">firstCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#2a3306bd1f3917ef" class="i property">InputPipe</a>.<a href="Pipe.cs.html#cf2d71634731882c" class="i property">ExternalReader</a>
+                            = <a href="#73b2cc5cdd9cd88a" class="i property">ExternalInput</a>;
+                    }
+ 
+                    <a href="#0dac6ef5f98445da" class="i method">Inject</a>(<span class="r32 r">input</span>, <span class="r36 r">enumerate</span>: <b>true</b>);
+                }
+                <b>catch</b> (<a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a>)
+                {
+                    <a href="lang/parserutils.cs.html#3b761558ff868bf6" class="t t">StopUpstreamCommandsException</a> <span id="r37 rd" class="r37 r">stopUpstreamCommandsException</span> =
+                        <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>
+                            ? <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">SourceException</span> <b>as</b> <a href="lang/parserutils.cs.html#3b761558ff868bf6" class="t t">StopUpstreamCommandsException</a>
+                            : <b>null</b>;
+                    <b>if</b> (<span class="r37 r">stopUpstreamCommandsException</span> == <b>null</b>)
+                    {
+                        <b>throw</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> = <b>null</b>;
+                        <span class="r34 r">commandRequestingUpstreamCommandsToStop</span> = <span class="r37 r">stopUpstreamCommandsException</span>.<a href="lang/parserutils.cs.html#1135dc32e644b9de" class="i property">RequestingCommandProcessor</a>;
+                    }
+                }
+ 
+                <a href="#e663d01eb337a1b2" class="i method">DoCompleteCore</a>(<span class="r34 r">commandRequestingUpstreamCommandsToStop</span>);
+ 
+                <span class="c">// By this point, we are sure all commandProcessors hosted by the current pipelineProcess are done execution,</span>
+                <span class="c">// so if there are any redirection pipelineProcessors associated with any of those commandProcessors, we should</span>
+                <span class="c">// call DoComplete on them.</span>
+                <b>if</b> (<a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a> != <b>null</b>)
+                {
+                    <b>foreach</b> (<a href="#5e576bcabfa5c82b" class="t t">PipelineProcessor</a> <span id="r38 rd" class="r38 r">redirectPipelineProcessor</span> <b>in</b> <a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a>)
+                    {
+                        <span class="r38 r">redirectPipelineProcessor</span>.<a href="#e663d01eb337a1b2" class="i method">DoCompleteCore</a>(<b>null</b>);
+                    }
+                }
+ 
+                <b>return</b> <a href="#76fcec1c3a298f0b" class="i method">RetrieveResults</a>();
+            }
+            <b>catch</b> (<a href="../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a> <span id="r39 rd" class="r39 r">e</span>)
+            {
+                <span class="c">// The error we want to report is the first terminating error</span>
+                <span class="c">// which occurred during pipeline execution, regardless</span>
+                <span class="c">// of whether other errors occurred afterward.</span>
+                <span class="r33 r">toRethrowInfo</span> = <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> ?? <span class="i">ExceptionDispatchInfo</span>.<span class="i">Capture</span>(<span class="r39 r">e</span>);
+                <a href="#5e576bcabfa5c82b" class="k">this</a>.<span class="i">LogExecutionException</span>(<span class="r33 r">toRethrowInfo</span>.<span class="i">SourceException</span>);
+            }
+            <span class="c">// NTRAID#Windows Out Of Band Releases-929020-2006/03/14-JonN</span>
+            <b>catch</b> (<span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>.<span class="i">InvalidComObjectException</span> <span id="r40 rd" class="r40 r">comException</span>)
+            {
+                <span class="c">// The error we want to report is the first terminating error</span>
+                <span class="c">// which occurred during pipeline execution, regardless</span>
+                <span class="c">// of whether other errors occurred afterward.</span>
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+                {
+                    <span class="r33 r">toRethrowInfo</span> = <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>;
+                }
+                <b>else</b>
+                {
+                    <b>string</b> <span id="r41 rd" class="r41 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">ParserStrings</span>.<span class="i">InvalidComObjectException</span>, <span class="r40 r">comException</span>.<span class="i">Message</span>);
+                    <a href="../utils/RuntimeException.cs.html#bd88f263eb295545" class="k">var</a> <span id="r42 rd" class="r42 r">rte</span> = <b>new</b> <span class="t">RuntimeException</span>(<span class="r41 r">message</span>, <span class="r40 r">comException</span>);
+                    <span class="r42 r">rte</span>.<a href="../utils/RuntimeException.cs.html#f25affe9a215ccc0" class="i method">SetErrorId</a>(<span class="s">&quot;InvalidComObjectException&quot;</span>);
+                    <span class="r33 r">toRethrowInfo</span> = <span class="i">ExceptionDispatchInfo</span>.<span class="i">Capture</span>(<span class="r42 r">rte</span>);
+                }
+ 
+                <a href="#5e576bcabfa5c82b" class="k">this</a>.<span class="i">LogExecutionException</span>(<span class="r33 r">toRethrowInfo</span>.<span class="i">SourceException</span>);
+            }
+            <b>finally</b>
+            {
+                <a href="#c96fad1975bcc552" class="i method">DisposeCommands</a>();
+            }
+ 
+            <span class="c">// By rethrowing the exception outside of the handler,</span>
+            <span class="c">// we allow the CLR on X64/IA64 to free from the stack</span>
+            <span class="c">// the exception records related to this exception.</span>
+ 
+            <span class="c">// The only reason we should get here is if</span>
+            <span class="c">// an exception should be rethrown.</span>
+            <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r33 r">toRethrowInfo</span> != <b>null</b>, <span class="s">&quot;Alternate protocol path failure&quot;</span>);
+            <span class="r33 r">toRethrowInfo</span>.<span class="i">Throw</span>();
+            <b>return</b> <b>null</b>; <span class="c">// UNREACHABLE</span>
+        }
+ 
+        <b>private void</b> <a id="e663d01eb337a1b2" href="../R/e663d01eb337a1b2.html" target="n" data-glyph="76,1" class="i method">DoCompleteCore</a>(<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r43 rd" class="r43 r">commandRequestingUpstreamCommandsToStop</span>)
+        {
+            <span class="c">// Call DoComplete() for all the commands. DoComplete() will internally call Complete()</span>
+            <a href="MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r44 rd" class="r44 r">lastCommandRuntime</span> = <b>null</b>;
+ 
+            <b>if</b> (<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a> != <b>null</b>)
+            {
+                <b>for</b> (<b>int</b> <span id="r45 rd" class="r45 r">i</span> = 0; <span class="r45 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r45 r">i</span>++)
+                {
+                    <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r46 rd" class="r46 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r45 r">i</span>];
+ 
+                    <b>if</b> (<span class="r46 r">commandProcessor</span> == <b>null</b>)
+                    {
+                        <span class="c">// &quot;null command &quot; + i</span>
+                        <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                    }
+ 
+                    <b>if</b> (<b>object</b>.<span class="i">ReferenceEquals</span>(<span class="r43 r">commandRequestingUpstreamCommandsToStop</span>, <span class="r46 r">commandProcessor</span>))
+                    {
+                        <span class="r43 r">commandRequestingUpstreamCommandsToStop</span> = <b>null</b>;
+                        <b>continue</b>; <span class="c">// do not call DoComplete/EndProcessing on the command that initiated stopping</span>
+                    }
+ 
+                    <b>if</b> (<span class="r43 r">commandRequestingUpstreamCommandsToStop</span> != <b>null</b>)
+                    {
+                        <b>continue</b>; <span class="c">// do not call DoComplete/EndProcessing on commands that were stopped upstream</span>
+                    }
+ 
+                    <b>try</b>
+                    {
+                        <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#1b17cb8b4db02dee" class="i method">DoComplete</a>();
+                    }
+                    <b>catch</b> (<a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a>)
+                    {
+                        <a href="lang/parserutils.cs.html#3b761558ff868bf6" class="t t">StopUpstreamCommandsException</a> <span id="r47 rd" class="r47 r">stopUpstreamCommandsException</span> =
+                            <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>
+                                ? <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">SourceException</span> <b>as</b> <a href="lang/parserutils.cs.html#3b761558ff868bf6" class="t t">StopUpstreamCommandsException</a>
+                                : <b>null</b>;
+                        <b>if</b> (<span class="r47 r">stopUpstreamCommandsException</span> == <b>null</b>)
+                        {
+                            <b>throw</b>;
+                        }
+                        <b>else</b>
+                        {
+                            <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> = <b>null</b>;
+                            <span class="r43 r">commandRequestingUpstreamCommandsToStop</span> = <span class="r47 r">stopUpstreamCommandsException</span>.<a href="lang/parserutils.cs.html#1135dc32e644b9de" class="i property">RequestingCommandProcessor</a>;
+                        }
+                    }
+ 
+                    <a href="../utils/tracing/EtwActivity.cs.html#f0b7f321c8221b4f" class="t t">EtwActivity</a>.<a href="../utils/tracing/EtwActivity.cs.html#751586094734168b" class="i method">SetActivityId</a>(<span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#93260940d32e4e50" class="i property">PipelineActivityId</a>);
+ 
+                    <span class="c">// Log a command stopped event</span>
+                    <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../logging/MshLog.cs.html#bc5fdac5be99b643" class="i method">LogCommandLifecycleEvent</a>(
+                        <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>,
+                        <a href="../logging/MshLog.cs.html#0592db37e4bdfd35" class="t t">CommandState</a>.<a href="../logging/MshLog.cs.html#c1941585e07efa28" class="i field">Stopped</a>,
+                        <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+ 
+                    <span class="c">// Log the execution of a command (not script chunks, as they</span>
+                    <span class="c">// are not commands in and of themselves)</span>
+                    <b>if</b> (<span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#1aa74ca244a39308" class="i property">CommandType</a> != <a href="CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="CommandInfo.cs.html#8324208f5ee6d431" class="i field">Script</a>)
+                    {
+                        <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#895cb9f77d1d9539" class="i property">PipelineProcessor</a>.<a href="#a6769fff89d74a64" class="i method">LogExecutionComplete</a>(
+                            <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>, <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>);
+                    }
+ 
+                    <span class="r44 r">lastCommandRuntime</span> = <span class="r46 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>;
+                }
+            }
+ 
+            <span class="c">// Log the pipeline completion.</span>
+            <b>if</b> (<span class="r44 r">lastCommandRuntime</span> != <b>null</b>)
+            {
+                <span class="c">// Only log the pipeline completion if this wasn&#39;t a nested pipeline, as</span>
+                <span class="c">// pipeline state in transcription is associated with the toplevel pipeline</span>
+                <b>if</b> ((<a href="#5e576bcabfa5c82b" class="k">this</a>.<a href="#3569b3e63d4a06f7" class="i property">LocalPipeline</a> == <b>null</b>) || (!<a href="#5e576bcabfa5c82b" class="k">this</a>.<a href="#3569b3e63d4a06f7" class="i property">LocalPipeline</a>.<a href="hostifaces/pipelinebase.cs.html#a2e1e19ecdbddde8" class="i property">IsNested</a>))
+                {
+                    <span class="r44 r">lastCommandRuntime</span>.<a href="MshCommandRuntime.cs.html#895cb9f77d1d9539" class="i property">PipelineProcessor</a>.<a href="#4be835bee8c12982" class="i method">LogPipelineComplete</a>();
+                }
+            }
+ 
+            <span class="c">// If a terminating error occurred, report it now.</span>
+            <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+            {
+                <a href="#5e576bcabfa5c82b" class="k">this</a>.<span class="i">LogExecutionException</span>(<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">SourceException</span>);
+                <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">Throw</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Implements DoComplete as a stand-alone function for completing</span>
+        <span class="c">///</span><span class="c"> the execution of a steppable pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">The results of the execution.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Array</span> <a id="11bb777c0fdcb4a2" href="../R/11bb777c0fdcb4a2.html" target="n" data-glyph="74,1" class="i method">DoComplete</a>()
+        {
+            <b>if</b> (<a href="#23e1d0b242d467ac" class="i property">Stopping</a>)
+            {
+                <b>throw</b> <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#105b0214d3aab114" class="t constructor">PipelineStoppedException</a>();
+            }
+ 
+            <b>if</b> (!<a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">PipelineStrings</span>.<span class="i">PipelineNotStarted</span>);
+            }
+ 
+            <span class="i">ExceptionDispatchInfo</span> <span id="r48 rd" class="r48 r">toRethrowInfo</span>;
+            <b>try</b>
+            {
+                <a href="#e663d01eb337a1b2" class="i method">DoCompleteCore</a>(<b>null</b>);
+ 
+                <b>return</b> <a href="#76fcec1c3a298f0b" class="i method">RetrieveResults</a>();
+            }
+            <b>catch</b> (<a href="../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a> <span id="r49 rd" class="r49 r">e</span>)
+            {
+                <span class="c">// The error we want to report is the first terminating error</span>
+                <span class="c">// which occurred during pipeline execution, regardless</span>
+                <span class="c">// of whether other errors occurred afterward.</span>
+                <span class="r48 r">toRethrowInfo</span> = <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> ?? <span class="i">ExceptionDispatchInfo</span>.<span class="i">Capture</span>(<span class="r49 r">e</span>);
+                <a href="#5e576bcabfa5c82b" class="k">this</a>.<span class="i">LogExecutionException</span>(<span class="r48 r">toRethrowInfo</span>.<span class="i">SourceException</span>);
+            }
+            <span class="c">// NTRAID#Windows Out Of Band Releases-929020-2006/03/14-JonN</span>
+            <b>catch</b> (<span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>.<span class="i">InvalidComObjectException</span> <span id="r50 rd" class="r50 r">comException</span>)
+            {
+                <span class="c">// The error we want to report is the first terminating error</span>
+                <span class="c">// which occurred during pipeline execution, regardless</span>
+                <span class="c">// of whether other errors occurred afterward.</span>
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+                {
+                    <span class="r48 r">toRethrowInfo</span> = <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>;
+                }
+                <b>else</b>
+                {
+                    <b>string</b> <span id="r51 rd" class="r51 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">ParserStrings</span>.<span class="i">InvalidComObjectException</span>, <span class="r50 r">comException</span>.<span class="i">Message</span>);
+                    <a href="../utils/RuntimeException.cs.html#bd88f263eb295545" class="k">var</a> <span id="r52 rd" class="r52 r">rte</span> = <b>new</b> <span class="t">RuntimeException</span>(<span class="r51 r">message</span>, <span class="r50 r">comException</span>);
+                    <span class="r52 r">rte</span>.<a href="../utils/RuntimeException.cs.html#f25affe9a215ccc0" class="i method">SetErrorId</a>(<span class="s">&quot;InvalidComObjectException&quot;</span>);
+                    <span class="r48 r">toRethrowInfo</span> = <span class="i">ExceptionDispatchInfo</span>.<span class="i">Capture</span>(<span class="r52 r">rte</span>);
+                }
+ 
+                <a href="#5e576bcabfa5c82b" class="k">this</a>.<span class="i">LogExecutionException</span>(<span class="r48 r">toRethrowInfo</span>.<span class="i">SourceException</span>);
+            }
+            <b>finally</b>
+            {
+                <a href="#c96fad1975bcc552" class="i method">DisposeCommands</a>();
+            }
+ 
+            <span class="c">// By rethrowing the exception outside of the handler,</span>
+            <span class="c">// we allow the CLR on X64/IA64 to free from the stack</span>
+            <span class="c">// the exception records related to this exception.</span>
+ 
+            <span class="c">// The only reason we should get here is if</span>
+            <span class="c">// an exception should be rethrown.</span>
+            <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r48 r">toRethrowInfo</span> != <b>null</b>, <span class="s">&quot;Alternate protocol path failure&quot;</span>);
+            <span class="r48 r">toRethrowInfo</span>.<span class="i">Throw</span>();
+            <b>return</b> <b>null</b>; <span class="c">// UNREACHABLE</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This routine starts the stepping process. It is optional to</span>
+        <span class="c">///</span><span class="c"> call this but can be useful if you want the begin clauses</span>
+        <span class="c">///</span><span class="c"> of the pipeline to be run even when there may not be any input</span>
+        <span class="c">///</span><span class="c"> to process as is the case for I/O redirection into a file. We</span>
+        <span class="c">///</span><span class="c"> still want the file opened, even if there was nothing to write to it.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r53 r">expectInput</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">True if you want to write to this pipeline.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="79e7a5ea4cea7c37" href="../R/79e7a5ea4cea7c37.html" target="n" data-glyph="74,1" class="i method">StartStepping</a>(<b>bool</b> <span id="r53 rd" class="r53 r">expectInput</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#3f1d3bfe705941b3" class="i method">Start</a>(<span class="r53 r">expectInput</span>);
+ 
+                <span class="c">// If a terminating error occurred, report it now.</span>
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+                {
+                    <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">Throw</span>();
+                }
+            }
+            <b>catch</b> (<a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a>)
+            {
+                <a href="#c96fad1975bcc552" class="i method">DisposeCommands</a>();
+ 
+                <span class="c">// The error we want to report is the first terminating error</span>
+                <span class="c">// which occurred during pipeline execution, regardless</span>
+                <span class="c">// of whether other errors occurred afterward.</span>
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+                {
+                    <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">Throw</span>();
+                }
+ 
+                <b>throw</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Request that the pipeline execution should stop.  Unlike other</span>
+        <span class="c">///</span><span class="c"> methods of PipelineProcessor, this method can be called</span>
+        <span class="c">///</span><span class="c"> asynchronously.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="280784c1b9614b3b" href="../R/280784c1b9614b3b.html" target="n" data-glyph="74,1" class="i method">Stop</a>()
+        {
+            <span class="c">// Only call StopProcessing if the pipeline is being stopped</span>
+            <span class="c">// for the first time</span>
+ 
+            <b>if</b> (!<span class="i">RecordFailure</span>(<b>new</b> <a href="../utils/ExecutionExceptions.cs.html#105b0214d3aab114" class="t constructor">PipelineStoppedException</a>(), <b>null</b>))
+                <b>return</b>;
+ 
+            <span class="c">// Retain copy of _commands in case Dispose() is called</span>
+            <span class="i">List</span>&lt;<a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a>&gt; <span id="r54 rd" class="r54 r">commands</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>;
+            <b>if</b> (<span class="r54 r">commands</span> == <b>null</b>)
+                <b>return</b>;
+ 
+            <span class="c">// Call StopProcessing() for all the commands.</span>
+            <b>for</b> (<b>int</b> <span id="r55 rd" class="r55 r">i</span> = 0; <span class="r55 r">i</span> &lt; <span class="r54 r">commands</span>.<span class="i">Count</span>; <span class="r55 r">i</span>++)
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r56 rd" class="r56 r">commandProcessor</span> = <span class="r54 r">commands</span>[<span class="r55 r">i</span>];
+ 
+                <b>if</b> (<span class="r56 r">commandProcessor</span> == <b>null</b>)
+                {
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56500
+                <b>try</b>
+                {
+                    <span class="r56 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#37ed27c9255b15c7" class="i method">DoStopProcessing</a>();
+                }
+                <b>catch</b> (<span class="i">Exception</span>)
+                {
+                    <span class="c">// 2004/04/26-JonN We swallow exceptions</span>
+                    <span class="c">// which occur during StopProcessing.</span>
+                    <b>continue</b>;
+                }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56500
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> public_methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> private_methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Partially execute the pipeline, and retrieve the output</span>
+        <span class="c">///</span><span class="c"> after the input objects have been entered into the pipe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Array of input objects for first stage</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Results from last pipeline stage.  This will be empty if</span>
+        <span class="c">///</span><span class="c"> ExternalSuccessOutput is set.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PipelineExecuteRequiresAtLeastOneCommand</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline has already been stopped, or a cmdlet encountered</span>
+        <span class="c">///</span><span class="c"> a terminating error</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If any parameters fail to bind,</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If any mandatory parameters are missing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/MetadataExceptions.cs.html#3bf974090c4e60a1" class="t t">MetadataException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there is an error generating the metadata for dynamic parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline has already been stopped,</span>
+        <span class="c">///</span><span class="c"> or a terminating error occurred.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="ExtendedTypeSystemException.cs.html#288b83424f7afe8b" class="t t">ExtendedTypeSystemException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An error occurred clearing the error variable.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Array</span> <a id="f434c7211d4ab4d2" href="../R/f434c7211d4ab4d2.html" target="n" data-glyph="74,1" class="i method">Step</a>(<b>object</b> <span id="r57 rd" class="r57 r">input</span>)
+        {
+            <b>if</b> (<a href="#23e1d0b242d467ac" class="i property">Stopping</a>)
+            {
+                <b>throw</b> <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#105b0214d3aab114" class="t constructor">PipelineStoppedException</a>();
+            }
+ 
+            <b>try</b>
+            {
+                <a href="#3f1d3bfe705941b3" class="i method">Start</a>(<b>true</b>);
+                <a href="#0dac6ef5f98445da" class="i method">Inject</a>(<span class="r57 r">input</span>, <span class="r36 r">enumerate</span>: <b>false</b>);
+ 
+                <span class="c">// If a terminating error occurred, report it now.</span>
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+                {
+                    <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">Throw</span>();
+                }
+ 
+                <b>return</b> <a href="#76fcec1c3a298f0b" class="i method">RetrieveResults</a>();
+            }
+            <b>catch</b> (<a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a>)
+            {
+                <a href="#c96fad1975bcc552" class="i method">DisposeCommands</a>();
+ 
+                <span class="c">// The error we want to report is the first terminating error</span>
+                <span class="c">// which occurred during pipeline execution, regardless</span>
+                <span class="c">// of whether other errors occurred afterward.</span>
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> != <b>null</b>)
+                {
+                    <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">Throw</span>();
+                }
+ 
+                <b>throw</b>;
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <a href="#c96fad1975bcc552" class="i method">DisposeCommands</a>();
+                <b>throw</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Prepares the pipeline for execution.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r58 r">incomingStream</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Input objects are expected, so do not close the first command.</span>
+        <span class="c">///</span><span class="c"> This will prevent the one default call to ProcessRecord</span>
+        <span class="c">///</span><span class="c"> on the first command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Start must always be called in a context where terminating errors will</span>
+        <span class="c">///</span><span class="c"> be caught and result in DisposeCommands.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PipelineExecuteRequiresAtLeastOneCommand</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ParameterBinderExceptions.cs.html#8e3f022461e43e12" class="t t">ParameterBindingException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If any parameters fail to bind,</span>
+        <span class="c">///</span><span class="c"> or</span>
+        <span class="c">///</span><span class="c"> If any mandatory parameters are missing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/MetadataExceptions.cs.html#3bf974090c4e60a1" class="t t">MetadataException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If there is an error generating the metadata for dynamic parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline has already been stopped,</span>
+        <span class="c">///</span><span class="c"> or a terminating error occurred in a downstream cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="ExtendedTypeSystemException.cs.html#288b83424f7afe8b" class="t t">ExtendedTypeSystemException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An error occurred clearing the error variable.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="3f1d3bfe705941b3" href="../R/3f1d3bfe705941b3.html" target="n" data-glyph="76,1" class="i method">Start</a>(<b>bool</b> <span id="r58 rd" class="r58 r">incomingStream</span>)
+        {
+            <span class="c">// Every call to Step or SynchronousExecute will call Start.</span>
+            <b>if</b> (<a href="#aa19ca93e47da4ca" class="i field">_disposed</a>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;PipelineProcessor&quot;</span>);
+            }
+ 
+            <b>if</b> (<a href="#23e1d0b242d467ac" class="i property">Stopping</a>)
+            {
+                <b>throw</b> <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#105b0214d3aab114" class="t constructor">PipelineStoppedException</a>();
+            }
+ 
+            <b>if</b> (<a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>)
+                <b>return</b>;
+ 
+            <b>if</b> (<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a> == <b>null</b> || <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> == 0)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">PipelineStrings</span>.<span class="i">PipelineExecuteRequiresAtLeastOneCommand</span>);
+            }
+ 
+            <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r59 rd" class="r59 r">firstcommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[0];
+            <b>if</b> (<span class="r59 r">firstcommandProcessor</span> == <b>null</b>
+                || <span class="r59 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">PipelineStrings</span>.<span class="i">PipelineExecuteRequiresAtLeastOneCommand</span>);
+            }
+ 
+            <span class="c">// Set the execution scope using the current scope</span>
+            <b>if</b> (<a href="#9bd44be1f7e20e85" class="i field">_executionScope</a> == <b>null</b>)
+            {
+                <a href="#9bd44be1f7e20e85" class="i field">_executionScope</a> = <span class="r59 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="SessionStateScopeAPIs.cs.html#224987ad36a90f88" class="i property">CurrentScope</a>;
+            }
+ 
+            <span class="c">// add ExternalSuccessOutput to the last command</span>
+            <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r60 rd" class="r60 r">LastCommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> - 1];
+            <b>if</b> (<span class="r60 r">LastCommandProcessor</span> == <b>null</b>
+                || <span class="r60 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+            {
+                <span class="c">// &quot;PipelineProcessor.Start(): LastCommandProcessor == null&quot;</span>
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+            }
+ 
+            <b>if</b> (<a href="#b350ef534beb2917" class="i property">ExternalSuccessOutput</a> != <b>null</b>)
+            {
+                <span class="r60 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a>.<a href="Pipe.cs.html#244a8e191e44d453" class="i property">ExternalWriter</a>
+                    = <a href="#b350ef534beb2917" class="i property">ExternalSuccessOutput</a>;
+            }
+ 
+            <span class="c">// add ExternalErrorOutput to all commands whose error</span>
+            <span class="c">// output is not yet claimed</span>
+            <a href="#38e60d8fc8d61d8c" class="i method">SetExternalErrorOutput</a>();
+ 
+            <b>if</b> (<a href="#73b2cc5cdd9cd88a" class="i property">ExternalInput</a> == <b>null</b> &amp;&amp; !<span class="r58 r">incomingStream</span>)
+            {
+                <span class="c">// no upstream cmdlet from the first command</span>
+                <span class="r59 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#1873a5e7c8d36fbc" class="i property">IsClosed</a> = <b>true</b>;
+            }
+ 
+            <span class="c">// We want the value of PSDefaultParameterValues before possibly changing to the commands scopes.</span>
+            <span class="c">// This ensures we use the value from the callers scope, not the callees scope.</span>
+            <span class="i">IDictionary</span> <span id="r61 rd" class="r61 r">psDefaultParameterValues</span> =
+                <span class="r59 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>.<a href="ExecutionContext.cs.html#a3916d7c99d7c52e" class="i method">GetVariableValue</a>(<a href="SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="SpecialVariables.cs.html#b0f7205460d0e0d0" class="i field">PSDefaultParameterValuesVarPath</a>, <b>false</b>) <b>as</b> <span class="i">IDictionary</span>;
+ 
+            <a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a> = <b>true</b>;
+ 
+            <span class="c">//</span>
+            <span class="c">// Allocate the pipeline iteration array; note that the pipeline position for</span>
+            <span class="c">// each command starts at 1 so we need to allocate _commands.Count + 1 items.</span>
+            <span class="c">//</span>
+            <b>int</b>[] <span id="r62 rd" class="r62 r">pipelineIterationInfo</span> = <b>new</b> <b>int</b>[<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> + 1];
+ 
+            <span class="c">// Prepare all commands from Engine&#39;s side,</span>
+            <span class="c">// and make sure they are all valid</span>
+            <b>for</b> (<b>int</b> <span id="r63 rd" class="r63 r">i</span> = 0; <span class="r63 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r63 r">i</span>++)
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r64 rd" class="r64 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r63 r">i</span>];
+                <b>if</b> (<span class="r64 r">commandProcessor</span> == <b>null</b>)
+                {
+                    <span class="c">// &quot;null command &quot; + i</span>
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+ 
+                <span class="c">// Generate new Activity Id for the thread</span>
+                <span class="i">Guid</span> <span id="r65 rd" class="r65 r">pipelineActivityId</span> = <a href="../utils/tracing/EtwActivity.cs.html#f0b7f321c8221b4f" class="t t">EtwActivity</a>.<a href="../utils/tracing/EtwActivity.cs.html#26cb8756fc40daee" class="i method">CreateActivityId</a>();
+ 
+                <span class="c">// commandProcess.PipelineActivityId = new Activity id</span>
+                <a href="../utils/tracing/EtwActivity.cs.html#f0b7f321c8221b4f" class="t t">EtwActivity</a>.<a href="../utils/tracing/EtwActivity.cs.html#751586094734168b" class="i method">SetActivityId</a>(<span class="r65 r">pipelineActivityId</span>);
+                <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#93260940d32e4e50" class="i property">PipelineActivityId</a> = <span class="r65 r">pipelineActivityId</span>;
+ 
+                <span class="c">// Log a command started event</span>
+                <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../logging/MshLog.cs.html#bc5fdac5be99b643" class="i method">LogCommandLifecycleEvent</a>(
+                    <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#00c4abcf32dda50f" class="i property">Context</a>,
+                    <a href="../logging/MshLog.cs.html#0592db37e4bdfd35" class="t t">CommandState</a>.<a href="../logging/MshLog.cs.html#f70754d0b08fffd5" class="i field">Started</a>,
+                    <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>);
+ 
+                <span class="c">// Telemetry here</span>
+                <span class="c">// the type of command should be sent along</span>
+                <span class="c">// commandProcessor.CommandInfo.CommandType</span>
+                <a href="../utils/Telemetry.cs.html#9832071d08aec551" class="t t">ApplicationInsightsTelemetry</a>.<span class="i">SendTelemetryMetric</span>(<a href="../utils/Telemetry.cs.html#3951f46d9ee8c91d" class="t t">TelemetryType</a>.<a href="../utils/Telemetry.cs.html#a4e962dedc97caa5" class="i field">ApplicationType</a>, <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#1f4a1f38862b466a" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#1aa74ca244a39308" class="i property">CommandType</a>.<span class="i">ToString</span>());
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">LEGACYTELEMETRY</span>
+<span class="e">                Microsoft.PowerShell.Telemetry.Internal.TelemetryAPI.TraceExecutedCommand(commandProcessor.Command.CommandInfo, commandProcessor.Command.CommandOrigin);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+                <span class="c">// Log the execution of a command (not script chunks, as they</span>
+                <span class="c">// are not commands in and of themselves)</span>
+                <b>if</b> (<span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#1aa74ca244a39308" class="i property">CommandType</a> != <a href="CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="CommandInfo.cs.html#8324208f5ee6d431" class="i field">Script</a>)
+                {
+                    <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#895cb9f77d1d9539" class="i property">PipelineProcessor</a>.<a href="#16d79ceba031a811" class="i method">LogExecutionInfo</a>(
+                        <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>, <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#b61b3a9315a42a73" class="i property">CommandInfo</a>.<a href="CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>);
+                }
+ 
+                <a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r66 rd" class="r66 r">myInfo</span> = <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>;
+                <span class="r66 r">myInfo</span>.<a href="InvocationInfo.cs.html#b9401843293d51d4" class="i property">PipelinePosition</a> = <span class="r63 r">i</span> + 1;
+                <span class="r66 r">myInfo</span>.<a href="InvocationInfo.cs.html#7d73dcbb6106b235" class="i property">PipelineLength</a> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>;
+                <span class="r66 r">myInfo</span>.<a href="InvocationInfo.cs.html#0696af7afce6ee9b" class="i property">PipelineIterationInfo</a> = <span class="r62 r">pipelineIterationInfo</span>;
+                <span class="r66 r">myInfo</span>.<a href="InvocationInfo.cs.html#9a1646f37a942067" class="i property">ExpectingInput</a> = <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#93abe05c663b0330" class="i method">IsPipelineInputExpected</a>();
+                <span class="r64 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#16a98e93ca4b16ab" class="i method">DoPrepare</a>(<span class="r61 r">psDefaultParameterValues</span>);
+            }
+ 
+            <span class="c">// Clear ErrorVariable as appropriate</span>
+            <a href="#61c3691c36096287" class="i method">SetupParameterVariables</a>();
+ 
+            <span class="c">// Prepare all commands from Command&#39;s side.</span>
+            <span class="c">// Note that DoPrepare() and DoBegin() should NOT be combined</span>
+            <span class="c">// in a single for loop.</span>
+            <span class="c">// Reason: Encoding of commandline parameters happen</span>
+            <span class="c">// as part of DoPrepare(). If they are combined,</span>
+            <span class="c">// the first command&#39;s DoBegin() will be called before</span>
+            <span class="c">// the next command&#39;s DoPrepare(). Since BeginProcessing()</span>
+            <span class="c">// can write objects to the downstream commandlet,</span>
+            <span class="c">// it will end up calling DoExecute() (from Pipe.Add())</span>
+            <span class="c">// before DoPrepare.</span>
+            <b>for</b> (<b>int</b> <span id="r67 rd" class="r67 r">i</span> = 0; <span class="r67 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r67 r">i</span>++)
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r68 rd" class="r68 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r67 r">i</span>];
+ 
+                <span class="r68 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#888ccfe4b17ac047" class="i method">DoBegin</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Add ExternalErrorOutput to all commands whose error</span>
+        <span class="c">///</span><span class="c"> output is not yet claimed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="38e60d8fc8d61d8c" href="../R/38e60d8fc8d61d8c.html" target="n" data-glyph="76,1" class="i method">SetExternalErrorOutput</a>()
+        {
+            <b>if</b> (<a href="#1f300e55a0ce5b7a" class="i property">ExternalErrorOutput</a> != <b>null</b>)
+            {
+                <b>for</b> (<b>int</b> <span id="r69 rd" class="r69 r">i</span> = 0; <span class="r69 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r69 r">i</span>++)
+                {
+                    <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r70 rd" class="r70 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r69 r">i</span>];
+                    <a href="Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r71 rd" class="r71 r">UpstreamPipe</span> =
+                        <span class="r70 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>;
+ 
+                    <span class="c">// check whether a cmdlet is consuming the error pipe</span>
+                    <b>if</b> (!<span class="r71 r">UpstreamPipe</span>.<a href="Pipe.cs.html#f890f797fcc0ee94" class="i property">IsRedirected</a>)
+                    {
+                        <span class="r71 r">UpstreamPipe</span>.<a href="Pipe.cs.html#244a8e191e44d453" class="i property">ExternalWriter</a> =
+                            <a href="#1f300e55a0ce5b7a" class="i property">ExternalErrorOutput</a>;
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Clear ErrorVariable as appropriate.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="61c3691c36096287" href="../R/61c3691c36096287.html" target="n" data-glyph="76,1" class="i method">SetupParameterVariables</a>()
+        {
+            <b>for</b> (<b>int</b> <span id="r72 rd" class="r72 r">i</span> = 0; <span class="r72 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r72 r">i</span>++)
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r73 rd" class="r73 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r72 r">i</span>];
+                <b>if</b> (<span class="r73 r">commandProcessor</span> == <b>null</b> || <span class="r73 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+                {
+                    <span class="c">// &quot;null command &quot; + i</span>
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+ 
+                <span class="r73 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#4d16a8f14424404b" class="i method">SetupOutVariable</a>();
+                <span class="r73 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#c74a40a706387e87" class="i method">SetupErrorVariable</a>();
+                <span class="r73 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#13c05bf53bab11fc" class="i method">SetupWarningVariable</a>();
+                <span class="r73 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#61cb518ce061dd63" class="i method">SetupPipelineVariable</a>();
+                <span class="r73 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#49ba861a91a757c4" class="i method">SetupInformationVariable</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Partially execute the pipeline.  The output remains in</span>
+        <span class="c">///</span><span class="c"> the pipes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r74 r">input</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Array of input objects for first stage</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">enumerate</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, unravel the input otherwise pass as one object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">throws</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Exception if any cmdlet throws a [terminating] exception</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">throws</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Inject must always be called in a context where terminating errors will</span>
+        <span class="c">///</span><span class="c"> be caught and result in DisposeCommands.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> PipelineExecuteRequiresAtLeastOneCommand</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline has already been stopped, or a cmdlet encountered</span>
+        <span class="c">///</span><span class="c"> a terminating error</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../utils/ExecutionExceptions.cs.html#1496d52396952a52" class="t t">PipelineClosedException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The ExternalWriter stream is closed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="0dac6ef5f98445da" href="../R/0dac6ef5f98445da.html" target="n" data-glyph="76,1" class="i method">Inject</a>(<b>object</b> <span id="r74 rd" class="r74 r">input</span>, <b>bool</b> <span id="r36 rd" class="r36 r">enumerate</span>)
+        {
+            <span class="c">// Add any input to the first command.</span>
+            <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r75 rd" class="r75 r">firstcommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[0];
+            <b>if</b> (<span class="r75 r">firstcommandProcessor</span> == <b>null</b>
+                || <span class="r75 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+            {
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                    <span class="i">PipelineStrings</span>.<span class="i">PipelineExecuteRequiresAtLeastOneCommand</span>);
+            }
+ 
+            <b>if</b> (<span class="r74 r">input</span> != <a href="AutomationNull.cs.html#681fbea4c40e4af1" class="t t">AutomationNull</a>.<a href="AutomationNull.cs.html#1cf7e193da582896" class="i property">Value</a>)
+            {
+                <b>if</b> (<span class="r36 r">enumerate</span>)
+                {
+                    <span class="i">IEnumerator</span> <span id="r76 rd" class="r76 r">enumerator</span> = <a href="LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="LanguagePrimitives.cs.html#837b38179d9ca088" class="i method">GetEnumerator</a>(<span class="r74 r">input</span>);
+ 
+                    <b>if</b> (<span class="r76 r">enumerator</span> != <b>null</b>)
+                    {
+                        <span class="r75 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#2a3306bd1f3917ef" class="i property">InputPipe</a> = <b>new</b> <a href="Pipe.cs.html#a54dd478365464cc" class="t constructor">Pipe</a>(<span class="r76 r">enumerator</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r75 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#2a3306bd1f3917ef" class="i property">InputPipe</a>.<a href="Pipe.cs.html#f66ebe5942cdceab" class="i method">Add</a>(<span class="r74 r">input</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="r75 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#2a3306bd1f3917ef" class="i property">InputPipe</a>.<a href="Pipe.cs.html#f66ebe5942cdceab" class="i method">Add</a>(<span class="r74 r">input</span>);
+                }
+            }
+ 
+            <span class="c">// Do not set ExternalInput until SynchronousExecute is called</span>
+            <span class="c">// Execute the first command - In the streamlet model, Execute of the first command will</span>
+            <span class="c">// automatically call the downstream command incase if there are any objects in the pipe.</span>
+            <span class="r75 r">firstcommandProcessor</span>.<a href="CommandProcessorBase.cs.html#b81b6f6845c9c70c" class="i method">DoExecute</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Retrieve results from the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Results from last pipeline stage.  This will be empty if</span>
+        <span class="c">///</span><span class="c"> ExternalSuccessOutput is set or if this pipeline has been linked.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">Array</span> <a id="76fcec1c3a298f0b" href="../R/76fcec1c3a298f0b.html" target="n" data-glyph="76,1" class="i method">RetrieveResults</a>()
+        {
+            <span class="c">// If the error queue has been linked, it&#39;s up to the link to</span>
+            <span class="c">// deal with the output. Don&#39;t do anything here...</span>
+            <b>if</b> (!<a href="#fdec66cf5e97f5ca" class="i field">_linkedErrorOutput</a>)
+            {
+                <span class="c">// Retrieve any accumulated error objects from each of the pipes</span>
+                <span class="c">// and add them to the error results hash table.</span>
+                <b>for</b> (<b>int</b> <span id="r77 rd" class="r77 r">i</span> = 0; <span class="r77 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r77 r">i</span>++)
+                {
+                    <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r78 rd" class="r78 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r77 r">i</span>];
+                    <b>if</b> (<span class="r78 r">commandProcessor</span> == <b>null</b>
+                        || <span class="r78 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+                    {
+                        <span class="c">// &quot;null command or request or ErrorOutputPipe &quot; + i</span>
+                        <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                    }
+ 
+                    <a href="Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r79 rd" class="r79 r">ErrorPipe</span> = <span class="r78 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>;
+                    <b>if</b> (<span class="r79 r">ErrorPipe</span>.<a href="Pipe.cs.html#586d8abd020e1d4d" class="i property">DownstreamCmdlet</a> == <b>null</b> &amp;&amp; !<span class="r79 r">ErrorPipe</span>.<a href="Pipe.cs.html#5b6f412d40044f40" class="i property">Empty</a>)
+                    {
+                        <span class="c">// 2003/10/02-JonN</span>
+                        <span class="c">// Do not return the same error results more than once</span>
+                        <span class="r79 r">ErrorPipe</span>.<a href="Pipe.cs.html#769aefdecd654591" class="i method">Clear</a>();
+                    }
+                }
+            }
+ 
+            <span class="c">// If the success queue has been linked, it&#39;s up to the link to</span>
+            <span class="c">// deal with the output. Don&#39;t do anything here...</span>
+            <b>if</b> (<a href="#2ed0d608ac77f10b" class="i field">_linkedSuccessOutput</a>)
+                <b>return</b> <a href="MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>.<a href="MshCommandRuntime.cs.html#493d2fff89fbbf4f" class="i field">StaticEmptyArray</a>;
+ 
+            <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r80 rd" class="r80 r">LastCommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> - 1];
+            <b>if</b> (<span class="r80 r">LastCommandProcessor</span> == <b>null</b>
+                || <span class="r80 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+            {
+                <span class="c">// &quot;PipelineProcessor.RetrieveResults(): LastCommandProcessor == null&quot;</span>
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+            }
+ 
+            <span class="i">Array</span> <span id="r81 rd" class="r81 r">results</span> =
+                <span class="r80 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#74283714d72d2821" class="i method">GetResultsAsArray</a>();
+ 
+            <span class="c">// 2003/10/02-JonN</span>
+            <span class="c">// Do not return the same results more than once</span>
+            <span class="r80 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a>.<a href="Pipe.cs.html#769aefdecd654591" class="i method">Clear</a>();
+ 
+            <b>if</b> (<span class="r81 r">results</span> == <b>null</b>)
+                <b>return</b> <a href="MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>.<a href="MshCommandRuntime.cs.html#493d2fff89fbbf4f" class="i field">StaticEmptyArray</a>;
+            <b>return</b> <span class="r81 r">results</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Links this pipeline to a pre-existing Pipe object. This allows nested pipes</span>
+        <span class="c">///</span><span class="c"> to write into the parent pipeline. It does this by resetting the terminal</span>
+        <span class="c">///</span><span class="c"> pipeline object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r82 r">pipeToUse</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The pipeline to write success objects to.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="d2e5117f11b909e0" href="../R/d2e5117f11b909e0.html" target="n" data-glyph="74,1" class="i method">LinkPipelineSuccessOutput</a>(<a href="Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r82 rd" class="r82 r">pipeToUse</span>)
+        {
+            <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r82 r">pipeToUse</span> != <b>null</b>, <span class="s">&quot;Caller should verify pipeToUse != null&quot;</span>);
+ 
+            <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r83 rd" class="r83 r">LastCommandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span> - 1];
+            <b>if</b> (<span class="r83 r">LastCommandProcessor</span> == <b>null</b>
+                || <span class="r83 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+            {
+                <span class="c">// &quot;PipelineProcessor.RetrieveResults(): LastCommandProcessor == null&quot;</span>
+                <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+            }
+ 
+            <span class="r83 r">LastCommandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#b24610eb88ee27e9" class="i property">OutputPipe</a> = <span class="r82 r">pipeToUse</span>;
+            <a href="#2ed0d608ac77f10b" class="i field">_linkedSuccessOutput</a> = <b>true</b>;
+        }
+ 
+        <b>internal void</b> <a id="d490946a57bc3b2b" href="../R/d490946a57bc3b2b.html" target="n" data-glyph="74,1" class="i method">LinkPipelineErrorOutput</a>(<a href="Pipe.cs.html#59f1a03e60a5aa51" class="t t">Pipe</a> <span id="r84 rd" class="r84 r">pipeToUse</span>)
+        {
+            <a href="../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r84 r">pipeToUse</span> != <b>null</b>, <span class="s">&quot;Caller should verify pipeToUse != null&quot;</span>);
+ 
+            <b>for</b> (<b>int</b> <span id="r85 rd" class="r85 r">i</span> = 0; <span class="r85 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r85 r">i</span>++)
+            {
+                <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r86 rd" class="r86 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r85 r">i</span>];
+                <b>if</b> (<span class="r86 r">commandProcessor</span> == <b>null</b>
+                    || <span class="r86 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a> == <b>null</b>)
+                {
+                    <span class="c">// &quot;null command or request or ErrorOutputPipe &quot; + i</span>
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+                }
+ 
+                <b>if</b> (<span class="r86 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a>.<a href="Pipe.cs.html#586d8abd020e1d4d" class="i property">DownstreamCmdlet</a> == <b>null</b>)
+                {
+                    <span class="r86 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#8cfabd8908a77f92" class="i property">ErrorOutputPipe</a> = <span class="r84 r">pipeToUse</span>;
+                }
+            }
+ 
+            <a href="#fdec66cf5e97f5ca" class="i field">_linkedErrorOutput</a> = <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> When the command is complete, Command should be disposed.</span>
+        <span class="c">///</span><span class="c"> This enables cmdlets to reliably release file handles etc.</span>
+        <span class="c">///</span><span class="c"> without waiting for garbage collection.</span>
+        <span class="c">///</span><span class="c"> Exceptions occurring while disposing commands are recorded</span>
+        <span class="c">///</span><span class="c"> but not passed through.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="c96fad1975bcc552" href="../R/c96fad1975bcc552.html" target="n" data-glyph="76,1" class="i method">DisposeCommands</a>()
+        {
+            <span class="c">// Note that this is not in a lock.</span>
+            <span class="c">// We do not make Dispose() wait until StopProcessing()</span>
+            <span class="c">// has completed.</span>
+            <a href="#8ebaa6ff4361acf5" class="i field">_stopping</a> = <b>true</b>;
+ 
+            <a href="#90e0493c7a60a7bd" class="i method">LogToEventLog</a>();
+ 
+            <b>if</b> (<a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a> != <b>null</b>)
+            {
+                <b>for</b> (<b>int</b> <span id="r87 rd" class="r87 r">i</span> = 0; <span class="r87 r">i</span> &lt; <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>.<span class="i">Count</span>; <span class="r87 r">i</span>++)
+                {
+                    <a href="CommandProcessorBase.cs.html#45a6054a3775cde6" class="t t">CommandProcessorBase</a> <span id="r88 rd" class="r88 r">commandProcessor</span> = <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a>[<span class="r87 r">i</span>];
+                    <b>if</b> (<span class="r88 r">commandProcessor</span> != <b>null</b>)
+                    {
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56500
+                        <span class="c">// If Dispose throws an exception, record it as a</span>
+                        <span class="c">// pipeline failure and continue disposing cmdlets.</span>
+                        <b>try</b>
+                        {
+                            <span class="r88 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="MshCommandRuntime.cs.html#d4d5bbd4ef2bc541" class="i method">RemoveVariableListsInPipe</a>();
+                            <span class="r88 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#1def878a0308e741" class="i method">Dispose</a>();
+                        }
+                        <span class="c">// 2005/04/13-JonN: The only vaguely plausible reason</span>
+                        <span class="c">// for a failure here is an exception in Command.Dispose.</span>
+                        <span class="c">// As such, this should be covered by the overall</span>
+                        <span class="c">// exemption.</span>
+                        <b>catch</b> (<span class="i">Exception</span> <span id="r89 rd" class="r89 r">e</span>) <span class="c">// Catch-all OK, 3rd party callout.</span>
+                        {
+                            <a href="InvocationInfo.cs.html#407d6c7d1ecbc8cc" class="t t">InvocationInfo</a> <span id="r90 rd" class="r90 r">myInvocation</span> = <b>null</b>;
+                            <b>if</b> (<span class="r88 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a> != <b>null</b>)
+                                <span class="r90 r">myInvocation</span> = <span class="r88 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#f81679c755698e2e" class="i property">MyInvocation</a>;
+ 
+                            <a href="../utils/SessionStateExceptions.cs.html#35e07c15a7526bcd" class="t t">ProviderInvocationException</a> <span id="r91 rd" class="r91 r">pie</span> =
+                                <span class="r89 r">e</span> <b>as</b> <a href="../utils/SessionStateExceptions.cs.html#35e07c15a7526bcd" class="t t">ProviderInvocationException</a>;
+                            <b>if</b> (<span class="r91 r">pie</span> != <b>null</b>)
+                            {
+                                <span class="r89 r">e</span> = <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#5e09ca103543bbc7" class="t constructor">CmdletProviderInvocationException</a>(
+                                    <span class="r91 r">pie</span>,
+                                    <span class="r90 r">myInvocation</span>);
+                            }
+                            <b>else</b>
+                            {
+                                <span class="r89 r">e</span> = <b>new</b> <a href="../utils/ExecutionExceptions.cs.html#b3316b9ed5e8a1c1" class="t constructor">CmdletInvocationException</a>(
+                                    <span class="r89 r">e</span>,
+                                    <span class="r90 r">myInvocation</span>);
+ 
+                                <span class="c">// Log a command health event</span>
+ 
+                                <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../logging/MshLog.cs.html#1b469b122e173e0c" class="i method">LogCommandHealthEvent</a>(
+                                    <span class="r88 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>.<a href="CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>,
+                                    <span class="r89 r">e</span>,
+                                    <a href="../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a>.<a href="../logging/MshLog.cs.html#1440d51070db4217" class="i field">Warning</a>);
+                            }
+ 
+                            <a href="#29a9ee363b03e58b" class="i method">RecordFailure</a>(<span class="r89 r">e</span>, <span class="r88 r">commandProcessor</span>.<a href="CommandProcessorBase.cs.html#f58ee453ebc82f56" class="i property">Command</a>);
+                        }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56500
+                    }
+                }
+            }
+ 
+            <a href="#0b6f0cf08a6ad2ad" class="i field">_commands</a> = <b>null</b>;
+ 
+            <span class="c">// Now dispose any pipes that were used for redirection...</span>
+            <b>if</b> (<a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a> != <b>null</b>)
+            {
+                <b>foreach</b> (<a href="#5e576bcabfa5c82b" class="t t">PipelineProcessor</a> <span id="r92 rd" class="r92 r">redirPipe</span> <b>in</b> <a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a>)
+                {
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56500
+                    <span class="c">// The complicated logic of disposing the commands is taken care</span>
+                    <span class="c">// of through recursion, this routine should not be getting any</span>
+                    <span class="c">// exceptions...</span>
+                    <b>try</b>
+                    {
+                        <b>if</b> (<span class="r92 r">redirPipe</span> != <b>null</b>)
+                        {
+                            <span class="r92 r">redirPipe</span>.<a href="#3193eaf8bd4e8783" class="i method">Dispose</a>();
+                        }
+                    }
+                    <b>catch</b> (<span class="i">Exception</span>)
+                    {
+                    }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56500
+                }
+            }
+ 
+            <a href="#b0a3a8b9cb215fe7" class="i field">_redirectionPipes</a> = <b>null</b>;
+        }
+ 
+        <b>private readonly object</b> <a id="c617e17d7345fea2" href="../R/c617e17d7345fea2.html" target="n" data-glyph="46,1" class="i field">_stopReasonLock</a> = <b>new</b> <b>object</b>();
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Makes an internal note of the exception, but only if this is</span>
+        <span class="c">///</span><span class="c"> the first error.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">e</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Error which terminated the pipeline.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r94 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command against which to log SecondFailure.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True iff the pipeline was not already stopped.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="29a9ee363b03e58b" href="../R/29a9ee363b03e58b.html" target="n" data-glyph="74,1" class="i method">RecordFailure</a>(<span class="i">Exception</span> <span id="r93 rd" class="r93 r">e</span>, <a href="CommandBase.cs.html#26cb3aadccaa58ac" class="t t">InternalCommand</a> <span id="r94 rd" class="r94 r">command</span>)
+        {
+            <b>bool</b> <span id="r95 rd" class="r95 r">wasStopping</span> = <b>false</b>;
+            <b>lock</b> (<a href="#c617e17d7345fea2" class="i field">_stopReasonLock</a>)
+            {
+                <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> == <b>null</b>)
+                {
+                    <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> = <span class="i">ExceptionDispatchInfo</span>.<span class="i">Capture</span>(<span class="r93 r">e</span>);
+                }
+                <span class="c">// 905900-2005/05/12</span>
+                <span class="c">// Drop5: Error Architecture: Log/trace second and subsequent RecordFailure</span>
+                <span class="c">// Note that the pipeline could have been stopped asynchronously</span>
+                <span class="c">// before hitting the error, therefore we check whether</span>
+                <span class="c">// firstTerminatingError is PipelineStoppedException.</span>
+                <b>else</b> <b>if</b> (<a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">SourceException</span> <b>is not</b> <a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a>
+                    &amp;&amp; <span class="r94 r">command</span>?.<a href="CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a> != <b>null</b>)
+                {
+                    <span class="i">Exception</span> <span id="r96 rd" class="r96 r">ex</span> = <span class="r93 r">e</span>;
+                    <b>while</b> ((<span class="r96 r">ex</span> <b>is</b> <span class="i">TargetInvocationException</span> || <span class="r96 r">ex</span> <b>is</b> <a href="../utils/ExecutionExceptions.cs.html#7b242746a433b370" class="t t">CmdletInvocationException</a>)
+                            &amp;&amp; (<span class="r96 r">ex</span>.<span class="i">InnerException</span> != <b>null</b>))
+                    {
+                        <span class="r96 r">ex</span> = <span class="r96 r">ex</span>.<span class="i">InnerException</span>;
+                    }
+ 
+                    <b>if</b> (<span class="r96 r">ex</span> <b>is not</b> <a href="../utils/ExecutionExceptions.cs.html#1b159d1cae338f33" class="t t">PipelineStoppedException</a>)
+                    {
+                        <b>string</b> <span id="r97 rd" class="r97 r">message</span> = <a href="../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">PipelineStrings</span>.<span class="i">SecondFailure</span>,
+                            <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">GetType</span>().<span class="i">Name</span>,
+                            <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a>.<span class="i">SourceException</span>.<span class="i">StackTrace</span>,
+                            <span class="r96 r">ex</span>.<span class="i">GetType</span>().<span class="i">Name</span>,
+                            <span class="r96 r">ex</span>.<span class="i">StackTrace</span>
+                        );
+                        <span class="i">InvalidOperationException</span> <span id="r98 rd" class="r98 r">ioe</span>
+                            = <b>new</b> <span class="i">InvalidOperationException</span>(<span class="r97 r">message</span>, <span class="r96 r">ex</span>);
+                        <a href="../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<span class="i">LogCommandHealthEvent</span>(
+                            <span class="r94 r">command</span>.<a href="CommandBase.cs.html#a41a765d70fc9c9d" class="i property">Context</a>,
+                            <span class="r98 r">ioe</span>,
+                            <a href="../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a>.<a href="../logging/MshLog.cs.html#1440d51070db4217" class="i field">Warning</a>);
+                    }
+                }
+ 
+                <span class="r95 r">wasStopping</span> = <a href="#8ebaa6ff4361acf5" class="i field">_stopping</a>;
+                <a href="#8ebaa6ff4361acf5" class="i field">_stopping</a> = <b>true</b>;
+            }
+ 
+            <b>return</b> !<span class="r95 r">wasStopping</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Sometimes we shouldn&#39;t be rethrow the exception we previously caught,</span>
+        <span class="c">///</span><span class="c"> such as when the exception is handled by a trap.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="32078eca48d5267c" href="../R/32078eca48d5267c.html" target="n" data-glyph="74,1" class="i method">ForgetFailure</a>()
+        {
+            <a href="#571fb85ca58af908" class="i field">_firstTerminatingError</a> = <b>null</b>;
+        }
+ 
+        <span class="c">// NOTICE-2004/06/08-JonN 959638</span>
+        <span class="c">// Only this InternalCommand from this Thread is allowed to call</span>
+        <span class="c">// WriteObject/WriteError</span>
+        <b>internal</b> <a href="CommandBase.cs.html#26cb3aadccaa58ac" class="t t">InternalCommand</a> <a id="6eb83c46d576ace3" href="../R/6eb83c46d576ace3.html" target="n" data-glyph="44,1" class="i field">_permittedToWrite</a> = <b>null</b>;
+        <b>internal bool</b> <a id="d6a61a71c7b98f1c" href="../R/d6a61a71c7b98f1c.html" target="n" data-glyph="44,1" class="i field">_permittedToWriteToPipeline</a> = <b>false</b>;
+        <b>internal</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Thread</span> <a id="6caa26d0d6708358" href="../R/6caa26d0d6708358.html" target="n" data-glyph="44,1" class="i field">_permittedToWriteThread</a> = <b>null</b>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> private_methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> public_properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExternalInput allows the caller to specify an asynchronous source for</span>
+        <span class="c">///</span><span class="c"> the input to the first command in the pipeline.  Note that if</span>
+        <span class="c">///</span><span class="c"> ExternalInput is specified, SynchronousExecute will not return</span>
+        <span class="c">///</span><span class="c"> until the ExternalInput is closed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> It is the responsibility of the caller to ensure that the object</span>
+        <span class="c">///</span><span class="c"> reader is closed, usually by another thread.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExecutionAlreadyStarted: pipeline has already started or completed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../utils/IObjectReader.cs.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<b>object</b>&gt; <a id="73b2cc5cdd9cd88a" href="../R/73b2cc5cdd9cd88a.html" target="n" data-glyph="104,1" class="i property">ExternalInput</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#eae9fdf990b6f303" class="i field">_externalInputPipe</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>)
+                {
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                        <span class="i">PipelineStrings</span>.<span class="i">ExecutionAlreadyStarted</span>);
+                }
+ 
+                <a href="#eae9fdf990b6f303" class="i field">_externalInputPipe</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExternalSuccessOutput provides asynchronous access to the</span>
+        <span class="c">///</span><span class="c"> success output of the last command in the pipeline.  Note that</span>
+        <span class="c">///</span><span class="c"> if ExternalSuccessOutput is specified, the result array return value</span>
+        <span class="c">///</span><span class="c"> to SynchronousExecute will always be empty.  PipelineProcessor will</span>
+        <span class="c">///</span><span class="c"> close ExternalSuccessOutput when the pipeline is finished.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExecutionAlreadyStarted: pipeline has already started or completed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../utils/IObjectWriter.cs.html#37301df630b2ae9a" class="t t">PipelineWriter</a> <a id="b350ef534beb2917" href="../R/b350ef534beb2917.html" target="n" data-glyph="104,1" class="i property">ExternalSuccessOutput</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#a11c070f636dd5f1" class="i field">_externalSuccessOutput</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>)
+                {
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                        <span class="i">PipelineStrings</span>.<span class="i">ExecutionAlreadyStarted</span>);
+                }
+ 
+                <a href="#a11c070f636dd5f1" class="i field">_externalSuccessOutput</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExternalErrorOutput provides asynchronous access to the combined</span>
+        <span class="c">///</span><span class="c"> error output of all commands in the pipeline except what is routed</span>
+        <span class="c">///</span><span class="c"> to other commands in the pipeline.  Note that if</span>
+        <span class="c">///</span><span class="c"> ExternalErrorOutput is specified, the errorResults return parameter to</span>
+        <span class="c">///</span><span class="c"> SynchronousExecute will always be empty.  PipelineProcessor will</span>
+        <span class="c">///</span><span class="c"> close ExternalErrorOutput when the pipeline is finished.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ExecutionAlreadyStarted: pipeline has already started or completed</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../utils/IObjectWriter.cs.html#37301df630b2ae9a" class="t t">PipelineWriter</a> <a id="1f300e55a0ce5b7a" href="../R/1f300e55a0ce5b7a.html" target="n" data-glyph="104,1" class="i property">ExternalErrorOutput</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#c136d414abe4a656" class="i field">_externalErrorOutput</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>)
+                {
+                    <b>throw</b> <a href="../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                        <span class="i">PipelineStrings</span>.<span class="i">ExecutionAlreadyStarted</span>);
+                }
+ 
+                <a href="#c136d414abe4a656" class="i field">_externalErrorOutput</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates whether this PipelineProcessor has already started.</span>
+        <span class="c">///</span><span class="c"> If so, some properties can no longer be changed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="4f3228facd61ddb4" href="../R/../../0000000000.html" target="n" data-glyph="104,1" class="i property">ExecutionStarted</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#b1f62184c9bd8e60" class="i field">_executionStarted</a>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates whether stop has been requested on this PipelineProcessor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="23e1d0b242d467ac" href="../R/23e1d0b242d467ac.html" target="n" data-glyph="104,1" class="i property">Stopping</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#970426a8f51fa86f" class="i field">_localPipeline</a> != <b>null</b> &amp;&amp; <a href="#970426a8f51fa86f" class="i field">_localPipeline</a>.<a href="hostifaces/LocalPipeline.cs.html#462590befb121390" class="i property">IsStopping</a>; }
+        }
+ 
+        <b>private</b> <a href="hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a> <a id="970426a8f51fa86f" href="../R/970426a8f51fa86f.html" target="n" data-glyph="46,1" class="i field">_localPipeline</a>;
+ 
+        <b>internal</b> <a href="hostifaces/LocalPipeline.cs.html#4ecb13103c10f113" class="t t">LocalPipeline</a> <a id="3569b3e63d4a06f7" href="../R/3569b3e63d4a06f7.html" target="n" data-glyph="104,1" class="i property">LocalPipeline</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#970426a8f51fa86f" class="i field">_localPipeline</a>; }
+ 
+            <b>set</b> { <a href="#970426a8f51fa86f" class="i field">_localPipeline</a> = <b>value</b>; }
+        }
+ 
+        <b>internal bool</b> <a id="782af2a0c84b2e7f" href="../R/782af2a0c84b2e7f.html" target="n" data-glyph="104,1" class="i property">TopLevel</a> { <b>get</b>; <b>set</b>; } = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The scope the pipeline should execute in.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="SessionStateScope.cs.html#460261155e0163cb" class="t t">SessionStateScope</a> <a id="3f5e9eeb97887f83" href="../R/3f5e9eeb97887f83.html" target="n" data-glyph="104,1" class="i property">ExecutionScope</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#9bd44be1f7e20e85" class="i field">_executionScope</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <span class="c">// This needs to be settable so that a steppable pipeline</span>
+                <span class="c">// can be stepped in the context of the caller, not where</span>
+                <span class="c">// it was created...</span>
+                <a href="#9bd44be1f7e20e85" class="i field">_executionScope</a> = <b>value</b>;
+            }
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> public_properties
+ 
+        <b>internal enum</b> <a id="afd58a5f44a0aaaa" href="../R/afd58a5f44a0aaaa.html" target="n" data-glyph="20,1" class="t t"><span id="c6723bc57fa8072e">PipelineExecutionStatus</span></a>
+        {
+            <a id="32a0a11dad40a15d" href="../R/32a0a11dad40a15d.html" target="n" data-glyph="24,2" class="i field">Started</a>,
+            <a id="d1a2cc4b1821c434" href="../R/d1a2cc4b1821c434.html" target="n" data-glyph="24,2" class="i field">ParameterBinding</a>,
+            <a id="0a81c53af42e78ca" href="../R/0a81c53af42e78ca.html" target="n" data-glyph="24,2" class="i field">Complete</a>,
+            <a id="06783564631b9f63" href="../R/06783564631b9f63.html" target="n" data-glyph="24,2" class="i field">Error</a>,
+            <a id="680d1d14f9a3aef2" href="../R/680d1d14f9a3aef2.html" target="n" data-glyph="24,2" class="i field">PipelineComplete</a>
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

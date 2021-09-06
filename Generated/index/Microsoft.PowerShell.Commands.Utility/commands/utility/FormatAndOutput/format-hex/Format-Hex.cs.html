@@ -1,0 +1,534 @@
+﻿<!DOCTYPE html>
+<html><head><title>Format-Hex.cs</title><link rel="stylesheet" href="../../../../../styles.css"><script src="../../../../../scripts.js"></script></head>
+<body class="cB" onload="i(525);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Utility/commands/utility/FormatAndOutput/format-hex/Format-Hex.cs" target="_top">commands\utility\FormatAndOutput\format-hex\Format-Hex.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Utility" target="_top">src\Microsoft.PowerShell.Commands.Utility\Microsoft.PowerShell.Commands.Utility.csproj</a> (Microsoft.PowerShell.Commands.Utility)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+<span class="c">// Once Serialization is available on CoreCLR: using System.Runtime.Serialization.Formatters.Binary;</span>
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Displays the hexadecimal equivalent of the input data.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="/System.Management.Automation/A.html#d056c4b8c99405e5" class="t t">VerbsCommon</a>.<a href="/System.Management.Automation/A.html#99aa35011eedd7af" class="i field">Format</a>, <span class="s">&quot;Hex&quot;</span>, <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=2096611&quot;</span>)]
+    [<span class="i">OutputType</span>(<b>typeof</b>(<a href="../../UtilityCommon.cs.html#b845c9459e65107b" class="t t">ByteCollection</a>))]
+    [<span class="i">Alias</span>(<span class="s">&quot;fhx&quot;</span>)]
+    <b>public sealed class</b> <a id="797dd1337649e0bf" href="../../../../R/../../0000000000.html" target="n" data-glyph="0,0" class="t t"><span id="54d5900ade8e3556">FormatHex</span></a> : <a href="/System.Management.Automation/A.html#30543a6971fed1fc" class="t t">PSCmdlet</a>
+    {
+        <b>private const int</b> <a id="88a999ad5fd8da34" href="../../../../R/88a999ad5fd8da34.html" target="n" data-glyph="10,1" class="i field">BUFFERSIZE</a> = 16;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> For cases where a homogenous collection of bytes or other items are directly piped in, we collect all the</span>
+        <span class="c">///</span><span class="c"> bytes in a List</span><span class="c">&amp;lt;</span><span class="c">byte</span><span class="c">&amp;gt;</span><span class="c"> and then output the formatted result all at once in EndProcessing().</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">List</span>&lt;<b>byte</b>&gt; <a id="94a513abec0f78ce" href="../../../../R/94a513abec0f78ce.html" target="n" data-glyph="46,1" class="i field">_inputBuffer</a> = <b>new</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Expect to group </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#d8c3466a427d7442" class="i property">InputObject</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">s by default. When receiving input that should not be grouped,</span>
+        <span class="c">///</span><span class="c"> e.g., arrays, strings, FileInfo objects, this flag will be disabled until the next groupable</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#d8c3466a427d7442" class="i property">InputObject</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is received over the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="db1042b710464fbc" href="../../../../R/db1042b710464fbc.html" target="n" data-glyph="46,1" class="i field">_groupInput</a> = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Keep track of prior input types to determine if we&#39;re given a heterogenous collection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">Type</span> <a id="cc8bd52cb76af12a" href="../../../../R/cc8bd52cb76af12a.html" target="n" data-glyph="46,1" class="i field">_lastInputType</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets the path of file(s) to process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="/System.Management.Automation/A.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0, <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <span class="s">&quot;Path&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        <b>public string</b>[] <a id="ec3b72c729bfe082" href="../../../../R/ec3b72c729bfe082.html" target="n" data-glyph="102,1" class="i property">Path</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets the literal path of file to process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <span class="s">&quot;LiteralPath&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>()]
+        [<span class="i">Alias</span>(<span class="s">&quot;PSPath&quot;</span>, <span class="s">&quot;LP&quot;</span>)]
+        <b>public string</b>[] <a id="b90e3f03bd55e1b8" href="../../../../R/b90e3f03bd55e1b8.html" target="n" data-glyph="102,1" class="i property">LiteralPath</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets the object to process.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>, <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <span class="s">&quot;ByInputObject&quot;</span>, <a href="/System.Management.Automation/A.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>)]
+        <b>public</b> <a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="d8c3466a427d7442" href="../../../../R/d8c3466a427d7442.html" target="n" data-glyph="102,1" class="i property">InputObject</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets the type of character encoding for InputObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <span class="s">&quot;ByInputObject&quot;</span>)]
+        [<span class="i">ArgumentToEncodingTransformationAttribute</span>()]
+        [<span class="i">ArgumentEncodingCompletionsAttribute</span>]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        <b>public</b> <span class="i">Encoding</span> <a id="ad932b31504322f7" href="../../../../R/ad932b31504322f7.html" target="n" data-glyph="102,1" class="i property">Encoding</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#3d139e18e83d553e" class="i field">_encoding</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <span class="i">EncodingConversion</span>.<span class="i">WarnIfObsolete</span>(<a href="#797dd1337649e0bf" class="k">this</a>, <b>value</b>);
+                <a href="#3d139e18e83d553e" class="i field">_encoding</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private</b> <span class="i">Encoding</span> <a id="3d139e18e83d553e" href="../../../../R/3d139e18e83d553e.html" target="n" data-glyph="46,1" class="i field">_encoding</a> = <span class="i">ClrFacade</span>.<span class="i">GetDefaultEncoding</span>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets count of bytes to read from the input stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>]
+        [<span class="i">ValidateRange</span>(<a href="/System.Management.Automation/A.html#9533fc8813743b40" class="t t">ValidateRangeKind</a>.<a href="/System.Management.Automation/A.html#28e31985934e2c99" class="i field">Positive</a>)]
+        <b>public long</b> <a id="47c435e5fbe77ef9" href="../../../../R/47c435e5fbe77ef9.html" target="n" data-glyph="102,1" class="i property">Count</a> { <b>get</b>; <b>set</b>; } = <b>long</b>.<span class="i">MaxValue</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets offset of bytes to start reading the input stream from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>]
+        [<span class="i">ValidateRange</span>(<a href="/System.Management.Automation/A.html#9533fc8813743b40" class="t t">ValidateRangeKind</a>.<a href="/System.Management.Automation/A.html#909f9a368b4be710" class="i field">NonNegative</a>)]
+        <b>public long</b> <a id="1907b7d07e784e19" href="../../../../R/1907b7d07e784e19.html" target="n" data-glyph="102,1" class="i property">Offset</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets whether the file input should be swallowed as is. This parameter is no-op, deprecated.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <span class="s">&quot;ByInputObject&quot;</span>, <a href="/System.Management.Automation/A.html#aece56bfac51ced8" class="i property">DontShow</a> = <b>true</b>)]
+        [<span class="i">Obsolete</span>(<span class="s">&quot;Raw parameter is deprecated.&quot;</span>, <b>true</b>)]
+        <b>public</b> <a href="/System.Management.Automation/A.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="f76848f33953a33a" href="../../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Raw</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Implements the ProcessRecord method for the FormatHex command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="0b3a7eb8e2effbfd" href="../../../../R/0b3a7eb8e2effbfd.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<a href="/System.Management.Automation/A.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>, <span class="s">&quot;ByInputObject&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <a href="#da6a4ae20ab5bd40" class="i method">ProcessInputObjects</a>(<a href="#d8c3466a427d7442" class="i property">InputObject</a>);
+            }
+            <b>else</b>
+            {
+                <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r0 rd" class="r0 r">pathsToProcess</span> = <b>string</b>.<span class="i">Equals</span>(<a href="/System.Management.Automation/A.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>, <span class="s">&quot;LiteralPath&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>)
+                    ? <a href="#92e8a0a4f3425c10" class="i method">ResolvePaths</a>(<a href="#b90e3f03bd55e1b8" class="i property">LiteralPath</a>, <b>true</b>)
+                    : <a href="#92e8a0a4f3425c10" class="i method">ResolvePaths</a>(<a href="#ec3b72c729bfe082" class="i property">Path</a>, <b>false</b>);
+ 
+                <a href="#be0beb950a7ee3d5" class="i method">ProcessPath</a>(<span class="r0 r">pathsToProcess</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Implements the EndProcessing method for the FormatHex command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="422fa72295675d00" href="../../../../R/422fa72295675d00.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <a href="#1bd63d2166e35db9" class="i method">FlushInputBuffer</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Paths
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Validate each path provided and if valid, add to array of paths to process.</span>
+        <span class="c">///</span><span class="c"> If path is a literal path it is added to the array to process; we cannot validate them until we</span>
+        <span class="c">///</span><span class="c"> try to process file contents.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The file path to resolve.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">literalPath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The paths to process.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="92e8a0a4f3425c10" href="../../../../R/92e8a0a4f3425c10.html" target="n" data-glyph="76,1" class="i method">ResolvePaths</a>(<b>string</b>[] <span id="r1 rd" class="r1 r">path</span>, <b>bool</b> <span id="r2 rd" class="r2 r">literalPath</span>)
+        {
+            <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r3 rd" class="r3 r">pathsToProcess</span> = <b>new</b>();
+            <a href="/System.Management.Automation/A.html#dd4e1f2f8e73a1dd" class="t t">ProviderInfo</a> <span id="r4 rd" class="r4 r">provider</span> = <b>null</b>;
+ 
+            <b>foreach</b> (<b>string</b> <span id="r5 rd" class="r5 r">currentPath</span> <b>in</b> <span class="r1 r">path</span>)
+            {
+                <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r6 rd" class="r6 r">newPaths</span> = <b>new</b>();
+ 
+                <b>if</b> (<span class="r2 r">literalPath</span>)
+                {
+                    <span class="r6 r">newPaths</span>.<span class="i">Add</span>(<span class="i">Context</span>.<span class="i">SessionState</span>.<span class="i">Path</span>.<span class="i">GetUnresolvedProviderPathFromPSPath</span>(<span class="r5 r">currentPath</span>, <b>out</b> <span class="r4 r">provider</span>, <b>out _</b>));
+                }
+                <b>else</b>
+                {
+                    <b>try</b>
+                    {
+                        <span class="r6 r">newPaths</span>.<span class="i">AddRange</span>(<span class="i">Context</span>.<span class="i">SessionState</span>.<span class="i">Path</span>.<span class="i">GetResolvedProviderPathFromPSPath</span>(<span class="r5 r">currentPath</span>, <b>out</b> <span class="r4 r">provider</span>));
+                    }
+                    <b>catch</b> (<a href="/System.Management.Automation/A.html#9ed59df3c4c15193" class="t t">ItemNotFoundException</a> <span id="r7 rd" class="r7 r">e</span>)
+                    {
+                        <b>if</b> (!<a href="/System.Management.Automation/A.html#d450e739ff28e660" class="t t">WildcardPattern</a>.<span class="i">ContainsWildcardCharacters</span>(<span class="r5 r">currentPath</span>))
+                        {
+                            <a href="/System.Management.Automation/A.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r8 rd" class="r8 r">errorRecord</span> = <b>new</b>(<span class="r7 r">e</span>, <span class="s">&quot;FileNotFound&quot;</span>, <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#9a72a7d3051ac7c5" class="i field">ObjectNotFound</a>, <span class="r1 r">path</span>);
+                            <span class="i">WriteError</span>(<span class="r8 r">errorRecord</span>);
+                            <b>continue</b>;
+                        }
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r4 r">provider</span>.<a href="/System.Management.Automation/A.html#2837d805ea30ef5c" class="i property">Name</a>.<span class="i">Equals</span>(<span class="s">&quot;FileSystem&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                {
+                    <span class="c">// Write a non-terminating error message indicating that path specified is not supported.</span>
+                    <b>string</b> <span id="r9 rd" class="r9 r">errorMessage</span> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">UtilityCommonStrings</span>.<span class="i">FormatHexOnlySupportsFileSystemPaths</span>, <span class="r5 r">currentPath</span>);
+                    <a href="/System.Management.Automation/A.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r10 rd" class="r10 r">errorRecord</span> = <b>new</b>(
+                        <b>new</b> <span class="i">ArgumentException</span>(<span class="r9 r">errorMessage</span>),
+                        <span class="s">&quot;FormatHexOnlySupportsFileSystemPaths&quot;</span>,
+                        <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                        <span class="r5 r">currentPath</span>);
+                    <span class="i">WriteError</span>(<span class="r10 r">errorRecord</span>);
+                    <b>continue</b>;
+                }
+ 
+                <span class="r3 r">pathsToProcess</span>.<span class="i">AddRange</span>(<span class="r6 r">newPaths</span>);
+            }
+ 
+            <b>return</b> <span class="r3 r">pathsToProcess</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Pass each valid path on to process its contents.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">pathsToProcess</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The paths to process.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="be0beb950a7ee3d5" href="../../../../R/be0beb950a7ee3d5.html" target="n" data-glyph="76,1" class="i method">ProcessPath</a>(<span class="i">List</span>&lt;<b>string</b>&gt; <span id="r11 rd" class="r11 r">pathsToProcess</span>)
+        {
+            <b>foreach</b> (<b>string</b> <span id="r12 rd" class="r12 r">path</span> <b>in</b> <span class="r11 r">pathsToProcess</span>)
+            {
+                <a href="#054466ba195748fb" class="i method">ProcessFileContent</a>(<span class="r12 r">path</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates a binary reader that reads the file content into a buffer (byte[]) 16 bytes at a time, and</span>
+        <span class="c">///</span><span class="c"> passes a copy of that array on to the WriteHexadecimal method to output.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The file path to retrieve content from for processing.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="054466ba195748fb" href="../../../../R/054466ba195748fb.html" target="n" data-glyph="76,1" class="i method">ProcessFileContent</a>(<b>string</b> <span id="r13 rd" class="r13 r">path</span>)
+        {
+            <span class="i">Span</span>&lt;<b>byte</b>&gt; <span id="r14 rd" class="r14 r">buffer</span> = <b>stackalloc byte</b>[<a href="#88a999ad5fd8da34" class="i field">BUFFERSIZE</a>];
+ 
+            <b>try</b>
+            {
+                <b>using</b> <b>var</b> <span id="r15 rd" class="r15 r">reader</span> = <b>new</b> <span class="i">BinaryReader</span>(<span class="i">File</span>.<span class="i">Open</span>(<span class="r13 r">path</span>, <span class="i">FileMode</span>.<span class="i">Open</span>, <span class="i">FileAccess</span>.<span class="i">Read</span>, <span class="i">FileShare</span>.<span class="i">Read</span>));
+                <b>long</b> <span id="r16 rd" class="r16 r">offset</span> = <a href="#1907b7d07e784e19" class="i property">Offset</a>;
+                <b>int</b> <span id="r17 rd" class="r17 r">bytesRead</span> = 0;
+                <b>long</b> <span id="r18 rd" class="r18 r">count</span> = 0;
+ 
+                <span class="r15 r">reader</span>.<span class="i">BaseStream</span>.<span class="i">Position</span> = <a href="#1907b7d07e784e19" class="i property">Offset</a>;
+ 
+                <b>while</b> ((<span class="r17 r">bytesRead</span> = <span class="r15 r">reader</span>.<span class="i">Read</span>(<span class="r14 r">buffer</span>)) &gt; 0)
+                {
+                    <span class="r18 r">count</span> += <span class="r17 r">bytesRead</span>;
+                    <b>if</b> (<span class="r18 r">count</span> &gt; <a href="#47c435e5fbe77ef9" class="i property">Count</a>)
+                    {
+                        <span class="r17 r">bytesRead</span> -= (<b>int</b>)(<span class="r18 r">count</span> - <a href="#47c435e5fbe77ef9" class="i property">Count</a>);
+                        <span class="i">WriteHexadecimal</span>(<span class="r14 r">buffer</span>.<span class="i">Slice</span>(0, <span class="r17 r">bytesRead</span>), <span class="r13 r">path</span>, <span class="r16 r">offset</span>);
+                        <b>break</b>;
+                    }
+ 
+                    <span class="i">WriteHexadecimal</span>(<span class="r14 r">buffer</span>.<span class="i">Slice</span>(0, <span class="r17 r">bytesRead</span>), <span class="r13 r">path</span>, <span class="r16 r">offset</span>);
+ 
+                    <span class="r16 r">offset</span> += <span class="r17 r">bytesRead</span>;
+                }
+            }
+            <b>catch</b> (<span class="i">IOException</span> <span id="r19 rd" class="r19 r">fileException</span>)
+            {
+                <span class="c">// IOException takes care of FileNotFoundException, DirectoryNotFoundException, and PathTooLongException</span>
+                <span class="i">WriteError</span>(<b>new</b> <span class="t">ErrorRecord</span>(<span class="r19 r">fileException</span>, <span class="s">&quot;FormatHexIOError&quot;</span>, <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#0c2f4b9c74e5b7c2" class="i field">WriteError</a>, <span class="r13 r">path</span>));
+            }
+            <b>catch</b> (<span class="i">ArgumentException</span> <span id="r20 rd" class="r20 r">argException</span>)
+            {
+                <span class="i">WriteError</span>(<b>new</b> <span class="t">ErrorRecord</span>(<span class="r20 r">argException</span>, <span class="s">&quot;FormatHexArgumentError&quot;</span>, <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#0c2f4b9c74e5b7c2" class="i field">WriteError</a>, <span class="r13 r">path</span>));
+            }
+            <b>catch</b> (<span class="i">NotSupportedException</span> <span id="r21 rd" class="r21 r">notSupportedException</span>)
+            {
+                <span class="i">WriteError</span>(<b>new</b> <span class="t">ErrorRecord</span>(
+                    <span class="r21 r">notSupportedException</span>,
+                    <span class="s">&quot;FormatHexPathRefersToANonFileDevice&quot;</span>,
+                    <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                    <span class="r13 r">path</span>));
+            }
+            <b>catch</b> (<span class="i">SecurityException</span> <span id="r22 rd" class="r22 r">securityException</span>)
+            {
+                <span class="i">WriteError</span>(<b>new</b> <span class="t">ErrorRecord</span>(
+                    <span class="r22 r">securityException</span>,
+                    <span class="s">&quot;FormatHexUnauthorizedAccessError&quot;</span>,
+                    <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#26ba13af79d30a75" class="i field">PermissionDenied</a>,
+                    <span class="r13 r">path</span>));
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> InputObjects
+ 
+        <b>private void</b> <a id="76adf764c9218c03" href="../../../../R/76adf764c9218c03.html" target="n" data-glyph="76,1" class="i method">ProcessString</a>(<b>string</b> <span id="r23 rd" class="r23 r">originalString</span>)
+        {
+            <span class="i">Span</span>&lt;<b>byte</b>&gt; <span id="r24 rd" class="r24 r">bytes</span> = <a href="#ad932b31504322f7" class="i property">Encoding</a>.<span class="i">GetBytes</span>(<span class="r23 r">originalString</span>);
+ 
+            <b>int</b> <span id="r25 rd" class="r25 r">offset</span> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r24 r">bytes</span>.<span class="i">Length</span>, <a href="#1907b7d07e784e19" class="i property">Offset</a> &lt; <b>int</b>.<span class="i">MaxValue</span> ? (<b>int</b>)<a href="#1907b7d07e784e19" class="i property">Offset</a> : <b>int</b>.<span class="i">MaxValue</span>);
+            <b>int</b> <span id="r26 rd" class="r26 r">count</span> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r24 r">bytes</span>.<span class="i">Length</span> - <span class="r25 r">offset</span>, <a href="#47c435e5fbe77ef9" class="i property">Count</a> &lt; <b>int</b>.<span class="i">MaxValue</span> ? (<b>int</b>)<a href="#47c435e5fbe77ef9" class="i property">Count</a> : <b>int</b>.<span class="i">MaxValue</span>);
+ 
+            <b>if</b> (<span class="r25 r">offset</span> != 0 || <span class="r26 r">count</span> != <span class="r24 r">bytes</span>.<span class="i">Length</span>)
+            {
+                <span class="i">WriteHexadecimal</span>(<span class="r24 r">bytes</span>.<span class="i">Slice</span>(<span class="r25 r">offset</span>, <span class="r26 r">count</span>), <span class="i">offset</span>: 0, <span class="i">label</span>: <span class="i">GetGroupLabel</span>(<b>typeof</b>(<b>string</b>)));
+            }
+            <b>else</b>
+            {
+                <a href="#6f66f334e41d3f8b" class="i method">WriteHexadecimal</a>(<span class="r24 r">bytes</span>, <span class="r27 r">offset</span>: 0, <span class="r28 r">label</span>: <span class="i">GetGroupLabel</span>(<b>typeof</b>(<b>string</b>)));
+            }
+        }
+ 
+        <b>private static readonly</b> <span class="i">Random</span> <a id="6372fa874abe2312" href="../../../../R/6372fa874abe2312.html" target="n" data-glyph="46,1" class="i field">_idGenerator</a> = <b>new</b>();
+ 
+        <b>private static string</b> <a id="83be9103e302acb4" href="../../../../R/83be9103e302acb4.html" target="n" data-glyph="76,1" class="i method">GetGroupLabel</a>(<span class="i">Type</span> <span id="r29 rd" class="r29 r">inputType</span>)
+            =&gt; <b>string</b>.<span class="i">Format</span>(<span class="s">&quot;{0} ({1}) &lt;{2:X8}&gt;&quot;</span>, <span class="r29 r">inputType</span>.<span class="i">Name</span>, <span class="r29 r">inputType</span>.<span class="i">FullName</span>, <a href="#6372fa874abe2312" class="i field">_idGenerator</a>.<span class="i">Next</span>());
+ 
+        <b>private void</b> <a id="1bd63d2166e35db9" href="../../../../R/1bd63d2166e35db9.html" target="n" data-glyph="76,1" class="i method">FlushInputBuffer</a>()
+        {
+            <b>if</b> (<a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">Count</span> == 0)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>int</b> <span id="r30 rd" class="r30 r">offset</span> = <span class="i">Math</span>.<span class="i">Min</span>(<a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">Count</span>, <a href="#1907b7d07e784e19" class="i property">Offset</a> &lt; <b>int</b>.<span class="i">MaxValue</span> ? (<b>int</b>)<a href="#1907b7d07e784e19" class="i property">Offset</a> : <b>int</b>.<span class="i">MaxValue</span>);
+            <b>int</b> <span id="r31 rd" class="r31 r">count</span> = <span class="i">Math</span>.<span class="i">Min</span>(<a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">Count</span> - <span class="r30 r">offset</span>, <a href="#47c435e5fbe77ef9" class="i property">Count</a> &lt; <b>int</b>.<span class="i">MaxValue</span> ? (<b>int</b>)<a href="#47c435e5fbe77ef9" class="i property">Count</a> : <b>int</b>.<span class="i">MaxValue</span>);
+ 
+            <b>if</b> (<span class="r30 r">offset</span> != 0 || <span class="r31 r">count</span> != <a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">Count</span>)
+            {
+                <span class="i">WriteHexadecimal</span>(
+                    <a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">GetRange</span>(<span class="r30 r">offset</span>, <span class="r31 r">count</span>).<span class="i">ToArray</span>(),
+                    <span class="i">offset</span>: 0,
+                    <span class="i">label</span>: <a href="#83be9103e302acb4" class="i method">GetGroupLabel</a>(<a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a>));
+            }
+            <b>else</b>
+            {
+                <span class="i">WriteHexadecimal</span>(
+                    <a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">ToArray</span>(),
+                    <span class="i">offset</span>: 0,
+                    <span class="i">label</span>: <a href="#83be9103e302acb4" class="i method">GetGroupLabel</a>(<a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a>));
+            }
+ 
+            <span class="c">// Reset flags so we can go back to filling up the buffer when needed.</span>
+            <a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a> = <b>null</b>;
+            <a href="#db1042b710464fbc" class="i field">_groupInput</a> = <b>true</b>;
+            <a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">Clear</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates a byte array from the object passed to the cmdlet (based on type) and passes</span>
+        <span class="c">///</span><span class="c"> that array on to the WriteHexadecimal method to output.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">inputObject</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The pipeline input object being processed.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="da6a4ae20ab5bd40" href="../../../../R/da6a4ae20ab5bd40.html" target="n" data-glyph="76,1" class="i method">ProcessInputObjects</a>(<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r32 rd" class="r32 r">inputObject</span>)
+        {
+            <b>object</b> <span id="r33 rd" class="r33 r">obj</span> = <span class="r32 r">inputObject</span>.<a href="/System.Management.Automation/A.html#d854d13536b70a12" class="i property">BaseObject</a>;
+ 
+            <b>if</b> (<span class="r33 r">obj</span> <b>is</b> <span class="i">FileSystemInfo</span> <span id="r34 rd" class="r34 r">fsi</span>)
+            {
+                <span class="c">// Output already processed objects first, then process the file input.</span>
+                <a href="#1bd63d2166e35db9" class="i method">FlushInputBuffer</a>();
+                <b>string</b>[] <span id="r35 rd" class="r35 r">path</span> = { <span class="r34 r">fsi</span>.<span class="i">FullName</span> };
+                <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r36 rd" class="r36 r">pathsToProcess</span> = <a href="#92e8a0a4f3425c10" class="i method">ResolvePaths</a>(<span class="r35 r">path</span>, <b>true</b>);
+                <a href="#be0beb950a7ee3d5" class="i method">ProcessPath</a>(<span class="r36 r">pathsToProcess</span>);
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r33 r">obj</span> <b>is string</b> <span id="r37 rd" class="r37 r">str</span>)
+            {
+                <span class="c">// Output already processed objects first, then process the string input.</span>
+                <a href="#1bd63d2166e35db9" class="i method">FlushInputBuffer</a>();
+                <a href="#76adf764c9218c03" class="i method">ProcessString</a>(<span class="r37 r">str</span>);
+                <b>return</b>;
+            }
+ 
+            <b>byte</b>[] <span id="r38 rd" class="r38 r">inputBytes</span> = <a href="#342bfce2cf1a7c36" class="i method">ConvertToBytes</a>(<span class="r33 r">obj</span>);
+ 
+            <b>if</b> (!<a href="#db1042b710464fbc" class="i field">_groupInput</a>)
+            {
+                <a href="#1bd63d2166e35db9" class="i method">FlushInputBuffer</a>();
+            }
+ 
+            <b>if</b> (<span class="r38 r">inputBytes</span> != <b>null</b>)
+            {
+                <a href="#94a513abec0f78ce" class="i field">_inputBuffer</a>.<span class="i">AddRange</span>(<span class="r38 r">inputBytes</span>);
+            }
+            <b>else</b>
+            {
+                <b>string</b> <span id="r39 rd" class="r39 r">errorMessage</span> = <span class="i">StringUtil</span>.<span class="i">Format</span>(<span class="i">UtilityCommonStrings</span>.<span class="i">FormatHexTypeNotSupported</span>, <span class="r33 r">obj</span>.<span class="i">GetType</span>());
+                <a href="/System.Management.Automation/A.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r40 rd" class="r40 r">errorRecord</span> = <b>new</b>(
+                    <b>new</b> <span class="i">ArgumentException</span>(<span class="r39 r">errorMessage</span>),
+                    <span class="s">&quot;FormatHexTypeNotSupported&quot;</span>,
+                    <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                    <span class="r33 r">obj</span>.<span class="i">GetType</span>());
+                <span class="i">WriteError</span>(<span class="r40 r">errorRecord</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Converts the input object to a byte array based on the underlying type for basic value types and strings,</span>
+        <span class="c">///</span><span class="c"> as well as enum values or arrays.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">inputObject</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The object to convert.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Returns a byte array of the input values, or null if there is no available conversion path.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private byte</b>[] <a id="342bfce2cf1a7c36" href="../../../../R/342bfce2cf1a7c36.html" target="n" data-glyph="76,1" class="i method">ConvertToBytes</a>(<b>object</b> <span id="r41 rd" class="r41 r">inputObject</span>)
+        {
+            <span class="i">Type</span> <span id="r42 rd" class="r42 r">baseType</span> = <span class="r41 r">inputObject</span>.<span class="i">GetType</span>();
+            <b>byte</b>[] <span id="r43 rd" class="r43 r">result</span> = <b>null</b>;
+            <b>int</b> <span id="r44 rd" class="r44 r">elements</span> = 1;
+            <b>bool</b> <span id="r45 rd" class="r45 r">isArray</span> = <b>false</b>;
+            <b>bool</b> <span id="r46 rd" class="r46 r">isBool</span> = <b>false</b>;
+            <b>bool</b> <span id="r47 rd" class="r47 r">isEnum</span> = <b>false</b>;
+            <b>if</b> (<span class="r42 r">baseType</span>.<span class="i">IsArray</span>)
+            {
+                <a href="#1bd63d2166e35db9" class="i method">FlushInputBuffer</a>();
+                <a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a> = <span class="r42 r">baseType</span>;
+                <a href="#db1042b710464fbc" class="i field">_groupInput</a> = <b>false</b>;
+ 
+                <span class="r42 r">baseType</span> = <span class="r42 r">baseType</span>.<span class="i">GetElementType</span>();
+                <b>dynamic</b> <span id="r48 rd" class="r48 r">dynamicObject</span> = <span class="r41 r">inputObject</span>;
+                <span class="r44 r">elements</span> = (<b>int</b>)<span class="r48 r">dynamicObject</span>.<span class="i">Length</span>;
+                <span class="r45 r">isArray</span> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r42 r">baseType</span>.<span class="i">IsEnum</span>)
+            {
+                <span class="r42 r">baseType</span> = <span class="r42 r">baseType</span>.<span class="i">GetEnumUnderlyingType</span>();
+                <span class="r47 r">isEnum</span> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r42 r">baseType</span>.<span class="i">IsPrimitive</span> &amp;&amp; <span class="r44 r">elements</span> &gt; 0)
+            {
+                <b>if</b> (<a href="#db1042b710464fbc" class="i field">_groupInput</a>)
+                {
+                    <b>if</b> (<a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a> != <b>null</b> &amp;&amp; <span class="r42 r">baseType</span> != <a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a>)
+                    {
+                        <a href="#db1042b710464fbc" class="i field">_groupInput</a> = <b>false</b>;
+                        <a href="#1bd63d2166e35db9" class="i method">FlushInputBuffer</a>();
+                    }
+ 
+                    <a href="#cc8bd52cb76af12a" class="i field">_lastInputType</a> = <span class="r42 r">baseType</span>;
+                }
+ 
+                <b>if</b> (<span class="r42 r">baseType</span> == <b>typeof</b>(<b>bool</b>))
+                {
+                    <span class="r46 r">isBool</span> = <b>true</b>;
+                }
+ 
+                <b>var</b> <span id="r49 rd" class="r49 r">elementSize</span> = <span class="i">Marshal</span>.<span class="i">SizeOf</span>(<span class="r42 r">baseType</span>);
+                <span class="r43 r">result</span> = <b>new</b> <b>byte</b>[<span class="r49 r">elementSize</span> * <span class="r44 r">elements</span>];
+                <b>if</b> (!<span class="r45 r">isArray</span>)
+                {
+                    <span class="r41 r">inputObject</span> = <b>new</b> <b>object</b>[] { <span class="r41 r">inputObject</span> };
+                }
+ 
+                <b>int</b> <span id="r50 rd" class="r50 r">index</span> = 0;
+                <b>foreach</b> (<b>dynamic</b> <span id="r51 rd" class="r51 r">obj</span> <b>in</b> (<span class="i">Array</span>)<span class="r41 r">inputObject</span>)
+                {
+                    <b>if</b> (<span class="r49 r">elementSize</span> == 1)
+                    {
+                        <span class="r43 r">result</span>[<span class="r50 r">index</span>] = (<b>byte</b>)<span class="r51 r">obj</span>;
+                    }
+                    <b>else</b>
+                    {
+                        <b>dynamic</b> <span id="r52 rd" class="r52 r">toBytes</span>;
+                        <b>if</b> (<span class="r47 r">isEnum</span>)
+                        {
+                            <span class="r52 r">toBytes</span> = <span class="i">Convert</span>.<span class="i">ChangeType</span>(<span class="r51 r">obj</span>, <span class="r42 r">baseType</span>);
+                        }
+                        <b>else</b> <b>if</b> (<span class="r46 r">isBool</span>)
+                        {
+                            <span class="c">// bool is 1 byte apparently</span>
+                            <span class="r52 r">toBytes</span> = <span class="i">Convert</span>.<span class="i">ToByte</span>(<span class="r51 r">obj</span>);
+                        }
+                        <b>else</b>
+                        {
+                            <span class="r52 r">toBytes</span> = <span class="r51 r">obj</span>;
+                        }
+ 
+                        <b>var</b> <span id="r53 rd" class="r53 r">bytes</span> = <span class="i">BitConverter</span>.<span class="i">GetBytes</span>(<span class="r52 r">toBytes</span>);
+                        <b>for</b> (<b>int</b> <span id="r54 rd" class="r54 r">i</span> = 0; <span class="r54 r">i</span> &lt; <span class="r53 r">bytes</span>.<span class="i">Length</span>; <span class="r54 r">i</span>++)
+                        {
+                            <span class="r43 r">result</span>[<span class="r54 r">i</span> + <span class="r50 r">index</span>] = <span class="r53 r">bytes</span>[<span class="r54 r">i</span>];
+                        }
+                    }
+ 
+                    <span class="r50 r">index</span> += <span class="r49 r">elementSize</span>;
+                }
+            }
+ 
+            <b>return</b> <span class="r43 r">result</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Output
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Outputs the hexadecimal representation of the input data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">inputBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Bytes for the hexadecimal representation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r56 r">path</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">File path.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Offset in the file.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="00a0b02eb9df5691" href="../../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">WriteHexadecimal</a>(<span class="i">Span</span>&lt;<b>byte</b>&gt; <span id="r55 rd" class="r55 r">inputBytes</span>, <b>string</b> <span id="r56 rd" class="r56 r">path</span>, <b>long</b> <span id="r57 rd" class="r57 r">offset</span>)
+        {
+            <b>const int</b> <span id="r58 rd" class="r58 r">bytesPerObject</span> = 16;
+            <b>for</b> (<b>int</b> <span id="r59 rd" class="r59 r">index</span> = 0; <span class="r59 r">index</span> &lt; <span class="r55 r">inputBytes</span>.<span class="i">Length</span>; <span class="r59 r">index</span> += <span class="r58 r">bytesPerObject</span>)
+            {
+                <b>var</b> <span id="r60 rd" class="r60 r">count</span> = <span class="r55 r">inputBytes</span>.<span class="i">Length</span> - <span class="r59 r">index</span> &lt; <span class="r58 r">bytesPerObject</span>
+                    ? <span class="r55 r">inputBytes</span>.<span class="i">Length</span> - <span class="r59 r">index</span>
+                    : <span class="r58 r">bytesPerObject</span>;
+                <b>var</b> <span id="r61 rd" class="r61 r">bytes</span> = <span class="r55 r">inputBytes</span>.<span class="i">Slice</span>(<span class="r59 r">index</span>, <span class="r60 r">count</span>);
+                <span class="i">WriteObject</span>(<b>new</b> <span class="t">ByteCollection</span>((<b>ulong</b>)<span class="r59 r">index</span> + (<b>ulong</b>)<span class="r57 r">offset</span>, <span class="r61 r">bytes</span>.<span class="i">ToArray</span>(), <span class="r56 r">path</span>));
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Outputs the hexadecimal representation of the input data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">inputBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Bytes for the hexadecimal representation.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Offset in the file.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r28 r">label</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The label for the byte group. This may be a file path, a string value, or a</span>
+        <span class="c">///</span><span class="c"> formatted identifying string for the group.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="6f66f334e41d3f8b" href="../../../../R/6f66f334e41d3f8b.html" target="n" data-glyph="76,1" class="i method">WriteHexadecimal</a>(<span class="i">Span</span>&lt;<b>byte</b>&gt; <span id="r62 rd" class="r62 r">inputBytes</span>, <b>long</b> <span id="r27 rd" class="r27 r">offset</span>, <b>string</b> <span id="r28 rd" class="r28 r">label</span>)
+        {
+            <b>const int</b> <span id="r63 rd" class="r63 r">bytesPerObject</span> = 16;
+            <b>for</b> (<b>int</b> <span id="r64 rd" class="r64 r">index</span> = 0; <span class="r64 r">index</span> &lt; <span class="r62 r">inputBytes</span>.<span class="i">Length</span>; <span class="r64 r">index</span> += <span class="r63 r">bytesPerObject</span>)
+            {
+                <b>var</b> <span id="r65 rd" class="r65 r">count</span> = <span class="r62 r">inputBytes</span>.<span class="i">Length</span> - <span class="r64 r">index</span> &lt; <span class="r63 r">bytesPerObject</span>
+                    ? <span class="r62 r">inputBytes</span>.<span class="i">Length</span> - <span class="r64 r">index</span>
+                    : <span class="r63 r">bytesPerObject</span>;
+                <b>var</b> <span id="r66 rd" class="r66 r">bytes</span> = <span class="r62 r">inputBytes</span>.<span class="i">Slice</span>(<span class="r64 r">index</span>, <span class="r65 r">count</span>);
+                <span class="i">WriteObject</span>(<b>new</b> <span class="t">ByteCollection</span>((<b>ulong</b>)<span class="r64 r">index</span> + (<b>ulong</b>)<span class="r27 r">offset</span>, <span class="r28 r">label</span>, <span class="r66 r">bytes</span>.<span class="i">ToArray</span>()));
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,1283 @@
+﻿<!DOCTYPE html>
+<html><head><title>ThrottlingJob.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(1274);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/client/ThrottlingJob.cs" target="_top">engine\remoting\client\ThrottlingJob.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <b>internal abstract class</b> <a id="39bffdbce7f14d69" href="../../../R/39bffdbce7f14d69.html" target="n" data-glyph="2,0" class="t t">StartableJob</a> : <a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>
+    {
+        <b>internal</b> <a id="f857f482624e42bc" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">StartableJob</a>(<b>string</b> <span id="r0 rd" class="r0 r">commandName</span>, <b>string</b> <span id="r1 rd" class="r1 r">jobName</span>)
+            : <a href="Job.cs.html#8083742b97acc268" class="k">base</a>(<span class="r0 r">commandName</span>, <span class="r1 r">jobName</span>)
+        {
+        }
+ 
+        <b>internal abstract void</b> <a id="116d3d5f99087a08" href="../../../R/116d3d5f99087a08.html" target="n" data-glyph="74,1" class="i method">StartJob</a>();
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A job that can throttle execution of child jobs.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="01c7878c4476f574" href="../../../R/01c7878c4476f574.html" target="n" data-glyph="2,0" class="t t">ThrottlingJob</a> : <a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable Members
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Releases resources associated with this object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="f610686642de76a1" href="../../../R/f610686642de76a1.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r2 rd" class="r2 r">disposing</span>)
+        {
+            <b>try</b>
+            {
+                <b>if</b> (<span class="r2 r">disposing</span>)
+                {
+                    <a href="#01c7878c4476f574" class="k">this</a>.<a href="#3ab33e21aa3221fd" class="i method">StopJob</a>();
+ 
+                    <span class="i">List</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r3 rd" class="r3 r">childJobsToDispose</span>;
+                    <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                    {
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>), <span class="s">&quot;ThrottlingJob should be completed before removing and disposing child jobs&quot;</span>);
+                        <span class="r3 r">childJobsToDispose</span> = <b>new</b> <span class="i">List</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;(<a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>);
+                        <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>.<span class="i">Clear</span>();
+                    }
+ 
+                    <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r4 rd" class="r4 r">childJob</span> <b>in</b> <span class="r3 r">childJobsToDispose</span>)
+                    {
+                        <span class="r4 r">childJob</span>.<a href="Job.cs.html#a1b7a0cd2d734ade" class="i method">Dispose</a>();
+                    }
+ 
+                    <b>if</b> (<a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a> != <b>null</b>)
+                    {
+                        <a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a>.<span class="i">Dispose</span>();
+                    }
+ 
+                    <a href="#feda70c3c6412fe7" class="i field">_cancellationTokenSource</a>.<span class="i">Dispose</span>();
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="Job.cs.html#e1ff43f6998863de" class="k">base</a>.<a href="Job.cs.html#19b362abde0789e5" class="i method">Dispose</a>(<span class="r2 r">disposing</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Support for progress reporting
+ 
+        <b>private readonly</b> <span class="i">DateTime</span> <a id="136c1584c3bcb3a2" href="../../../R/136c1584c3bcb3a2.html" target="n" data-glyph="46,1" class="i field">_progressStartTime</a> = <span class="i">DateTime</span>.<span class="i">UtcNow</span>;
+        <b>private readonly int</b> <a id="3e0ea13622db683f" href="../../../R/3e0ea13622db683f.html" target="n" data-glyph="46,1" class="i field">_progressActivityId</a>;
+        <b>private readonly object</b> <a id="3b0fe9c91f3564ce" href="../../../R/3b0fe9c91f3564ce.html" target="n" data-glyph="46,1" class="i field">_progressLock</a> = <b>new</b> <b>object</b>();
+        <b>private</b> <span class="i">DateTime</span> <a id="2b1a1c87c8037cfd" href="../../../R/2b1a1c87c8037cfd.html" target="n" data-glyph="46,1" class="i field">_progressReportLastTime</a> = <span class="i">DateTime</span>.<span class="i">MinValue</span>;
+ 
+        <b>internal int</b> <a id="fc00baa83cbea518" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">GetProgressActivityId</a>()
+        {
+            <b>lock</b> (<a href="#3b0fe9c91f3564ce" class="i field">_progressLock</a>)
+            {
+                <b>if</b> (<a href="#2b1a1c87c8037cfd" class="i field">_progressReportLastTime</a>.<span class="i">Equals</span>(<span class="i">DateTime</span>.<span class="i">MinValue</span>))
+                {
+                    <b>try</b>
+                    {
+                        <a href="#01c7878c4476f574" class="k">this</a>.<a href="#48b4f9cff420ba8c" class="i method">ReportProgress</a>(<span class="r5 r">minimizeFrequentUpdates</span>: <b>false</b>);
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#2b1a1c87c8037cfd" class="i field">_progressReportLastTime</a> &gt; <span class="i">DateTime</span>.<span class="i">MinValue</span>, <span class="s">&quot;Progress was reported (lastTimeProgressWasReported)&quot;</span>);
+                    }
+                    <b>catch</b> (<a href="../../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a>)
+                    {
+                        <span class="c">// return &quot;no parent activity id&quot; if this ThrottlingJob has already finished</span>
+                        <b>return</b> -1;
+                    }
+                }
+ 
+                <b>return</b> <a href="#3e0ea13622db683f" class="i field">_progressActivityId</a>;
+            }
+        }
+ 
+        <b>private void</b> <a id="48b4f9cff420ba8c" href="../../../R/48b4f9cff420ba8c.html" target="n" data-glyph="76,1" class="i method">ReportProgress</a>(<b>bool</b> <span id="r5 rd" class="r5 r">minimizeFrequentUpdates</span>)
+        {
+            <b>lock</b> (<a href="#3b0fe9c91f3564ce" class="i field">_progressLock</a>)
+            {
+                <span class="i">DateTime</span> <span id="r6 rd" class="r6 r">now</span> = <span class="i">DateTime</span>.<span class="i">UtcNow</span>;
+ 
+                <b>if</b> (<span class="r5 r">minimizeFrequentUpdates</span>)
+                {
+                    <b>if</b> ((<span class="r6 r">now</span> - <a href="#136c1584c3bcb3a2" class="i field">_progressStartTime</a>) &lt; <span class="i">TimeSpan</span>.<span class="i">FromSeconds</span>(1))
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <b>if</b> ((!<a href="#2b1a1c87c8037cfd" class="i field">_progressReportLastTime</a>.<span class="i">Equals</span>(<span class="i">DateTime</span>.<span class="i">MinValue</span>)) &amp;&amp;
+                        (<span class="r6 r">now</span> - <a href="#2b1a1c87c8037cfd" class="i field">_progressReportLastTime</a> &lt; <span class="i">TimeSpan</span>.<span class="i">FromMilliseconds</span>(200)))
+                    {
+                        <b>return</b>;
+                    }
+                }
+ 
+                <a href="#2b1a1c87c8037cfd" class="i field">_progressReportLastTime</a> = <span class="r6 r">now</span>;
+ 
+                <b>double</b> <span id="r7 rd" class="r7 r">workCompleted</span>;
+                <b>double</b> <span id="r8 rd" class="r8 r">totalWork</span>;
+                <b>int</b> <span id="r9 rd" class="r9 r">percentComplete</span>;
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <span class="r8 r">totalWork</span> = <a href="#e990c844e46da68a" class="i field">_countOfAllChildJobs</a>;
+                    <span class="r7 r">workCompleted</span> = <a href="#01c7878c4476f574" class="k">this</a>.<a href="#487143e8626a6722" class="i property">CountOfFinishedChildJobs</a>;
+                }
+ 
+                <b>if</b> (<span class="r8 r">totalWork</span> &gt;= 1.0)
+                {
+                    <span class="r9 r">percentComplete</span> = (<b>int</b>)(100.0 * <span class="r7 r">workCompleted</span> / <span class="r8 r">totalWork</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r9 r">percentComplete</span> = -1;
+                }
+ 
+                <span class="r9 r">percentComplete</span> = <span class="i">Math</span>.<span class="i">Max</span>(-1, <span class="i">Math</span>.<span class="i">Min</span>(100, <span class="r9 r">percentComplete</span>));
+ 
+                <a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="k">var</a> <span id="r10 rd" class="r10 r">progressRecord</span> = <b>new</b> <a href="../../ProgressRecord.cs.html#fc5a01f49984a3f9" class="t constructor">ProgressRecord</a>(
+                    <span class="r11 r">activityId</span>: <a href="#3e0ea13622db683f" class="i field">_progressActivityId</a>,
+                    <span class="r12 r">activity</span>: <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#8cc82c1860b7ef46" class="i property">Command</a>,
+                    <span class="r13 r">statusDescription</span>: <a href="#01c7878c4476f574" class="k">this</a>.<a href="#a9428e1df2a11f72" class="i property">StatusMessage</a>);
+ 
+                <b>if</b> (<a href="#01c7878c4476f574" class="k">this</a>.<a href="#45365387e786fec8" class="i property">IsThrottlingJobCompleted</a>)
+                {
+                    <b>if</b> (<a href="#2b1a1c87c8037cfd" class="i field">_progressReportLastTime</a>.<span class="i">Equals</span>(<span class="i">DateTime</span>.<span class="i">MinValue</span>))
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <span class="r10 r">progressRecord</span>.<a href="../../ProgressRecord.cs.html#b83bd20609cddaf5" class="i property">RecordType</a> = <a href="../../ProgressRecord.cs.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="../../ProgressRecord.cs.html#be29e101fe03f5d0" class="i field">Completed</a>;
+                    <span class="r10 r">progressRecord</span>.<a href="../../ProgressRecord.cs.html#7c559492a0012510" class="i property">PercentComplete</a> = 100;
+                    <span class="r10 r">progressRecord</span>.<a href="../../ProgressRecord.cs.html#b36a767584bc86ea" class="i property">SecondsRemaining</a> = 0;
+                }
+                <b>else</b>
+                {
+                    <span class="r10 r">progressRecord</span>.<a href="../../ProgressRecord.cs.html#b83bd20609cddaf5" class="i property">RecordType</a> = <a href="../../ProgressRecord.cs.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="../../ProgressRecord.cs.html#b02a1a2b864a452c" class="i field">Processing</a>;
+                    <span class="r10 r">progressRecord</span>.<a href="../../ProgressRecord.cs.html#7c559492a0012510" class="i property">PercentComplete</a> = <span class="r9 r">percentComplete</span>;
+                    <b>int</b>? <span id="r14 rd" class="r14 r">secondsRemaining</span> = <b>null</b>;
+                    <b>if</b> (<span class="r9 r">percentComplete</span> &gt;= 0)
+                    {
+                        <span class="r14 r">secondsRemaining</span> = <a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a>.<span class="i">GetSecondsRemaining</span>(<a href="#136c1584c3bcb3a2" class="i field">_progressStartTime</a>, (<b>double</b>)<span class="r9 r">percentComplete</span> / 100.0);
+                    }
+ 
+                    <b>if</b> (<span class="r14 r">secondsRemaining</span>.<span class="i">HasValue</span>)
+                    {
+                        <span class="r10 r">progressRecord</span>.<a href="../../ProgressRecord.cs.html#b36a767584bc86ea" class="i property">SecondsRemaining</a> = <span class="r14 r">secondsRemaining</span>.<span class="i">Value</span>;
+                    }
+                }
+ 
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#09558aae0df2b344" class="i method">WriteProgress</a>(<span class="r10 r">progressRecord</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Flags of child jobs of a </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Flags</span>]
+        <b>internal enum</b> <a id="b4edec39806213e2" href="../../../R/b4edec39806213e2.html" target="n" data-glyph="20,1" class="t t"><span id="b3863f53069d44af">ChildJobFlags</span></a>
+        {
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Child job doesn&#39;t have any special properties.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <a id="08e2f7e25332bc8c" href="../../../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">None</a> = 0,
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Child job can call </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a>.<a href="#ac415d68acdb5067" class="i method">AddChildJobWithoutBlocking</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> method</span>
+            <span class="c">///</span><span class="c"> or </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a>.<a href="#921224cec01862dc" class="i method">AddChildJobAndPotentiallyBlock</a>(<a href="#39bffdbce7f14d69" class="t t">StartableJob</a>, <a href="#b4edec39806213e2" class="t t">ChildJobFlags</a>)<span class="c">&quot;</span><span class="c">/&gt;</span>
+            <span class="c">///</span><span class="c"> or </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a>.<a href="#1d15b63dc9da2e71" class="i method">AddChildJobAndPotentiallyBlock</a>(<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>, <a href="#39bffdbce7f14d69" class="t t">StartableJob</a>, <a href="#b4edec39806213e2" class="t t">ChildJobFlags</a>)<span class="c">&quot;</span><span class="c">/&gt;</span>
+            <span class="c">///</span><span class="c"> method</span>
+            <span class="c">///</span><span class="c"> of the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> instance it belongs to.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <a id="bd2f55948d7c72fd" href="../../../R/bd2f55948d7c72fd.html" target="n" data-glyph="24,2" class="i field">CreatesChildJobs</a> = 0x1,
+        }
+ 
+        <b>private bool</b> <a id="32db7814977b0a54" href="../../../R/32db7814977b0a54.html" target="n" data-glyph="46,1" class="i field">_ownerWontSubmitNewChildJobs</a> = <b>false</b>;
+        <b>private readonly</b> <span class="i">HashSet</span>&lt;<span class="i">Guid</span>&gt; <a id="40daa73fbb6a9e56" href="../../../R/40daa73fbb6a9e56.html" target="n" data-glyph="46,1" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a> = <b>new</b> <span class="i">HashSet</span>&lt;<span class="i">Guid</span>&gt;();
+ 
+        <b>private bool</b> <a id="baa8e4a16c057cf1" href="../../../R/baa8e4a16c057cf1.html" target="n" data-glyph="106,1" class="i property">IsEndOfChildJobs</a>
+        {
+            <b>get</b>
+            {
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <b>return</b> <a href="#f8e4ed807957e6b9" class="i field">_isStopping</a> || (<a href="#32db7814977b0a54" class="i field">_ownerWontSubmitNewChildJobs</a> &amp;&amp; <a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Count</span> == 0);
+                }
+            }
+        }
+ 
+        <b>private bool</b> <a id="45365387e786fec8" href="../../../R/45365387e786fec8.html" target="n" data-glyph="106,1" class="i property">IsThrottlingJobCompleted</a>
+        {
+            <b>get</b>
+            {
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <b>return</b> <a href="#01c7878c4476f574" class="k">this</a>.<a href="#baa8e4a16c057cf1" class="i property">IsEndOfChildJobs</a> &amp;&amp; (<a href="#e990c844e46da68a" class="i field">_countOfAllChildJobs</a> &lt;= <a href="#01c7878c4476f574" class="k">this</a>.<a href="#487143e8626a6722" class="i property">CountOfFinishedChildJobs</a>);
+                }
+            }
+        }
+ 
+        <b>private readonly bool</b> <a id="6bfc066c3341aad3" href="../../../R/6bfc066c3341aad3.html" target="n" data-glyph="46,1" class="i field">_cmdletMode</a>;
+ 
+        <b>private int</b> <a id="e990c844e46da68a" href="../../../R/e990c844e46da68a.html" target="n" data-glyph="46,1" class="i field">_countOfAllChildJobs</a>;
+ 
+        <b>private int</b> <a id="c5fcd21b0887e26f" href="../../../R/c5fcd21b0887e26f.html" target="n" data-glyph="46,1" class="i field">_countOfBlockedChildJobs</a>;
+ 
+        <b>private int</b> <a id="3ebba637de2d89ed" href="../../../R/3ebba637de2d89ed.html" target="n" data-glyph="46,1" class="i field">_countOfFailedChildJobs</a>;
+        <b>private int</b> <a id="235ecf4e4017b315" href="../../../R/235ecf4e4017b315.html" target="n" data-glyph="46,1" class="i field">_countOfStoppedChildJobs</a>;
+        <b>private int</b> <a id="5ba7248b50adfbac" href="../../../R/5ba7248b50adfbac.html" target="n" data-glyph="46,1" class="i field">_countOfSuccessfullyCompletedChildJobs</a>;
+ 
+        <b>private int</b> <a id="487143e8626a6722" href="../../../R/487143e8626a6722.html" target="n" data-glyph="106,1" class="i property">CountOfFinishedChildJobs</a>
+        {
+            <b>get</b>
+            {
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <b>return</b> <a href="#3ebba637de2d89ed" class="i field">_countOfFailedChildJobs</a> + <a href="#235ecf4e4017b315" class="i field">_countOfStoppedChildJobs</a> + <a href="#5ba7248b50adfbac" class="i field">_countOfSuccessfullyCompletedChildJobs</a>;
+                }
+            }
+        }
+ 
+        <b>private int</b> <a id="0c010b70a053bf60" href="../../../R/0c010b70a053bf60.html" target="n" data-glyph="106,1" class="i property">CountOfRunningOrReadyToRunChildJobs</a>
+        {
+            <b>get</b>
+            {
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <b>return</b> <a href="#e990c844e46da68a" class="i field">_countOfAllChildJobs</a> - <a href="#01c7878c4476f574" class="k">this</a>.<a href="#487143e8626a6722" class="i property">CountOfFinishedChildJobs</a>;
+                }
+            }
+        }
+ 
+        <b>private readonly object</b> <a id="b4ff6f803a3d85ba" href="../../../R/b4ff6f803a3d85ba.html" target="n" data-glyph="46,1" class="i field">_lockObject</a> = <b>new</b> <b>object</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates a new </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command invoked by this job object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">jobName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Friendly name for the job object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">jobTypeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name describing job type.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">maximumConcurrentChildJobs</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum number of child jobs that can be running at any given point in time.</span>
+        <span class="c">///</span><span class="c"> Passing 0 requests to turn off throttling (i.e. allow unlimited number of child jobs to run)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">cmdletMode</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">true</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> if this </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is used from a cmdlet invoked without -AsJob switch.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">false</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> if this </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is used from a cmdlet invoked with -AsJob switch.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> If </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">cmdletMode</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">true</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">, then</span>
+        <span class="c">///</span><span class="c"> memory can be managed more aggressively (for example ChildJobs can be discarded as soon as they complete)</span>
+        <span class="c">///</span><span class="c"> because the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is not exposed to the end user.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="65934e5bff0993a7" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">ThrottlingJob</a>(<b>string</b> <span id="r15 rd" class="r15 r">command</span>, <b>string</b> <span id="r16 rd" class="r16 r">jobName</span>, <b>string</b> <span id="r17 rd" class="r17 r">jobTypeName</span>, <b>int</b> <span id="r18 rd" class="r18 r">maximumConcurrentChildJobs</span>, <b>bool</b> <span id="r19 rd" class="r19 r">cmdletMode</span>)
+            : <a href="Job.cs.html#8083742b97acc268" class="k">base</a>(<span class="r15 r">command</span>, <span class="r16 r">jobName</span>)
+        {
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#f0c555b53469e3b8" class="i property">BlockingEnumerator</a> = <b>true</b>;
+            <a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a> = <span class="r19 r">cmdletMode</span>;
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#48fbced17e8f44b3" class="i property">PSJobTypeName</a> = <span class="r17 r">jobTypeName</span>;
+            <b>if</b> (<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a>)
+            {
+                <a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a> = <b>new</b> <span class="i">SemaphoreSlim</span>(<a href="#7207a0ee616786b9" class="t t">ForwardingHelper</a>.<a href="#3630fa94654095e0" class="i field">AggregationQueueMaxCapacity</a>);
+            }
+ 
+            <a href="#3e0ea13622db683f" class="i field">_progressActivityId</a> = <b>new</b> <span class="i">Random</span>(<a href="#01c7878c4476f574" class="k">this</a>.<span class="i">GetHashCode</span>()).<span class="i">Next</span>();
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#7b6046f937b8bed9" class="i method">SetupThrottlingQueue</a>(<span class="r18 r">maximumConcurrentChildJobs</span>);
+        }
+ 
+        <b>internal void</b> <a id="921224cec01862dc" href="../../../R/921224cec01862dc.html" target="n" data-glyph="74,1" class="i method">AddChildJobAndPotentiallyBlock</a>(
+            <a href="#39bffdbce7f14d69" class="t t">StartableJob</a> <span id="r20 rd" class="r20 r">childJob</span>,
+            <a href="#b4edec39806213e2" class="t t">ChildJobFlags</a> <span id="r21 rd" class="r21 r">flags</span>)
+        {
+            <b>using</b> (<b>var</b> <span id="r22 rd" class="r22 r">jobGotEnqueued</span> = <b>new</b> <span class="i">ManualResetEventSlim</span>(<span class="i">initialState</span>: <b>false</b>))
+            {
+                <b>if</b> (<span class="r20 r">childJob</span> == <b>null</b>) <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r20 r">childJob</span>));
+ 
+                <a href="#01c7878c4476f574" class="k">this</a>.<span class="i">AddChildJobWithoutBlocking</span>(<span class="r20 r">childJob</span>, <span class="r21 r">flags</span>, <span class="r22 r">jobGotEnqueued</span>.<span class="i">Set</span>);
+                <span class="r22 r">jobGotEnqueued</span>.<span class="i">Wait</span>();
+            }
+        }
+ 
+        <b>internal void</b> <a id="1d15b63dc9da2e71" href="../../../R/1d15b63dc9da2e71.html" target="n" data-glyph="74,1" class="i method">AddChildJobAndPotentiallyBlock</a>(
+            <a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r23 rd" class="r23 r">cmdlet</span>,
+            <a href="#39bffdbce7f14d69" class="t t">StartableJob</a> <span id="r24 rd" class="r24 r">childJob</span>,
+            <a href="#b4edec39806213e2" class="t t">ChildJobFlags</a> <span id="r25 rd" class="r25 r">flags</span>)
+        {
+            <b>using</b> (<b>var</b> <span id="r26 rd" class="r26 r">forwardingCancellation</span> = <b>new</b> <span class="i">CancellationTokenSource</span>())
+            {
+                <b>if</b> (<span class="r24 r">childJob</span> == <b>null</b>) <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r24 r">childJob</span>));
+ 
+                <a href="#01c7878c4476f574" class="k">this</a>.<span class="i">AddChildJobWithoutBlocking</span>(<span class="r24 r">childJob</span>, <span class="r25 r">flags</span>, <span class="r26 r">forwardingCancellation</span>.<span class="i">Cancel</span>);
+                <a href="#01c7878c4476f574" class="k">this</a>.<span class="i">ForwardAllResultsToCmdlet</span>(<span class="r23 r">cmdlet</span>, <span class="r26 r">forwardingCancellation</span>.<span class="i">Token</span>);
+            }
+        }
+ 
+        <b>private bool</b> <a id="df368b48ddca9402" href="../../../R/df368b48ddca9402.html" target="n" data-glyph="46,1" class="i field">_alreadyDisabledFlowControlForPendingJobsQueue</a> = <b>false</b>;
+ 
+        <b>internal void</b> <a id="2562dd7dd7b0fc8a" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DisableFlowControlForPendingJobsQueue</a>()
+        {
+            <b>if</b> (!<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a> || <a href="#df368b48ddca9402" class="i field">_alreadyDisabledFlowControlForPendingJobsQueue</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <a href="#df368b48ddca9402" class="i field">_alreadyDisabledFlowControlForPendingJobsQueue</a> = <b>true</b>;
+ 
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <a href="#0940337d24d41110" class="i field">_maxReadyToRunJobs</a> = <b>int</b>.<span class="i">MaxValue</span>;
+ 
+                <b>while</b> (<a href="#a04344f9336c5526" class="i field">_actionsForUnblockingChildAdditions</a>.<span class="i">Count</span> &gt; 0)
+                {
+                    <span class="i">Action</span> <span id="r27 rd" class="r27 r">a</span> = <a href="#a04344f9336c5526" class="i field">_actionsForUnblockingChildAdditions</a>.<span class="i">Dequeue</span>();
+                    <span class="r27 r">a</span>?.<span class="i">Invoke</span>();
+                }
+            }
+        }
+ 
+        <b>private bool</b> <a id="c3093b4e7263b669" href="../../../R/c3093b4e7263b669.html" target="n" data-glyph="46,1" class="i field">_alreadyDisabledFlowControlForPendingCmdletActionsQueue</a> = <b>false</b>;
+ 
+        <b>internal void</b> <a id="3d569685b60d95a6" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DisableFlowControlForPendingCmdletActionsQueue</a>()
+        {
+            <b>if</b> (!<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a> || <a href="#c3093b4e7263b669" class="i field">_alreadyDisabledFlowControlForPendingCmdletActionsQueue</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <a href="#c3093b4e7263b669" class="i field">_alreadyDisabledFlowControlForPendingCmdletActionsQueue</a> = <b>true</b>;
+ 
+            <b>long</b> <span id="r28 rd" class="r28 r">slotsToRelease</span> = (<b>long</b>)(<b>int</b>.<span class="i">MaxValue</span> / 2) - (<b>long</b>)(<a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a>.<span class="i">CurrentCount</span>);
+            <b>if</b> ((<span class="r28 r">slotsToRelease</span> &gt; 0) &amp;&amp; (<span class="r28 r">slotsToRelease</span> &lt; <b>int</b>.<span class="i">MaxValue</span>))
+            {
+                <a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a>.<span class="i">Release</span>((<b>int</b>)<span class="r28 r">slotsToRelease</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Adds and starts a child job.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">childJob</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Child job to add.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">flags</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Flags of the child job.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">jobEnqueuedAction</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Action to run after enqueuing the job.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Thrown when the child job is not in the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#1213da49468b8ccd" class="i field">NotStarted</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> state.</span>
+        <span class="c">///</span><span class="c"> (because this can lead to race conditions - the child job can finish before the parent job has a chance to register for child job events)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="ac415d68acdb5067" href="../../../R/ac415d68acdb5067.html" target="n" data-glyph="74,1" class="i method">AddChildJobWithoutBlocking</a>(<a href="#39bffdbce7f14d69" class="t t">StartableJob</a> <span id="r29 rd" class="r29 r">childJob</span>, <a href="#b4edec39806213e2" class="t t">ChildJobFlags</a> <span id="r30 rd" class="r30 r">flags</span>, <span class="i">Action</span> <span id="r31 rd" class="r31 r">jobEnqueuedAction</span> = <b>null</b>)
+        {
+            <b>if</b> (<span class="r29 r">childJob</span> == <b>null</b>) <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r29 r">childJob</span>));
+            <b>if</b> (<span class="r29 r">childJob</span>.<a href="Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a> != <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#1213da49468b8ccd" class="i field">NotStarted</a>) <b>throw</b> <b>new</b> <span class="i">ArgumentException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ThrottlingJobChildAlreadyRunning</span>, <b>nameof</b>(<span class="r29 r">childJob</span>));
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#0328c940aee2761d" class="i method">AssertNotDisposed</a>();
+ 
+            <a href="Job.cs.html#8f788812e1264af5" class="t t">JobStateInfo</a> <span id="r32 rd" class="r32 r">newJobStateInfo</span> = <b>null</b>;
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <b>if</b> (<a href="#01c7878c4476f574" class="k">this</a>.<a href="#baa8e4a16c057cf1" class="i property">IsEndOfChildJobs</a>) <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ThrottlingJobChildAddedAfterEndOfChildJobs</span>);
+                <b>if</b> (<a href="#f8e4ed807957e6b9" class="i field">_isStopping</a>) { <b>return</b>; }
+ 
+                <b>if</b> (<a href="#e990c844e46da68a" class="i field">_countOfAllChildJobs</a> == 0)
+                {
+                    <span class="r32 r">newJobStateInfo</span> = <b>new</b> <a href="Job.cs.html#a797c55ae803218c" class="t constructor">JobStateInfo</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a>);
+                }
+ 
+                <b>if</b> ((<a href="#b4edec39806213e2" class="t t">ChildJobFlags</a>.<a href="#bd2f55948d7c72fd" class="i field">CreatesChildJobs</a> &amp; <span class="r30 r">flags</span>) == <a href="#b4edec39806213e2" class="t t">ChildJobFlags</a>.<a href="#bd2f55948d7c72fd" class="i field">CreatesChildJobs</a>)
+                {
+                    <a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Add</span>(<span class="r29 r">childJob</span>.<a href="Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>);
+                }
+ 
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>.<span class="i">Add</span>(<span class="r29 r">childJob</span>);
+                <a href="#1c86e6a83a383fc0" class="i field">_childJobLocations</a>.<span class="i">Add</span>(<span class="r29 r">childJob</span>.<a href="Job.cs.html#537225f6e8ddf06c" class="i property">Location</a>);
+                <a href="#e990c844e46da68a" class="i field">_countOfAllChildJobs</a>++;
+ 
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="#ed34d7a38b8577bf" class="i method">WriteWarningAboutHighUsageOfFlowControlBuffers</a>(<a href="#01c7878c4476f574" class="k">this</a>.<a href="#0c010b70a053bf60" class="i property">CountOfRunningOrReadyToRunChildJobs</a>);
+                <b>if</b> (<a href="#01c7878c4476f574" class="k">this</a>.<a href="#0c010b70a053bf60" class="i property">CountOfRunningOrReadyToRunChildJobs</a> &gt; <a href="#0940337d24d41110" class="i field">_maxReadyToRunJobs</a>)
+                {
+                    <a href="#a04344f9336c5526" class="i field">_actionsForUnblockingChildAdditions</a>.<span class="i">Enqueue</span>(<span class="r31 r">jobEnqueuedAction</span>);
+                }
+                <b>else</b>
+                {
+                    <span class="r31 r">jobEnqueuedAction</span>?.<span class="i">Invoke</span>();
+                }
+            }
+ 
+            <b>if</b> (<span class="r32 r">newJobStateInfo</span> != <b>null</b>)
+            {
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#c3fb91c6ec548ed8" class="i method">SetJobState</a>(<span class="r32 r">newJobStateInfo</span>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>, <span class="r32 r">newJobStateInfo</span>.<a href="Job.cs.html#5814932cc8525971" class="i property">Reason</a>);
+            }
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#c4f3e86dc255a836" class="i">ChildJobAdded</a>.<span class="i">SafeInvoke</span>(<a href="#01c7878c4476f574" class="k">this</a>, <b>new</b> <a href="#48f9a699ffdecee2" class="t constructor">ThrottlingJobChildAddedEventArgs</a>(<span class="r29 r">childJob</span>));
+ 
+            <span class="r29 r">childJob</span>.<span class="i">SetParentActivityIdGetter</span>(<a href="#01c7878c4476f574" class="k">this</a>.<span class="i">GetProgressActivityId</span>);
+            <span class="r29 r">childJob</span>.<a href="Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> += <a href="#01c7878c4476f574" class="k">this</a>.<span class="i">childJob_StateChanged</span>;
+            <b>if</b> (<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a>)
+            {
+                <span class="r29 r">childJob</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">childJob_ResultsAdded</span>;
+            }
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#217401b8d833a1a7" class="i method">EnqueueReadyToRunChildJob</a>(<span class="r29 r">childJob</span>);
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#48b4f9cff420ba8c" class="i method">ReportProgress</a>(<span class="r5 r">minimizeFrequentUpdates</span>: <b>true</b>);
+        }
+ 
+        <b>private void</b> <a id="d923b2f7bea64e00" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">childJob_ResultsAdded</a>(<b>object</b> <span id="r33 rd" class="r33 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r34 rd" class="r34 r">e</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a> != <b>null</b>, <span class="s">&quot;JobResultsThrottlingSemaphore should be non-null if childJob_ResultsAdded handled is registered&quot;</span>);
+            <b>try</b>
+            {
+                <b>long</b> <span id="r35 rd" class="r35 r">jobResultsUpdatedCount</span> = <span class="i">Interlocked</span>.<span class="i">Increment</span>(<b>ref</b> <a href="#535e3441f6cd0e0f" class="i field">_jobResultsCurrentCount</a>);
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="#ed34d7a38b8577bf" class="i method">WriteWarningAboutHighUsageOfFlowControlBuffers</a>(<span class="r35 r">jobResultsUpdatedCount</span>);
+ 
+                <a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a>.<span class="i">Wait</span>(<a href="#feda70c3c6412fe7" class="i field">_cancellationTokenSource</a>.<span class="i">Token</span>);
+            }
+            <b>catch</b> (<span class="i">ObjectDisposedException</span>)
+            {
+            }
+            <b>catch</b> (<span class="i">OperationCanceledException</span>)
+            {
+            }
+        }
+ 
+        <b>private readonly object</b> <a id="3176add88b950bd1" href="../../../R/3176add88b950bd1.html" target="n" data-glyph="46,1" class="i field">_alreadyWroteFlowControlBuffersHighMemoryUsageWarningLock</a> = <b>new</b> <b>object</b>();
+        <b>private bool</b> <a id="8f49cb00c4989209" href="../../../R/8f49cb00c4989209.html" target="n" data-glyph="46,1" class="i field">_alreadyWroteFlowControlBuffersHighMemoryUsageWarning</a>;
+ 
+        <b>private const long</b> <a id="eb581e3c3927209f" href="../../../R/eb581e3c3927209f.html" target="n" data-glyph="10,1" class="i field">FlowControlBuffersHighMemoryUsageThreshold</a> = 30000;
+ 
+        <b>private void</b> <a id="ed34d7a38b8577bf" href="../../../R/ed34d7a38b8577bf.html" target="n" data-glyph="76,1" class="i method">WriteWarningAboutHighUsageOfFlowControlBuffers</a>(<b>long</b> <span id="r36 rd" class="r36 r">currentCount</span>)
+        {
+            <b>if</b> (!<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r36 r">currentCount</span> &lt; <a href="#eb581e3c3927209f" class="i field">FlowControlBuffersHighMemoryUsageThreshold</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>lock</b> (<a href="#3176add88b950bd1" class="i field">_alreadyWroteFlowControlBuffersHighMemoryUsageWarningLock</a>)
+            {
+                <b>if</b> (<a href="#8f49cb00c4989209" class="i field">_alreadyWroteFlowControlBuffersHighMemoryUsageWarning</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <a href="#8f49cb00c4989209" class="i field">_alreadyWroteFlowControlBuffersHighMemoryUsageWarning</a> = <b>true</b>;
+            }
+ 
+            <b>string</b> <span id="r37 rd" class="r37 r">warningMessage</span> = <b>string</b>.<span class="i">Format</span>(
+                <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                <span class="i">RemotingErrorIdStrings</span>.<span class="i">ThrottlingJobFlowControlMemoryWarning</span>,
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#8cc82c1860b7ef46" class="i property">Command</a>);
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#e10d3e6d4bddf65f" class="i method">WriteWarning</a>(<span class="r37 r">warningMessage</span>);
+        }
+ 
+        <b>internal event</b> <span class="i">EventHandler</span>&lt;<a href="#03d73adc54ba59c6" class="t t">ThrottlingJobChildAddedEventArgs</a>&gt; <a id="c4f3e86dc255a836" href="../../../R/c4f3e86dc255a836.html" target="n" data-glyph="32,1" class="i">ChildJobAdded</a>;
+ 
+        <b>private int</b> <a id="12a4e2b36352374d" href="../../../R/12a4e2b36352374d.html" target="n" data-glyph="46,1" class="i field">_maximumConcurrentChildJobs</a>;
+        <b>private int</b> <a id="d1e0eb8e75866f39" href="../../../R/d1e0eb8e75866f39.html" target="n" data-glyph="46,1" class="i field">_extraCapacityForRunningQueryJobs</a>;
+        <b>private int</b> <a id="52332046605136df" href="../../../R/52332046605136df.html" target="n" data-glyph="46,1" class="i field">_extraCapacityForRunningAllJobs</a>;
+        <b>private bool</b> <a id="54f9fd6f30a1ba18" href="../../../R/54f9fd6f30a1ba18.html" target="n" data-glyph="46,1" class="i field">_inBoostModeToPreventQueryJobDeadlock</a>;
+        <b>private</b> <span class="i">Queue</span>&lt;<a href="#39bffdbce7f14d69" class="t t">StartableJob</a>&gt; <a id="b68d8b1092b4fb29" href="../../../R/b68d8b1092b4fb29.html" target="n" data-glyph="46,1" class="i field">_readyToRunQueryJobs</a>;
+        <b>private</b> <span class="i">Queue</span>&lt;<a href="#39bffdbce7f14d69" class="t t">StartableJob</a>&gt; <a id="fe09d33dc02216a8" href="../../../R/fe09d33dc02216a8.html" target="n" data-glyph="46,1" class="i field">_readyToRunRegularJobs</a>;
+        <b>private</b> <span class="i">Queue</span>&lt;<span class="i">Action</span>&gt; <a id="a04344f9336c5526" href="../../../R/a04344f9336c5526.html" target="n" data-glyph="46,1" class="i field">_actionsForUnblockingChildAdditions</a>;
+        <b>private int</b> <a id="0940337d24d41110" href="../../../R/0940337d24d41110.html" target="n" data-glyph="46,1" class="i field">_maxReadyToRunJobs</a>;
+        <b>private readonly</b> <span class="i">SemaphoreSlim</span> <a id="82414d392d97fd31" href="../../../R/82414d392d97fd31.html" target="n" data-glyph="46,1" class="i field">_jobResultsThrottlingSemaphore</a>;
+        <b>private long</b> <a id="535e3441f6cd0e0f" href="../../../R/535e3441f6cd0e0f.html" target="n" data-glyph="46,1" class="i field">_jobResultsCurrentCount</a>;
+ 
+        <b>private static readonly int</b> <a id="94da1d4b6782b91f" href="../../../R/94da1d4b6782b91f.html" target="n" data-glyph="46,1" class="i field">s_maximumReadyToRunJobs</a> = 10000;
+ 
+        <b>private void</b> <a id="7b6046f937b8bed9" href="../../../R/7b6046f937b8bed9.html" target="n" data-glyph="76,1" class="i method">SetupThrottlingQueue</a>(<b>int</b> <span id="r38 rd" class="r38 r">maximumConcurrentChildJobs</span>)
+        {
+            <a href="#12a4e2b36352374d" class="i field">_maximumConcurrentChildJobs</a> = <span class="r38 r">maximumConcurrentChildJobs</span> &gt; 0 ? <span class="r38 r">maximumConcurrentChildJobs</span> : <b>int</b>.<span class="i">MaxValue</span>;
+            <b>if</b> (<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a>)
+            {
+                <a href="#0940337d24d41110" class="i field">_maxReadyToRunJobs</a> = <a href="#94da1d4b6782b91f" class="i field">s_maximumReadyToRunJobs</a>;
+            }
+            <b>else</b>
+            {
+                <a href="#0940337d24d41110" class="i field">_maxReadyToRunJobs</a> = <b>int</b>.<span class="i">MaxValue</span>;
+            }
+ 
+            <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a> = <a href="#12a4e2b36352374d" class="i field">_maximumConcurrentChildJobs</a>;
+            <a href="#d1e0eb8e75866f39" class="i field">_extraCapacityForRunningQueryJobs</a> = <span class="i">Math</span>.<span class="i">Max</span>(1, <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a> / 2);
+ 
+            <a href="#54f9fd6f30a1ba18" class="i field">_inBoostModeToPreventQueryJobDeadlock</a> = <b>false</b>;
+            <a href="#b68d8b1092b4fb29" class="i field">_readyToRunQueryJobs</a> = <b>new</b> <span class="i">Queue</span>&lt;<a href="#39bffdbce7f14d69" class="t t">StartableJob</a>&gt;();
+            <a href="#fe09d33dc02216a8" class="i field">_readyToRunRegularJobs</a> = <b>new</b> <span class="i">Queue</span>&lt;<a href="#39bffdbce7f14d69" class="t t">StartableJob</a>&gt;();
+            <a href="#a04344f9336c5526" class="i field">_actionsForUnblockingChildAdditions</a> = <b>new</b> <span class="i">Queue</span>&lt;<span class="i">Action</span>&gt;();
+        }
+ 
+        <b>private void</b> <a id="22d77e5031e1d0dd" href="../../../R/22d77e5031e1d0dd.html" target="n" data-glyph="76,1" class="i method">StartChildJobIfPossible</a>()
+        {
+            <a href="#39bffdbce7f14d69" class="t t">StartableJob</a> <span id="r39 rd" class="r39 r">readyToRunChildJob</span> = <b>null</b>;
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <b>do</b>
+                {
+                    <b>if</b> ((<a href="#b68d8b1092b4fb29" class="i field">_readyToRunQueryJobs</a>.<span class="i">Count</span> &gt; 0) &amp;&amp;
+                        (<a href="#d1e0eb8e75866f39" class="i field">_extraCapacityForRunningQueryJobs</a> &gt; 0) &amp;&amp;
+                        (<a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a> &gt; 0))
+                    {
+                        <a href="#d1e0eb8e75866f39" class="i field">_extraCapacityForRunningQueryJobs</a>--;
+                        <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a>--;
+                        <span class="r39 r">readyToRunChildJob</span> = <a href="#b68d8b1092b4fb29" class="i field">_readyToRunQueryJobs</a>.<span class="i">Dequeue</span>();
+                        <b>break</b>;
+                    }
+ 
+                    <b>if</b> ((<a href="#fe09d33dc02216a8" class="i field">_readyToRunRegularJobs</a>.<span class="i">Count</span> &gt; 0) &amp;&amp;
+                        (<a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a> &gt; 0))
+                    {
+                        <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a>--;
+                        <span class="r39 r">readyToRunChildJob</span> = <a href="#fe09d33dc02216a8" class="i field">_readyToRunRegularJobs</a>.<span class="i">Dequeue</span>();
+                        <b>break</b>;
+                    }
+                } <b>while</b> (<b>false</b>);
+            }
+ 
+            <b>if</b> (<span class="r39 r">readyToRunChildJob</span> != <b>null</b>)
+            {
+                <span class="r39 r">readyToRunChildJob</span>.<a href="#116d3d5f99087a08" class="i method">StartJob</a>();
+            }
+        }
+ 
+        <b>private void</b> <a id="217401b8d833a1a7" href="../../../R/217401b8d833a1a7.html" target="n" data-glyph="76,1" class="i method">EnqueueReadyToRunChildJob</a>(<a href="#39bffdbce7f14d69" class="t t">StartableJob</a> <span id="r40 rd" class="r40 r">childJob</span>)
+        {
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <b>bool</b> <span id="r41 rd" class="r41 r">isQueryJob</span> = <a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Contains</span>(<span class="r40 r">childJob</span>.<a href="Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>);
+                <b>if</b> (<span class="r41 r">isQueryJob</span> &amp;&amp;
+                    !<a href="#54f9fd6f30a1ba18" class="i field">_inBoostModeToPreventQueryJobDeadlock</a> &amp;&amp;
+                    (<a href="#12a4e2b36352374d" class="i field">_maximumConcurrentChildJobs</a> == 1))
+                {
+                    <a href="#54f9fd6f30a1ba18" class="i field">_inBoostModeToPreventQueryJobDeadlock</a> = <b>true</b>;
+                    <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a>++;
+                }
+ 
+                <b>if</b> (<span class="r41 r">isQueryJob</span>)
+                {
+                    <a href="#b68d8b1092b4fb29" class="i field">_readyToRunQueryJobs</a>.<span class="i">Enqueue</span>(<span class="r40 r">childJob</span>);
+                }
+                <b>else</b>
+                {
+                    <a href="#fe09d33dc02216a8" class="i field">_readyToRunRegularJobs</a>.<span class="i">Enqueue</span>(<span class="r40 r">childJob</span>);
+                }
+            }
+ 
+            <a href="#22d77e5031e1d0dd" class="i method">StartChildJobIfPossible</a>();
+        }
+ 
+        <b>private void</b> <a id="7a2618513b10adde" href="../../../R/7a2618513b10adde.html" target="n" data-glyph="76,1" class="i method">MakeRoomForRunningOtherJobs</a>(<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r42 rd" class="r42 r">completedChildJob</span>)
+        {
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a>++;
+ 
+                <b>bool</b> <span id="r43 rd" class="r43 r">isQueryJob</span> = <a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Contains</span>(<span class="r42 r">completedChildJob</span>.<a href="Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>);
+                <b>if</b> (<span class="r43 r">isQueryJob</span>)
+                {
+                    <a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Remove</span>(<span class="r42 r">completedChildJob</span>.<a href="Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>);
+ 
+                    <a href="#d1e0eb8e75866f39" class="i field">_extraCapacityForRunningQueryJobs</a>++;
+                    <b>if</b> (<a href="#54f9fd6f30a1ba18" class="i field">_inBoostModeToPreventQueryJobDeadlock</a> &amp;&amp; (<a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Count</span> == 0))
+                    {
+                        <a href="#54f9fd6f30a1ba18" class="i field">_inBoostModeToPreventQueryJobDeadlock</a> = <b>false</b>;
+                        <a href="#52332046605136df" class="i field">_extraCapacityForRunningAllJobs</a>--;
+                    }
+                }
+            }
+ 
+            <a href="#22d77e5031e1d0dd" class="i method">StartChildJobIfPossible</a>();
+        }
+ 
+        <b>private void</b> <a id="1d686caa6bfbd584" href="../../../R/1d686caa6bfbd584.html" target="n" data-glyph="76,1" class="i method">FigureOutIfThrottlingJobIsCompleted</a>()
+        {
+            <a href="Job.cs.html#8f788812e1264af5" class="t t">JobStateInfo</a> <span id="r44 rd" class="r44 r">finalJobStateInfo</span> = <b>null</b>;
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <b>if</b> (<a href="#01c7878c4476f574" class="k">this</a>.<a href="#45365387e786fec8" class="i property">IsThrottlingJobCompleted</a> &amp;&amp; !<a href="Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+                {
+                    <b>if</b> (<a href="#f8e4ed807957e6b9" class="i field">_isStopping</a>)
+                    {
+                        <span class="r44 r">finalJobStateInfo</span> = <b>new</b> <a href="Job.cs.html#c9b5221f53e16cd6" class="t constructor">JobStateInfo</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#223c91574b18631a" class="i field">Stopped</a>, <b>null</b>);
+                    }
+                    <b>else</b> <b>if</b> (<a href="#3ebba637de2d89ed" class="i field">_countOfFailedChildJobs</a> &gt; 0)
+                    {
+                        <span class="r44 r">finalJobStateInfo</span> = <b>new</b> <a href="Job.cs.html#c9b5221f53e16cd6" class="t constructor">JobStateInfo</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#4d2acd22ba4f0da9" class="i field">Failed</a>, <b>null</b>);
+                    }
+                    <b>else</b> <b>if</b> (<a href="#235ecf4e4017b315" class="i field">_countOfStoppedChildJobs</a> &gt; 0)
+                    {
+                        <span class="r44 r">finalJobStateInfo</span> = <b>new</b> <a href="Job.cs.html#c9b5221f53e16cd6" class="t constructor">JobStateInfo</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#223c91574b18631a" class="i field">Stopped</a>, <b>null</b>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r44 r">finalJobStateInfo</span> = <b>new</b> <a href="Job.cs.html#a797c55ae803218c" class="t constructor">JobStateInfo</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#db36b340edc064ae" class="i field">Completed</a>);
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r44 r">finalJobStateInfo</span> != <b>null</b>)
+            {
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#c3fb91c6ec548ed8" class="i method">SetJobState</a>(<span class="r44 r">finalJobStateInfo</span>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>, <span class="r44 r">finalJobStateInfo</span>.<a href="Job.cs.html#5814932cc8525971" class="i property">Reason</a>);
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#dca29ffce44d207a" class="i method">CloseAllStreams</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Notifies this </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#01c7878c4476f574" class="t t">ThrottlingJob</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> object that no more child jobs will be added.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="c0dac93e20fd4c0b" href="../../../R/c0dac93e20fd4c0b.html" target="n" data-glyph="74,1" class="i method">EndOfChildJobs</a>()
+        {
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#0328c940aee2761d" class="i method">AssertNotDisposed</a>();
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <a href="#32db7814977b0a54" class="i field">_ownerWontSubmitNewChildJobs</a> = <b>true</b>;
+            }
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#1d686caa6bfbd584" class="i method">FigureOutIfThrottlingJobIsCompleted</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Stop this job object and all the </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="3ab33e21aa3221fd" href="../../../R/3ab33e21aa3221fd.html" target="n" data-glyph="72,1" class="i method">StopJob</a>()
+        {
+            <span class="i">List</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r45 rd" class="r45 r">childJobsToStop</span> = <b>null</b>;
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <b>if</b> (!(<a href="#f8e4ed807957e6b9" class="i field">_isStopping</a> || <a href="#01c7878c4476f574" class="k">this</a>.<a href="#45365387e786fec8" class="i property">IsThrottlingJobCompleted</a>))
+                {
+                    <a href="#f8e4ed807957e6b9" class="i field">_isStopping</a> = <b>true</b>;
+                    <span class="r45 r">childJobsToStop</span> = <a href="#01c7878c4476f574" class="k">this</a>.<a href="#66625421c57522cb" class="i method">GetChildJobsSnapshot</a>();
+                }
+            }
+ 
+            <b>if</b> (<span class="r45 r">childJobsToStop</span> != <b>null</b>)
+            {
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#2bd9d7abde5f33f7" class="i method">SetJobState</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#57a9991c9eea4421" class="i field">Stopping</a>);
+ 
+                <a href="#feda70c3c6412fe7" class="i field">_cancellationTokenSource</a>.<span class="i">Cancel</span>();
+                <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r46 rd" class="r46 r">childJob</span> <b>in</b> <span class="r45 r">childJobsToStop</span>)
+                {
+                    <b>if</b> (!<span class="r46 r">childJob</span>.<a href="Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r46 r">childJob</span>.<a href="Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+                    {
+                        <span class="r46 r">childJob</span>.<a href="Job.cs.html#5e60404c217f5d42" class="i method">StopJob</a>();
+                    }
+                }
+ 
+                <a href="#01c7878c4476f574" class="k">this</a>.<a href="#1d686caa6bfbd584" class="i method">FigureOutIfThrottlingJobIsCompleted</a>();
+            }
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#b1600ff0c937953b" class="i property">Finished</a>.<span class="i">WaitOne</span>();
+        }
+ 
+        <b>private bool</b> <a id="f8e4ed807957e6b9" href="../../../R/f8e4ed807957e6b9.html" target="n" data-glyph="46,1" class="i field">_isStopping</a>;
+        <b>private readonly</b> <span class="i">CancellationTokenSource</span> <a id="feda70c3c6412fe7" href="../../../R/feda70c3c6412fe7.html" target="n" data-glyph="46,1" class="i field">_cancellationTokenSource</a> = <b>new</b> <span class="i">CancellationTokenSource</span>();
+ 
+        <b>private void</b> <a id="362fd556794aee87" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">childJob_StateChanged</a>(<b>object</b> <span id="r47 rd" class="r47 r">sender</span>, <a href="Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r48 rd" class="r48 r">e</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r47 r">sender</span> != <b>null</b>, <span class="s">&quot;Only our internal implementation of Job should raise this event and it should make sure that sender != null&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r47 r">sender</span> <b>is</b> <a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>, <span class="s">&quot;Only our internal implementation of Job should raise this event and it should make sure that sender is Job&quot;</span>);
+            <a href="Job.cs.html#e1ff43f6998863de" class="k">var</a> <span id="r49 rd" class="r49 r">childJob</span> = (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<span class="r47 r">sender</span>;
+ 
+            <b>if</b> ((<span class="r48 r">e</span>.<a href="Job.cs.html#6302f233913a7ce2" class="i property">PreviousJobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#d73e45c1ea393a18" class="i field">Blocked</a>) &amp;&amp; (<span class="r48 r">e</span>.<a href="Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a> != <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#d73e45c1ea393a18" class="i field">Blocked</a>))
+            {
+                <b>bool</b> <span id="r50 rd" class="r50 r">parentJobGotUnblocked</span> = <b>false</b>;
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <a href="#c5fcd21b0887e26f" class="i field">_countOfBlockedChildJobs</a>--;
+                    <b>if</b> (<a href="#c5fcd21b0887e26f" class="i field">_countOfBlockedChildJobs</a> == 0)
+                    {
+                        <span class="r50 r">parentJobGotUnblocked</span> = <b>true</b>;
+                    }
+                }
+ 
+                <b>if</b> (<span class="r50 r">parentJobGotUnblocked</span>)
+                {
+                    <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#2bd9d7abde5f33f7" class="i method">SetJobState</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a>);
+                }
+            }
+ 
+            <b>switch</b> (<span class="r48 r">e</span>.<a href="Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)
+            {
+                <span class="c">// intermediate states</span>
+                <b>case</b> <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#d73e45c1ea393a18" class="i field">Blocked</a>:
+                    <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                    {
+                        <a href="#c5fcd21b0887e26f" class="i field">_countOfBlockedChildJobs</a>++;
+                    }
+ 
+                    <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#2bd9d7abde5f33f7" class="i method">SetJobState</a>(<a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#d73e45c1ea393a18" class="i field">Blocked</a>);
+                    <b>break</b>;
+ 
+                <span class="c">// 3 finished states</span>
+                <b>case</b> <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#4d2acd22ba4f0da9" class="i field">Failed</a>:
+                <b>case</b> <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#223c91574b18631a" class="i field">Stopped</a>:
+                <b>case</b> <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#db36b340edc064ae" class="i field">Completed</a>:
+                    <span class="r49 r">childJob</span>.<a href="Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <span class="i">childJob_StateChanged</span>;
+                    <a href="#01c7878c4476f574" class="k">this</a>.<a href="#7a2618513b10adde" class="i method">MakeRoomForRunningOtherJobs</a>(<span class="r49 r">childJob</span>);
+                    <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                    {
+                        <b>if</b> (<span class="r48 r">e</span>.<a href="Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#4d2acd22ba4f0da9" class="i field">Failed</a>)
+                        {
+                            <a href="#3ebba637de2d89ed" class="i field">_countOfFailedChildJobs</a>++;
+                        }
+                        <b>else</b> <b>if</b> (<span class="r48 r">e</span>.<a href="Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#223c91574b18631a" class="i field">Stopped</a>)
+                        {
+                            <a href="#235ecf4e4017b315" class="i field">_countOfStoppedChildJobs</a>++;
+                        }
+                        <b>else</b> <b>if</b> (<span class="r48 r">e</span>.<a href="Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="Job.cs.html#db36b340edc064ae" class="i field">Completed</a>)
+                        {
+                            <a href="#5ba7248b50adfbac" class="i field">_countOfSuccessfullyCompletedChildJobs</a>++;
+                        }
+ 
+                        <b>if</b> (<a href="#a04344f9336c5526" class="i field">_actionsForUnblockingChildAdditions</a>.<span class="i">Count</span> &gt; 0)
+                        {
+                            <span class="i">Action</span> <span id="r51 rd" class="r51 r">a</span> = <a href="#a04344f9336c5526" class="i field">_actionsForUnblockingChildAdditions</a>.<span class="i">Dequeue</span>();
+                            <span class="r51 r">a</span>?.<span class="i">Invoke</span>();
+                        }
+ 
+                        <b>if</b> (<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a>)
+                        {
+                            <b>foreach</b> (<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r52 rd" class="r52 r">streamObject</span> <b>in</b> <span class="r49 r">childJob</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#403be942120e2d89" class="i method">ReadAll</a>())
+                            {
+                                <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<span class="r52 r">streamObject</span>);
+                            }
+ 
+                            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>.<span class="i">Remove</span>(<span class="r49 r">childJob</span>);
+                            <a href="#40daa73fbb6a9e56" class="i field">_setOfChildJobsThatCanAddMoreChildJobs</a>.<span class="i">Remove</span>(<span class="r49 r">childJob</span>.<a href="Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>);
+                            <span class="r49 r">childJob</span>.<a href="Job.cs.html#a1b7a0cd2d734ade" class="i method">Dispose</a>();
+                        }
+                    }
+ 
+                    <a href="#01c7878c4476f574" class="k">this</a>.<span class="i">ReportProgress</span>(<span class="i">minimizeFrequentUpdates</span>: !<a href="#01c7878c4476f574" class="k">this</a>.<a href="#45365387e786fec8" class="i property">IsThrottlingJobCompleted</a>);
+                    <b>break</b>;
+ 
+                <b>default</b>:
+                    <span class="c">// do nothing</span>
+                    <b>break</b>;
+            }
+ 
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#1d686caa6bfbd584" class="i method">FigureOutIfThrottlingJobIsCompleted</a>();
+        }
+ 
+        <b>private</b> <span class="i">List</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <a id="66625421c57522cb" href="../../../R/66625421c57522cb.html" target="n" data-glyph="76,1" class="i method">GetChildJobsSnapshot</a>()
+        {
+            <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+            {
+                <b>return</b> <b>new</b> <span class="i">List</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;(<a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicates if job has more data available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">true</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> if any of the child jobs have more data OR if </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="#c0dac93e20fd4c0b" class="i method">EndOfChildJobs</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> have not been called yet;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">langword</span><span class="c">=</span><span class="c">&quot;</span><span class="c">false</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> otherwise.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="1e41bc78e3649f50" href="../../../R/1e41bc78e3649f50.html" target="n" data-glyph="102,1" class="i property">HasMoreData</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#01c7878c4476f574" class="k">this</a>.<a href="#66625421c57522cb" class="i method">GetChildJobsSnapshot</a>().<span class="i">Any</span>(<b>static</b> <span id="r53 rd" class="r53 r">childJob</span> =&gt; <span class="r53 r">childJob</span>.<span class="i">HasMoreData</span>) || (<a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a> != 0);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Comma-separated list of locations of </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>.<a href="Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="b8b1873d6e8f7bd3" href="../../../R/b8b1873d6e8f7bd3.html" target="n" data-glyph="102,1" class="i property">Location</a>
+        {
+            <b>get</b>
+            {
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <b>return</b> <b>string</b>.<span class="i">Join</span>(<span class="s">&quot;, &quot;</span>, <a href="#1c86e6a83a383fc0" class="i field">_childJobLocations</a>);
+                }
+            }
+        }
+ 
+        <b>private readonly</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt; <a id="1c86e6a83a383fc0" href="../../../R/1c86e6a83a383fc0.html" target="n" data-glyph="46,1" class="i field">_childJobLocations</a> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Status message associated with the Job.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override string</b> <a id="a9428e1df2a11f72" href="../../../R/a9428e1df2a11f72.html" target="n" data-glyph="102,1" class="i property">StatusMessage</a>
+        {
+            <b>get</b>
+            {
+                <b>int</b> <span id="r54 rd" class="r54 r">completedChildJobs</span>;
+                <b>int</b> <span id="r55 rd" class="r55 r">totalChildJobs</span>;
+                <b>lock</b> (<a href="#b4ff6f803a3d85ba" class="i field">_lockObject</a>)
+                {
+                    <span class="r54 r">completedChildJobs</span> = <a href="#01c7878c4476f574" class="k">this</a>.<a href="#487143e8626a6722" class="i property">CountOfFinishedChildJobs</a>;
+                    <span class="r55 r">totalChildJobs</span> = <a href="#e990c844e46da68a" class="i field">_countOfAllChildJobs</a>;
+                }
+ 
+                <b>string</b> <span id="r56 rd" class="r56 r">totalChildJobsString</span> = <span class="r55 r">totalChildJobs</span>.<span class="i">ToString</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>);
+                <b>if</b> (!<a href="#01c7878c4476f574" class="k">this</a>.<a href="#baa8e4a16c057cf1" class="i property">IsEndOfChildJobs</a>)
+                {
+                    <span class="r56 r">totalChildJobsString</span> += <span class="s">&quot;+&quot;</span>;
+                }
+ 
+                <b>return</b> <b>string</b>.<span class="i">Format</span>(
+                    <span class="i">CultureInfo</span>.<span class="i">CurrentUICulture</span>,
+                    <span class="i">RemotingErrorIdStrings</span>.<span class="i">ThrottlingJobStatusMessage</span>,
+                    <span class="r54 r">completedChildJobs</span>,
+                    <span class="r56 r">totalChildJobsString</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Forwarding results to a cmdlet
+ 
+        <b>internal override void</b> <a id="0e34465014933e7d" href="../../../R/0e34465014933e7d.html" target="n" data-glyph="74,1" class="i method">ForwardAvailableResultsToCmdlet</a>(<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r57 rd" class="r57 r">cmdlet</span>)
+        {
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#0328c940aee2761d" class="i method">AssertNotDisposed</a>();
+ 
+            <a href="Job.cs.html#e1ff43f6998863de" class="k">base</a>.<a href="Job.cs.html#f208383be4fef0e1" class="i method">ForwardAvailableResultsToCmdlet</a>(<span class="r57 r">cmdlet</span>);
+            <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r58 rd" class="r58 r">childJob</span> <b>in</b> <a href="#01c7878c4476f574" class="k">this</a>.<a href="#66625421c57522cb" class="i method">GetChildJobsSnapshot</a>())
+            {
+                <span class="r58 r">childJob</span>.<a href="Job.cs.html#f208383be4fef0e1" class="i method">ForwardAvailableResultsToCmdlet</a>(<span class="r57 r">cmdlet</span>);
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="7207a0ee616786b9" href="../../../R/7207a0ee616786b9.html" target="n" data-glyph="4,1" class="t t">ForwardingHelper</a> : <span class="i">IDisposable</span>
+        {
+            <span class="c">// This is higher than 1000 used in</span>
+            <span class="c">//      RxExtensionMethods+ToEnumerableObserver&lt;T&gt;.BlockingCollectionCapacity</span>
+            <span class="c">// and in</span>
+            <span class="c">//      RemoteDiscoveryHelper.BlockingCollectionCapacity</span>
+            <span class="c">// It needs to be higher, because the high value is used as an attempt to workaround the fact that</span>
+            <span class="c">// WSMan will timeout if an OnNext call blocks for more than X minutes.</span>
+ 
+            <span class="c">// This is a static field (instead of a constant) to make it possible to set through tests (and/or by customers if needed for a workaround)</span>
+            <b>internal static readonly int</b> <a id="3630fa94654095e0" href="../../../R/3630fa94654095e0.html" target="n" data-glyph="44,2" class="i field">AggregationQueueMaxCapacity</a> = 10000;
+ 
+            <b>private readonly</b> <a href="#01c7878c4476f574" class="t t">ThrottlingJob</a> <a id="eafd8243f5b459c4" href="../../../R/eafd8243f5b459c4.html" target="n" data-glyph="46,2" class="i field">_throttlingJob</a>;
+ 
+            <b>private readonly object</b> <a id="c309d7233402099e" href="../../../R/c309d7233402099e.html" target="n" data-glyph="46,2" class="i field">_myLock</a>;
+            <b>private readonly</b> <span class="i">BlockingCollection</span>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <a id="8f169a700b60c71c" href="../../../R/8f169a700b60c71c.html" target="n" data-glyph="46,2" class="i field">_aggregatedResults</a>;
+            <b>private readonly</b> <span class="i">HashSet</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <a id="c9520545c54fb8ac" href="../../../R/c9520545c54fb8ac.html" target="n" data-glyph="46,2" class="i field">_monitoredJobs</a>;
+ 
+            <b>private readonly</b> <span class="i">CancellationTokenSource</span> <a id="80ceb856aaac00ea" href="../../../R/80ceb856aaac00ea.html" target="n" data-glyph="46,2" class="i field">_cancellationTokenSource</a> = <b>new</b> <span class="i">CancellationTokenSource</span>();
+            <b>private bool</b> <a id="05e352e85a26b0c2" href="../../../R/05e352e85a26b0c2.html" target="n" data-glyph="46,2" class="i field">_disposed</a>;
+ 
+            <b>private</b> <a id="58cf0f465e028980" href="../../../R/58cf0f465e028980.html" target="n" data-glyph="76,2" class="t constructor">ForwardingHelper</a>(<a href="#01c7878c4476f574" class="t t">ThrottlingJob</a> <span id="r59 rd" class="r59 r">throttlingJob</span>)
+            {
+                <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a> = <span class="r59 r">throttlingJob</span>;
+ 
+                <a href="#c309d7233402099e" class="i field">_myLock</a> = <b>new</b> <b>object</b>();
+                <a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a> = <b>new</b> <span class="i">HashSet</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;();
+ 
+                <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a> = <b>new</b> <span class="i">BlockingCollection</span>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;();
+            }
+ 
+            <b>private void</b> <a id="d77aabbff25c1d26" href="../../../R/d77aabbff25c1d26.html" target="n" data-glyph="76,2" class="i method">StartMonitoringJob</a>(<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r60 rd" class="r60 r">job</span>)
+            {
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <b>if</b> (<a href="#05e352e85a26b0c2" class="i field">_disposed</a> || <a href="#4024d3395c44d05b" class="i field">_stoppedMonitoringAllJobs</a>)
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <b>if</b> (<a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>.<span class="i">Contains</span>(<span class="r60 r">job</span>))
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>.<span class="i">Add</span>(<span class="r60 r">job</span>);
+ 
+                    <span class="r60 r">job</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <a href="#7207a0ee616786b9" class="k">this</a>.<span class="i">MonitoredJobResults_DataAdded</span>;
+                    <span class="r60 r">job</span>.<a href="Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> += <span class="i">MonitoredJob_StateChanged</span>;
+                }
+ 
+                <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#b760a6a95f33350b" class="i method">AggregateJobResults</a>(<span class="r60 r">job</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>);
+                <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#53b06a5ce6bfe533" class="i method">CheckIfMonitoredJobIsComplete</a>(<span class="r60 r">job</span>);
+            }
+ 
+            <b>private void</b> <a id="90d90d586adae9b8" href="../../../R/90d90d586adae9b8.html" target="n" data-glyph="76,2" class="i method">StopMonitoringJob</a>(<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r61 rd" class="r61 r">job</span>)
+            {
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <b>if</b> (<a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>.<span class="i">Contains</span>(<span class="r61 r">job</span>))
+                    {
+                        <span class="r61 r">job</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <a href="#7207a0ee616786b9" class="k">this</a>.<span class="i">MonitoredJobResults_DataAdded</span>;
+                        <span class="r61 r">job</span>.<a href="Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <a href="#7207a0ee616786b9" class="k">this</a>.<span class="i">MonitoredJob_StateChanged</span>;
+                        <a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>.<span class="i">Remove</span>(<span class="r61 r">job</span>);
+                    }
+                }
+            }
+ 
+            <b>private void</b> <a id="b760a6a95f33350b" href="../../../R/b760a6a95f33350b.html" target="n" data-glyph="76,2" class="i method">AggregateJobResults</a>(<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <span id="r62 rd" class="r62 r">resultsCollection</span>)
+            {
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <span class="c">// try not to remove results from a job, unless it seems safe ...</span>
+                    <b>if</b> (<a href="#05e352e85a26b0c2" class="i field">_disposed</a> || <a href="#4024d3395c44d05b" class="i field">_stoppedMonitoringAllJobs</a> || <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">IsAddingCompleted</span> || <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">IsCancellationRequested</span>)
+                    {
+                        <b>return</b>;
+                    }
+                }
+ 
+                <span class="c">// ... and after removing the results via ReadAll, we have to make sure that we don&#39;t drop them ...</span>
+                <b>foreach</b> (<b>var</b> <span id="r63 rd" class="r63 r">result</span> <b>in</b> <span class="r62 r">resultsCollection</span>.<a href="../../hostifaces/PSDataCollection.cs.html#403be942120e2d89" class="i method">ReadAll</a>())
+                {
+                    <b>bool</b> <span id="r64 rd" class="r64 r">successfullyAggregatedResult</span> = <b>false</b>;
+                    <b>try</b>
+                    {
+                        <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                        {
+                            <span class="c">// try not to remove results from a job, unless it seems safe ...</span>
+                            <b>if</b> (!(<a href="#05e352e85a26b0c2" class="i field">_disposed</a> || <a href="#4024d3395c44d05b" class="i field">_stoppedMonitoringAllJobs</a> || <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">IsAddingCompleted</span> || <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">IsCancellationRequested</span>))
+                            {
+                                <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">Add</span>(<span class="r63 r">result</span>, <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">Token</span>);
+                                <span class="r64 r">successfullyAggregatedResult</span> = <b>true</b>;
+                            }
+                        }
+                    }
+                    <b>catch</b> (<span class="i">Exception</span>) <span class="c">// BlockingCollection.Add can throw undocumented exceptions - we cannot just catch InvalidOperationException</span>
+                    {
+                    }
+ 
+                    <span class="c">// ... so if _aggregatedResults is not accepting new results, we will store them in the throttling job</span>
+                    <b>if</b> (!<span class="r64 r">successfullyAggregatedResult</span>)
+                    {
+                        <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#90d90d586adae9b8" class="i method">StopMonitoringJob</a>(<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>);
+                        <b>try</b>
+                        {
+                            <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<span class="i">Add</span>(<span class="r63 r">result</span>);
+                        }
+                        <b>catch</b> (<span class="i">InvalidOperationException</span>)
+                        {
+                            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;ThrottlingJob.Results was already closed when trying to preserve results aggregated by ForwardingHelper&quot;</span>);
+                        }
+                    }
+                }
+            }
+ 
+            <b>private void</b> <a id="8300f171e4997113" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">CancelForwarding</a>()
+            {
+                <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">Cancel</span>();
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<a href="#05e352e85a26b0c2" class="i field">_disposed</a>, <span class="s">&quot;CancelForwarding should be unregistered before ForwardingHelper gets disposed&quot;</span>);
+                    <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">CompleteAdding</span>();
+                }
+            }
+ 
+            <b>private void</b> <a id="53b06a5ce6bfe533" href="../../../R/53b06a5ce6bfe533.html" target="n" data-glyph="76,2" class="i method">CheckIfMonitoredJobIsComplete</a>(<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r65 rd" class="r65 r">job</span>)
+            {
+                <a href="#f8c67066d18c586b" class="i method">CheckIfMonitoredJobIsComplete</a>(<span class="r65 r">job</span>, <span class="r65 r">job</span>.<a href="Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>);
+            }
+ 
+            <b>private void</b> <a id="f8c67066d18c586b" href="../../../R/f8c67066d18c586b.html" target="n" data-glyph="76,2" class="i method">CheckIfMonitoredJobIsComplete</a>(<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r66 rd" class="r66 r">job</span>, <a href="Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a> <span id="r67 rd" class="r67 r">jobState</span>)
+            {
+                <b>if</b> (<span class="r66 r">job</span>.<a href="Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r67 r">jobState</span>))
+                {
+                    <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                    {
+                        <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#90d90d586adae9b8" class="i method">StopMonitoringJob</a>(<span class="r66 r">job</span>);
+                    }
+                }
+            }
+ 
+            <b>private void</b> <a id="a773c7eca3a07204" href="../../../R/a773c7eca3a07204.html" target="n" data-glyph="76,2" class="i method">CheckIfThrottlingJobIsComplete</a>()
+            {
+                <b>if</b> (<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#45365387e786fec8" class="i property">IsThrottlingJobCompleted</a>)
+                {
+                    <span class="i">List</span>&lt;<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;&gt; <span id="r68 rd" class="r68 r">resultsToAggregate</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;&gt;();
+                    <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                    {
+                        <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r69 rd" class="r69 r">registeredJob</span> <b>in</b> <a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>)
+                        {
+                            <span class="r68 r">resultsToAggregate</span>.<span class="i">Add</span>(<span class="r69 r">registeredJob</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>);
+                        }
+ 
+                        <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r70 rd" class="r70 r">throttledJob</span> <b>in</b> <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#66625421c57522cb" class="i method">GetChildJobsSnapshot</a>())
+                        {
+                            <span class="r68 r">resultsToAggregate</span>.<span class="i">Add</span>(<span class="r70 r">throttledJob</span>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>);
+                        }
+ 
+                        <span class="r68 r">resultsToAggregate</span>.<span class="i">Add</span>(<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>);
+                    }
+ 
+                    <b>foreach</b> (<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <span id="r71 rd" class="r71 r">resultToAggregate</span> <b>in</b> <span class="r68 r">resultsToAggregate</span>)
+                    {
+                        <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#b760a6a95f33350b" class="i method">AggregateJobResults</a>(<span class="r71 r">resultToAggregate</span>);
+                    }
+ 
+                    <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                    {
+                        <b>if</b> (!<a href="#05e352e85a26b0c2" class="i field">_disposed</a> &amp;&amp; !<a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">IsAddingCompleted</span>)
+                        {
+                            <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">CompleteAdding</span>();
+                        }
+                    }
+                }
+            }
+ 
+            <b>private void</b> <a id="bb2923bbeba4a6e2" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">MonitoredJobResults_DataAdded</a>(<b>object</b> <span id="r72 rd" class="r72 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r73 rd" class="r73 r">e</span>)
+            {
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="k">var</a> <span id="r74 rd" class="r74 r">resultsCollection</span> = (<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;)<span class="r72 r">sender</span>;
+                <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#b760a6a95f33350b" class="i method">AggregateJobResults</a>(<span class="r74 r">resultsCollection</span>);
+            }
+ 
+            <b>private void</b> <a id="de8d3c122f23aa11" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">MonitoredJob_StateChanged</a>(<b>object</b> <span id="r75 rd" class="r75 r">sender</span>, <a href="Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r76 rd" class="r76 r">e</span>)
+            {
+                <a href="Job.cs.html#e1ff43f6998863de" class="k">var</a> <span id="r77 rd" class="r77 r">job</span> = (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<span class="r75 r">sender</span>;
+                <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#f8c67066d18c586b" class="i method">CheckIfMonitoredJobIsComplete</a>(<span class="r77 r">job</span>, <span class="r76 r">e</span>.<a href="Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>);
+            }
+ 
+            <b>private void</b> <a id="9720296e5bad62c5" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">ThrottlingJob_ChildJobAdded</a>(<b>object</b> <span id="r78 rd" class="r78 r">sender</span>, <a href="#03d73adc54ba59c6" class="t t">ThrottlingJobChildAddedEventArgs</a> <span id="r79 rd" class="r79 r">e</span>)
+            {
+                <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#d77aabbff25c1d26" class="i method">StartMonitoringJob</a>(<span class="r79 r">e</span>.<a href="#74d3f7553c470ab0" class="i property">AddedChildJob</a>);
+            }
+ 
+            <b>private void</b> <a id="04e2efc8fb462c2e" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">ThrottlingJob_StateChanged</a>(<b>object</b> <span id="r80 rd" class="r80 r">sender</span>, <a href="Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r81 rd" class="r81 r">e</span>)
+            {
+                <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#a773c7eca3a07204" class="i method">CheckIfThrottlingJobIsComplete</a>();
+            }
+ 
+            <b>private void</b> <a id="f92b62540a8e0973" href="../../../R/f92b62540a8e0973.html" target="n" data-glyph="76,2" class="i method">AttemptToPreserveAggregatedResults</a>()
+            {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span>
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<a href="#05e352e85a26b0c2" class="i field">_disposed</a>, <span class="s">&quot;AttemptToPreserveAggregatedResults should be called before disposing ForwardingHelper&quot;</span>);
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#4024d3395c44d05b" class="i field">_stoppedMonitoringAllJobs</a>, <span class="s">&quot;Caller should guarantee no-more-results before calling AttemptToPreserveAggregatedResults (1)&quot;</span>);
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">IsAddingCompleted</span>, <span class="s">&quot;Caller should guarantee no-more-results before calling AttemptToPreserveAggregatedResults (2)&quot;</span>);
+                }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+                <b>bool</b> <span id="r82 rd" class="r82 r">isThrottlingJobFinished</span> = <b>false</b>;
+                <b>foreach</b> (<b>var</b> <span id="r83 rd" class="r83 r">aggregatedButNotYetProcessedResult</span> <b>in</b> <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>)
+                {
+                    <b>if</b> (!<span class="r82 r">isThrottlingJobFinished</span>)
+                    {
+                        <b>try</b>
+                        {
+                            <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<span class="i">Add</span>(<span class="r83 r">aggregatedButNotYetProcessedResult</span>);
+                        }
+                        <b>catch</b> (<a href="../../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a>)
+                        {
+                            <span class="r82 r">isThrottlingJobFinished</span> = <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="Job.cs.html#245057a5f4a9ed30" class="i property">State</a>);
+                            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r82 r">isThrottlingJobFinished</span>, <span class="s">&quot;Buffers should not be closed before throttling job is stopped&quot;</span>);
+                        }
+                    }
+                }
+            }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span>
+            <span class="c">// CDXML_CLIXML_TEST testability hook</span>
+ 
+            <b>private static readonly bool</b> <a id="9b59c9230870dc8b" href="../../../R/9b59c9230870dc8b.html" target="n" data-glyph="46,2" class="i field">s_isCliXmlTestabilityHookActive</a> = <a href="#2448fca23181be74" class="i method">GetIsCliXmlTestabilityHookActive</a>();
+ 
+            <b>private static bool</b> <a id="2448fca23181be74" href="../../../R/2448fca23181be74.html" target="n" data-glyph="76,2" class="i method">GetIsCliXmlTestabilityHookActive</a>()
+            {
+                <b>return</b> !<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="i">Environment</span>.<span class="i">GetEnvironmentVariable</span>(<span class="s">&quot;CDXML_CLIXML_TEST&quot;</span>));
+            }
+ 
+            <b>internal static void</b> <a id="5d39196c6327e065" href="../../../R/../../0000000000.html" target="n" data-glyph="74,2" class="i method">ProcessCliXmlTestabilityHook</a>(<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r84 rd" class="r84 r">streamObject</span>)
+            {
+                <b>if</b> (!<a href="#9b59c9230870dc8b" class="i field">s_isCliXmlTestabilityHookActive</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (<span class="r84 r">streamObject</span>.<a href="../common/psstreamobject.cs.html#6216b3606af45490" class="i property">ObjectType</a> != <a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#503ddb460914a8c9" class="i field">Output</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (<span class="r84 r">streamObject</span>.<a href="../common/psstreamobject.cs.html#2e16c93981f3ba22" class="i property">Value</a> == <b>null</b>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (!(<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../../MshObject.cs.html#e81a321a846beda7" class="i method">AsPSObject</a>(<span class="r84 r">streamObject</span>.<a href="../common/psstreamobject.cs.html#2e16c93981f3ba22" class="i property">Value</a>).<a href="../../MshObject.cs.html#d854d13536b70a12" class="i property">BaseObject</a>.<span class="i">GetType</span>().<span class="i">Name</span>.<span class="i">Equals</span>(<span class="s">&quot;CimInstance&quot;</span>)))
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>string</b> <span id="r85 rd" class="r85 r">serializedForm</span> = <a href="../../serialization.cs.html#9342c13ff4bbe3fb" class="t t">PSSerializer</a>.<a href="../../serialization.cs.html#d731b8ad94cf083a" class="i method">Serialize</a>(<span class="r84 r">streamObject</span>.<a href="../common/psstreamobject.cs.html#2e16c93981f3ba22" class="i property">Value</a>, <span class="r86 r">depth</span>: 1);
+                <b>object</b> <span id="r87 rd" class="r87 r">deserializedObject</span> = <a href="../../serialization.cs.html#9342c13ff4bbe3fb" class="t t">PSSerializer</a>.<a href="../../serialization.cs.html#d9210d35690d435f" class="i method">Deserialize</a>(<span class="r85 r">serializedForm</span>);
+                <span class="r84 r">streamObject</span>.<a href="../common/psstreamobject.cs.html#2e16c93981f3ba22" class="i property">Value</a> = <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../../MshObject.cs.html#e81a321a846beda7" class="i method">AsPSObject</a>(<span class="r87 r">deserializedObject</span>).<a href="../../MshObject.cs.html#d854d13536b70a12" class="i property">BaseObject</a>;
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <b>private void</b> <a id="bb93d6e85d1c0cf6" href="../../../R/bb93d6e85d1c0cf6.html" target="n" data-glyph="76,2" class="i method">ForwardResults</a>(<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r88 rd" class="r88 r">cmdlet</span>)
+            {
+                <b>try</b>
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r89 rd" class="r89 r">result</span> <b>in</b> <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">GetConsumingEnumerable</span>(<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#feda70c3c6412fe7" class="i field">_cancellationTokenSource</a>.<span class="i">Token</span>))
+                    {
+                        <b>if</b> (<span class="r89 r">result</span> != <b>null</b>)
+                        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span>
+                            <span class="c">// CDXML_CLIXML_TEST testability hook</span>
+                            <span class="i">ProcessCliXmlTestabilityHook</span>(<span class="r89 r">result</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                            <b>try</b>
+                            {
+                                <span class="r89 r">result</span>.<span class="i">WriteStreamObject</span>(<span class="r88 r">cmdlet</span>);
+                            }
+                            <b>finally</b>
+                            {
+                                <b>if</b> (<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#6bfc066c3341aad3" class="i field">_cmdletMode</a>)
+                                {
+                                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a> != <b>null</b>, <span class="s">&quot;JobResultsThrottlingSemaphore should be present in cmdlet mode&quot;</span>);
+                                    <span class="i">Interlocked</span>.<span class="i">Decrement</span>(<b>ref</b> <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#535e3441f6cd0e0f" class="i field">_jobResultsCurrentCount</a>);
+                                    <a href="#eafd8243f5b459c4" class="i field">_throttlingJob</a>.<a href="#82414d392d97fd31" class="i field">_jobResultsThrottlingSemaphore</a>.<span class="i">Release</span>();
+                                }
+                            }
+                        }
+                    }
+                }
+                <b>catch</b>
+                {
+                    <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#9abb9337040cfab2" class="i method">StopMonitoringAllJobs</a>();
+                    <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#f92b62540a8e0973" class="i method">AttemptToPreserveAggregatedResults</a>();
+ 
+                    <b>throw</b>;
+                }
+            }
+ 
+            <b>private bool</b> <a id="4024d3395c44d05b" href="../../../R/4024d3395c44d05b.html" target="n" data-glyph="46,2" class="i field">_stoppedMonitoringAllJobs</a>;
+ 
+            <b>private void</b> <a id="9abb9337040cfab2" href="../../../R/9abb9337040cfab2.html" target="n" data-glyph="76,2" class="i method">StopMonitoringAllJobs</a>()
+            {
+                <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">Cancel</span>();
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <a href="#4024d3395c44d05b" class="i field">_stoppedMonitoringAllJobs</a> = <b>true</b>;
+ 
+                    <span class="i">List</span>&lt;<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r90 rd" class="r90 r">snapshotOfCurrentlyMonitoredJobs</span> = <a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>.<span class="i">ToList</span>();
+                    <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r91 rd" class="r91 r">monitoredJob</span> <b>in</b> <span class="r90 r">snapshotOfCurrentlyMonitoredJobs</span>)
+                    {
+                        <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#90d90d586adae9b8" class="i method">StopMonitoringJob</a>(<span class="r91 r">monitoredJob</span>);
+                    }
+ 
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#c9520545c54fb8ac" class="i field">_monitoredJobs</a>.<span class="i">Count</span> == 0, <span class="s">&quot;No monitored jobs should be left after ForwardingHelper is disposed&quot;</span>);
+ 
+                    <b>if</b> (!<a href="#05e352e85a26b0c2" class="i field">_disposed</a> &amp;&amp; !<a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">IsAddingCompleted</span>)
+                    {
+                        <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">CompleteAdding</span>();
+                    }
+                }
+            }
+ 
+            <b>public void</b> <a id="eb2aa8b626348b08" href="../../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">Dispose</a>()
+            {
+                <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#7207a0ee616786b9" class="k">this</a>);
+                <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">Cancel</span>();
+                <b>lock</b> (<a href="#c309d7233402099e" class="i field">_myLock</a>)
+                {
+                    <b>if</b> (<a href="#05e352e85a26b0c2" class="i field">_disposed</a>)
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <a href="#7207a0ee616786b9" class="k">this</a>.<a href="#9abb9337040cfab2" class="i method">StopMonitoringAllJobs</a>();
+                    <a href="#8f169a700b60c71c" class="i field">_aggregatedResults</a>.<span class="i">Dispose</span>();
+                    <a href="#80ceb856aaac00ea" class="i field">_cancellationTokenSource</a>.<span class="i">Dispose</span>();
+                    <a href="#05e352e85a26b0c2" class="i field">_disposed</a> = <b>true</b>;
+                }
+            }
+ 
+            <b>public static void</b> <a id="4c0acf8e4e3646c4" href="../../../R/4c0acf8e4e3646c4.html" target="n" data-glyph="72,2" class="i method">ForwardAllResultsToCmdlet</a>(<a href="#01c7878c4476f574" class="t t">ThrottlingJob</a> <span id="r92 rd" class="r92 r">throttlingJob</span>, <a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r93 rd" class="r93 r">cmdlet</span>, <span class="i">CancellationToken</span>? <span id="r94 rd" class="r94 r">cancellationToken</span>)
+            {
+                <b>using</b> (<a href="#7207a0ee616786b9" class="k">var</a> <span id="r95 rd" class="r95 r">helper</span> = <b>new</b> <a href="#58cf0f465e028980" class="t constructor">ForwardingHelper</a>(<span class="r92 r">throttlingJob</span>))
+                {
+                    <b>try</b>
+                    {
+                        <span class="r92 r">throttlingJob</span>.<a href="#c4f3e86dc255a836" class="i">ChildJobAdded</a> += <span class="r95 r">helper</span>.<span class="i">ThrottlingJob_ChildJobAdded</span>;
+ 
+                        <b>try</b>
+                        {
+                            <span class="r92 r">throttlingJob</span>.<a href="Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> += <span class="r95 r">helper</span>.<span class="i">ThrottlingJob_StateChanged</span>;
+ 
+                            <span class="i">IDisposable</span> <span id="r96 rd" class="r96 r">cancellationTokenRegistration</span> = <b>null</b>;
+                            <b>if</b> (<span class="r94 r">cancellationToken</span>.<span class="i">HasValue</span>)
+                            {
+                                <span class="r96 r">cancellationTokenRegistration</span> = <span class="r94 r">cancellationToken</span>.<span class="i">Value</span>.<span class="i">Register</span>(<span class="r95 r">helper</span>.<span class="i">CancelForwarding</span>);
+                            }
+ 
+                            <b>try</b>
+                            {
+                                <span class="i">Interlocked</span>.<span class="i">MemoryBarrier</span>();
+                                <span class="i">ThreadPool</span>.<span class="i">QueueUserWorkItem</span>(
+                                        <b>delegate</b>
+                                        {
+                                            <span class="r95 r">helper</span>.<a href="#d77aabbff25c1d26" class="i method">StartMonitoringJob</a>(<span class="r92 r">throttlingJob</span>);
+                                            <b>foreach</b> (<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r97 rd" class="r97 r">childJob</span> <b>in</b> <span class="r92 r">throttlingJob</span>.<a href="#66625421c57522cb" class="i method">GetChildJobsSnapshot</a>())
+                                            {
+                                                <span class="r95 r">helper</span>.<a href="#d77aabbff25c1d26" class="i method">StartMonitoringJob</a>(<span class="r97 r">childJob</span>);
+                                            }
+ 
+                                            <span class="r95 r">helper</span>.<a href="#a773c7eca3a07204" class="i method">CheckIfThrottlingJobIsComplete</a>();
+                                        });
+ 
+                                <span class="r95 r">helper</span>.<a href="#bb93d6e85d1c0cf6" class="i method">ForwardResults</a>(<span class="r93 r">cmdlet</span>);
+                            }
+                            <b>finally</b>
+                            {
+                                <b>if</b> (<span class="r96 r">cancellationTokenRegistration</span> != <b>null</b>)
+                                {
+                                    <span class="r96 r">cancellationTokenRegistration</span>.<span class="i">Dispose</span>();
+                                }
+                            }
+                        }
+                        <b>finally</b>
+                        {
+                            <span class="r92 r">throttlingJob</span>.<a href="Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <span class="r95 r">helper</span>.<span class="i">ThrottlingJob_StateChanged</span>;
+                        }
+                    }
+                    <b>finally</b>
+                    {
+                        <span class="r92 r">throttlingJob</span>.<a href="#c4f3e86dc255a836" class="i">ChildJobAdded</a> -= <span class="r95 r">helper</span>.<span class="i">ThrottlingJob_ChildJobAdded</span>;
+                    }
+                }
+            }
+        }
+ 
+        <b>internal override void</b> <a id="959bce12c1a5e712" href="../../../R/959bce12c1a5e712.html" target="n" data-glyph="74,1" class="i method">ForwardAllResultsToCmdlet</a>(<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r98 rd" class="r98 r">cmdlet</span>)
+        {
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="#3e17515e164105e8" class="i method">ForwardAllResultsToCmdlet</a>(<span class="r98 r">cmdlet</span>, <span class="r99 r">cancellationToken</span>: <b>null</b>);
+        }
+ 
+        <b>private void</b> <a id="3e17515e164105e8" href="../../../R/3e17515e164105e8.html" target="n" data-glyph="76,1" class="i method">ForwardAllResultsToCmdlet</a>(<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r100 rd" class="r100 r">cmdlet</span>, <span class="i">CancellationToken</span>? <span id="r99 rd" class="r99 r">cancellationToken</span>)
+        {
+            <a href="#01c7878c4476f574" class="k">this</a>.<a href="Job.cs.html#0328c940aee2761d" class="i method">AssertNotDisposed</a>();
+            <a href="#7207a0ee616786b9" class="t t">ForwardingHelper</a>.<a href="#4c0acf8e4e3646c4" class="i method">ForwardAllResultsToCmdlet</a>(<a href="#01c7878c4476f574" class="k">this</a>, <span class="r100 r">cmdlet</span>, <span class="r99 r">cancellationToken</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Forwarding results to a cmdlet
+    }
+ 
+    <b>internal class</b> <a id="03d73adc54ba59c6" href="../../../R/03d73adc54ba59c6.html" target="n" data-glyph="2,0" class="t t">ThrottlingJobChildAddedEventArgs</a> : <span class="i">EventArgs</span>
+    {
+        <b>internal</b> <a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="74d3f7553c470ab0" href="../../../R/74d3f7553c470ab0.html" target="n" data-glyph="104,1" class="i property">AddedChildJob</a> { <b>get</b>; }
+ 
+        <b>internal</b> <a id="48f9a699ffdecee2" href="../../../R/48f9a699ffdecee2.html" target="n" data-glyph="74,1" class="t constructor">ThrottlingJobChildAddedEventArgs</a>(<a href="Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r101 rd" class="r101 r">addedChildJob</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r101 r">addedChildJob</span> != <b>null</b>, <span class="s">&quot;Caller should verify addedChildJob != null&quot;</span>);
+            <a href="#74d3f7553c470ab0" class="i property">AddedChildJob</a> = <span class="r101 r">addedChildJob</span>;
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

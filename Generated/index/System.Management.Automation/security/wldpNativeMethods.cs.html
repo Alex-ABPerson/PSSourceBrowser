@@ -1,0 +1,584 @@
+﻿<!DOCTYPE html>
+<html><head><title>wldpNativeMethods.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(575);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/security/wldpNativeMethods.cs" target="_top">security\wldpNativeMethods.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="c">//</span>
+<span class="c">//  Application white listing policies such as AppLocker and DeviceGuard UMCI are only implemented on Windows OSs</span>
+<span class="c">//</span>
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Security</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> How the policy is being enforced.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">// Internal Note: Current code that consumes this enum assumes that anything but &#39;Enforce&#39; means</span>
+    <span class="c">// that the script is allowed, and that a system lockdown policy that is anything but &#39;None&#39; means</span>
+    <span class="c">// that the API should be called again for individual files. If any elements are added to this enum,</span>
+    <span class="c">// callers of the GetLockdownPolicy() should be reviewed.</span>
+    <b>public enum</b> <a id="9f0915f7b351778e" href="../R/9f0915f7b351778e.html" target="n" data-glyph="18,0" class="t t"><span id="fd1115c02372575a">SystemEnforcementMode</span></a>
+    {
+        <span class="c">///</span><span class="c"> Not enforced at all</span>
+        <a id="81a0a3024e2e8559" href="../R/81a0a3024e2e8559.html" target="n" data-glyph="24,1" class="i field">None</a> = 0,
+ 
+        <span class="c">///</span><span class="c"> Enabled - allow, but audit</span>
+        <a id="9fd19577afbedc4d" href="../R/9fd19577afbedc4d.html" target="n" data-glyph="24,1" class="i field">Audit</a> = 1,
+ 
+        <span class="c">///</span><span class="c"> Enabled, enforce restrictions</span>
+        <a id="5d74206001d0b817" href="../R/5d74206001d0b817.html" target="n" data-glyph="24,1" class="i field">Enforce</a> = 2
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Support class for dealing with the Windows Lockdown Policy,</span>
+    <span class="c">///</span><span class="c"> Device Guard, and Constrained PowerShell.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="6b51558a7a8cde26" href="../R/6b51558a7a8cde26.html" target="n" data-glyph="0,0" class="t t">SystemPolicy</a>
+    {
+        <b>private</b> <a id="350402b1492c1444" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">SystemPolicy</a>()
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the system lockdown policy.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">An EnforcementMode that describes the system policy.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <a id="2c0da8883146dab2" href="../R/2c0da8883146dab2.html" target="n" data-glyph="72,1" class="i method">GetSystemLockdownPolicy</a>()
+        {
+            <b>if</b> (<a href="#6b5f968b5c4d577a" class="i field">s_systemLockdownPolicy</a> == <b>null</b>)
+            {
+                <b>lock</b> (<a href="#845a14da8a7aec49" class="i field">s_systemLockdownPolicyLock</a>)
+                {
+                    <b>if</b> (<a href="#6b5f968b5c4d577a" class="i field">s_systemLockdownPolicy</a> == <b>null</b>)
+                    {
+                        <a href="#6b5f968b5c4d577a" class="i field">s_systemLockdownPolicy</a> = <a href="#ab22b93063ffbd73" class="i method">GetLockdownPolicy</a>(<span class="r0 r">path</span>: <b>null</b>, <span class="r1 r">handle</span>: <b>null</b>);
+                    }
+                }
+            }
+            <b>else</b> <b>if</b> (<a href="#1f0be69d676d0b28" class="i field">s_allowDebugOverridePolicy</a>)
+            {
+                <b>lock</b> (<a href="#845a14da8a7aec49" class="i field">s_systemLockdownPolicyLock</a>)
+                {
+                    <a href="#6b5f968b5c4d577a" class="i field">s_systemLockdownPolicy</a> = <a href="#3107e6a0d3801e67" class="i method">GetDebugLockdownPolicy</a>(<span class="r2 r">path</span>: <b>null</b>);
+                }
+            }
+ 
+            <b>return</b> <a href="#6b5f968b5c4d577a" class="i field">s_systemLockdownPolicy</a>.<span class="i">Value</span>;
+        }
+ 
+        <b>private static readonly object</b> <a id="845a14da8a7aec49" href="../R/845a14da8a7aec49.html" target="n" data-glyph="46,1" class="i field">s_systemLockdownPolicyLock</a> = <b>new</b> <b>object</b>();
+        <b>private static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>? <a id="6b5f968b5c4d577a" href="../R/6b5f968b5c4d577a.html" target="n" data-glyph="46,1" class="i field">s_systemLockdownPolicy</a> = <b>null</b>;
+        <b>private static bool</b> <a id="1f0be69d676d0b28" href="../R/1f0be69d676d0b28.html" target="n" data-glyph="46,1" class="i field">s_allowDebugOverridePolicy</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets lockdown policy as applied to a file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">An EnforcementMode that describes policy.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <a id="ab22b93063ffbd73" href="../R/ab22b93063ffbd73.html" target="n" data-glyph="72,1" class="i method">GetLockdownPolicy</a>(<b>string</b> <span id="r0 rd" class="r0 r">path</span>, <span class="i">SafeHandle</span> <span id="r1 rd" class="r1 r">handle</span>)
+        {
+            <span class="c">// Check the WLDP File policy via API</span>
+            <a href="#9f0915f7b351778e" class="k">var</a> <span id="r3 rd" class="r3 r">wldpFilePolicy</span> = <a href="#31729888124b1938" class="i method">GetWldpPolicy</a>(<span class="r0 r">path</span>, <span class="r1 r">handle</span>);
+            <b>if</b> (<span class="r3 r">wldpFilePolicy</span> == <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>)
+            {
+                <b>return</b> <span class="r3 r">wldpFilePolicy</span>;
+            }
+ 
+            <span class="c">// Check the AppLocker File policy via API</span>
+            <span class="c">// This needs to be checked before WLDP audit policy</span>
+            <span class="c">// So, that we don&#39;t end up in Audit mode,</span>
+            <span class="c">// when we should be enforce mode.</span>
+            <a href="#9f0915f7b351778e" class="k">var</a> <span id="r4 rd" class="r4 r">appLockerFilePolicy</span> = <a href="#556da5b3e1af1fe3" class="i method">GetAppLockerPolicy</a>(<span class="r0 r">path</span>, <span class="r1 r">handle</span>);
+            <b>if</b> (<span class="r4 r">appLockerFilePolicy</span> == <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>)
+            {
+                <b>return</b> <span class="r4 r">appLockerFilePolicy</span>;
+            }
+ 
+            <span class="c">// At this point, LockdownPolicy = Audit or Allowed.</span>
+            <span class="c">// If there was a WLDP policy, but WLDP didn&#39;t block it,</span>
+            <span class="c">// then it was explicitly allowed. Therefore, return the result for the file.</span>
+            <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <span id="r5 rd" class="r5 r">systemWldpPolicy</span> = <a href="#973c5de0d8f93140" class="i field">s_cachedWldpSystemPolicy</a>.<span class="i">GetValueOrDefault</span>(<a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>);
+            <b>if</b> ((<span class="r5 r">systemWldpPolicy</span> == <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#9fd19577afbedc4d" class="i field">Audit</a>) ||
+                (<span class="r5 r">systemWldpPolicy</span> == <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>))
+            {
+                <b>return</b> <span class="r3 r">wldpFilePolicy</span>;
+            }
+ 
+            <span class="c">// If there was a system-wide AppLocker policy, but AppLocker didn&#39;t block it,</span>
+            <span class="c">// then return AppLocker&#39;s status.</span>
+            <b>if</b> (<a href="#5132d056e65f6590" class="i field">s_cachedSaferSystemPolicy</a>.<span class="i">GetValueOrDefault</span>(<a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4c7bf0528b9fad3e" class="i field">Allowed</a>) ==
+                <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>)
+            {
+                <b>return</b> <span class="r4 r">appLockerFilePolicy</span>;
+            }
+ 
+            <span class="c">// If it&#39;s not set to &#39;Enforce&#39; by the platform, allow debug overrides</span>
+            <b>return</b> <a href="#3107e6a0d3801e67" class="i method">GetDebugLockdownPolicy</a>(<span class="r0 r">path</span>);
+        }
+ 
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2001:AvoidCallingProblematicMethods&quot;</span>,
+            <span class="i">MessageId</span> = <span class="s">&quot;System.Runtime.InteropServices.SafeHandle.DangerousGetHandle&quot;</span>)]
+        <b>private static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <a id="31729888124b1938" href="../R/31729888124b1938.html" target="n" data-glyph="76,1" class="i method">GetWldpPolicy</a>(<b>string</b> <span id="r6 rd" class="r6 r">path</span>, <span class="i">SafeHandle</span> <span id="r7 rd" class="r7 r">handle</span>)
+        {
+            <span class="c">// If the WLDP assembly is missing (such as windows 7 or down OS), return default/None to skip WLDP validation</span>
+            <b>if</b> (<a href="#d0456f05e6c62f67" class="i field">s_hadMissingWldpAssembly</a>)
+            {
+                <b>return</b> <a href="#973c5de0d8f93140" class="i field">s_cachedWldpSystemPolicy</a>.<span class="i">GetValueOrDefault</span>(<a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>);
+            }
+ 
+            <span class="c">// If path is NULL, see if we have the cached system-wide lockdown policy.</span>
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r6 r">path</span>))
+            {
+                <b>if</b> ((<a href="#973c5de0d8f93140" class="i field">s_cachedWldpSystemPolicy</a> != <b>null</b>) &amp;&amp; (!<a href="../engine/Utils.cs.html#f365eaa75311eda0" class="t t">InternalTestHooks</a>.<a href="../engine/Utils.cs.html#bbc04dd553528929" class="i field">BypassAppLockerPolicyCaching</a>))
+                {
+                    <b>return</b> <a href="#973c5de0d8f93140" class="i field">s_cachedWldpSystemPolicy</a>.<span class="i">Value</span>;
+                }
+            }
+ 
+            <b>try</b>
+            {
+                <a href="#cbe1229a0fd89e10" class="t t">WLDP_HOST_INFORMATION</a> <span id="r8 rd" class="r8 r">hostInformation</span> = <b>new</b> <span class="t">WLDP_HOST_INFORMATION</span>();
+                <span class="r8 r">hostInformation</span>.<a href="#b41ee75af4ea260f" class="i field">dwRevision</a> = <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#8188dd061ce4c184" class="i field">WLDP_HOST_INFORMATION_REVISION</a>;
+                <span class="r8 r">hostInformation</span>.<a href="#59e0d0882f972879" class="i field">dwHostId</a> = <a href="#ef30ef40917094b3" class="t t">WLDP_HOST_ID</a>.<a href="#1157212442fe0d47" class="i field">WLDP_HOST_ID_POWERSHELL</a>;
+ 
+                <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r6 r">path</span>))
+                {
+                    <span class="r8 r">hostInformation</span>.<a href="#f49c76bb2a4e4ec5" class="i field">szSource</a> = <span class="r6 r">path</span>;
+ 
+                    <b>if</b> (<span class="r7 r">handle</span> != <b>null</b>)
+                    {
+                        <span class="i">IntPtr</span> <span id="r9 rd" class="r9 r">fileHandle</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+                        <span class="r9 r">fileHandle</span> = <span class="r7 r">handle</span>.<span class="i">DangerousGetHandle</span>();
+                        <span class="r8 r">hostInformation</span>.<a href="#a2940a41da8ef4a3" class="i field">hSource</a> = <span class="r9 r">fileHandle</span>;
+                    }
+                }
+ 
+                <b>uint</b> <span id="r10 rd" class="r10 r">pdwLockdownState</span> = 0;
+                <b>int</b> <span id="r11 rd" class="r11 r">result</span> = <a href="#6ebd3283cc31c6ae" class="t t">WldpNativeMethods</a>.<a href="#67409af38c31d579" class="i method">WldpGetLockdownPolicy</a>(<b>ref</b> <span class="r8 r">hostInformation</span>, <b>ref</b> <span class="r10 r">pdwLockdownState</span>, 0);
+                <b>if</b> (<span class="r11 r">result</span> &gt;= 0)
+                {
+                    <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <span id="r12 rd" class="r12 r">resultingLockdownPolicy</span> = <a href="#00ecfa81538351a4" class="i method">GetLockdownPolicyForResult</a>(<span class="r10 r">pdwLockdownState</span>);
+ 
+                    <span class="c">// If this is a query for the system-wide lockdown policy, cache it.</span>
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r6 r">path</span>))
+                    {
+                        <a href="#973c5de0d8f93140" class="i field">s_cachedWldpSystemPolicy</a> = <span class="r12 r">resultingLockdownPolicy</span>;
+                    }
+ 
+                    <b>return</b> <span class="r12 r">resultingLockdownPolicy</span>;
+                }
+                <b>else</b>
+                {
+                    <span class="c">// API failure?</span>
+                    <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>;
+                }
+            }
+            <b>catch</b> (<span class="i">DllNotFoundException</span>)
+            {
+                <a href="#d0456f05e6c62f67" class="i field">s_hadMissingWldpAssembly</a> = <b>true</b>;
+                <b>return</b> <a href="#973c5de0d8f93140" class="i field">s_cachedWldpSystemPolicy</a>.<span class="i">GetValueOrDefault</span>(<a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>);
+            }
+        }
+ 
+        <b>private static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>? <a id="973c5de0d8f93140" href="../R/973c5de0d8f93140.html" target="n" data-glyph="46,1" class="i field">s_cachedWldpSystemPolicy</a> = <b>null</b>;
+ 
+        <b>private const string</b> <a id="5d53533369f0f2c3" href="../R/5d53533369f0f2c3.html" target="n" data-glyph="10,1" class="i field">AppLockerTestFileName</a> = <span class="s">&quot;__PSScriptPolicyTest_&quot;</span>;
+        <b>private const string</b> <a id="db8c9cbe29ff5927" href="../R/db8c9cbe29ff5927.html" target="n" data-glyph="10,1" class="i field">AppLockerTestFileContents</a> = <span class="s">&quot;# PowerShell test file to determine AppLocker lockdown mode &quot;</span>;
+ 
+        <b>private static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <a id="556da5b3e1af1fe3" href="../R/556da5b3e1af1fe3.html" target="n" data-glyph="76,1" class="i method">GetAppLockerPolicy</a>(<b>string</b> <span id="r13 rd" class="r13 r">path</span>, <span class="i">SafeHandle</span> <span id="r14 rd" class="r14 r">handle</span>)
+        {
+            <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a> <span id="r15 rd" class="r15 r">result</span> = <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>;
+ 
+            <span class="c">// If path is NULL, we&#39;re looking for the system-wide lockdown policy.</span>
+            <span class="c">// Since there is no way to get that from AppLocker, we will test the policy</span>
+            <span class="c">// against a random non-existent script and module. If that is allowed, then there is</span>
+            <span class="c">// no AppLocker script policy.</span>
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r13 r">path</span>))
+            {
+                <b>if</b> ((<a href="#5132d056e65f6590" class="i field">s_cachedSaferSystemPolicy</a> != <b>null</b>) &amp;&amp; (!<a href="../engine/Utils.cs.html#f365eaa75311eda0" class="t t">InternalTestHooks</a>.<a href="../engine/Utils.cs.html#bbc04dd553528929" class="i field">BypassAppLockerPolicyCaching</a>))
+                {
+                    <span class="r15 r">result</span> = <a href="#5132d056e65f6590" class="i field">s_cachedSaferSystemPolicy</a>.<span class="i">Value</span>;
+                }
+                <b>else</b>
+                {
+                    <span class="c">//</span>
+                    <span class="c">// Temp path can sometimes be deleted. While many places in PowerShell depend on its existence,</span>
+                    <span class="c">// this one can crash PowerShell.</span>
+                    <span class="c">// A less sensitive implementation will be possible once AppLocker allows validation of files that</span>
+                    <span class="c">// don&#39;t exist.</span>
+                    <span class="c">//</span>
+ 
+                    <b>string</b> <span id="r16 rd" class="r16 r">testPathScript</span> = <b>null</b>;
+                    <b>string</b> <span id="r17 rd" class="r17 r">testPathModule</span> = <b>null</b>;
+                    <b>try</b>
+                    {
+                        <span class="c">// Start with the current profile temp path.</span>
+                        <b>string</b> <span id="r18 rd" class="r18 r">tempPath</span> = <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">GetTempPath</span>();
+ 
+                        <b>int</b> <span id="r19 rd" class="r19 r">iteration</span> = 0;
+                        <b>while</b> (<span class="r19 r">iteration</span>++ &lt; 2)
+                        {
+                            <b>bool</b> <span id="r20 rd" class="r20 r">error</span> = <b>false</b>;
+ 
+                            <b>try</b>
+                            {
+                                <b>if</b> (!<span class="i">IO</span>.<span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r18 r">tempPath</span>))
+                                {
+                                    <span class="i">IO</span>.<span class="i">Directory</span>.<span class="i">CreateDirectory</span>(<span class="r18 r">tempPath</span>);
+                                }
+ 
+                                <span class="r16 r">testPathScript</span> = <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r18 r">tempPath</span>, <a href="#5d53533369f0f2c3" class="i field">AppLockerTestFileName</a> + <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">GetRandomFileName</span>() + <span class="s">&quot;.ps1&quot;</span>);
+                                <span class="r17 r">testPathModule</span> = <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r18 r">tempPath</span>, <a href="#5d53533369f0f2c3" class="i field">AppLockerTestFileName</a> + <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">GetRandomFileName</span>() + <span class="s">&quot;.psm1&quot;</span>);
+ 
+                                <span class="c">// AppLocker fails when you try to check a policy on a file</span>
+                                <span class="c">// with no content. So create a scratch file and test on that.</span>
+                                <b>string</b> <span id="r21 rd" class="r21 r">dtAppLockerTestFileContents</span> = <a href="#db8c9cbe29ff5927" class="i field">AppLockerTestFileContents</a> + <span class="i">Environment</span>.<span class="i">TickCount64</span>;
+                                <span class="i">IO</span>.<span class="i">File</span>.<span class="i">WriteAllText</span>(<span class="r16 r">testPathScript</span>, <span class="r21 r">dtAppLockerTestFileContents</span>);
+                                <span class="i">IO</span>.<span class="i">File</span>.<span class="i">WriteAllText</span>(<span class="r17 r">testPathModule</span>, <span class="r21 r">dtAppLockerTestFileContents</span>);
+                            }
+                            <b>catch</b> (<span class="i n">System</span>.<span class="i">IO</span>.<span class="i">IOException</span>)
+                            {
+                                <b>if</b> (<span class="r19 r">iteration</span> == 2) <b>throw</b>;
+                                <span class="r20 r">error</span> = <b>true</b>;
+                            }
+                            <b>catch</b> (<span class="i n">System</span>.<span class="i">UnauthorizedAccessException</span>)
+                            {
+                                <b>if</b> (<span class="r19 r">iteration</span> == 2) <b>throw</b>;
+                                <span class="r20 r">error</span> = <b>true</b>;
+                            }
+                            <b>catch</b> (<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityException</span>)
+                            {
+                                <b>if</b> (<span class="r19 r">iteration</span> == 2) <b>throw</b>;
+                                <span class="r20 r">error</span> = <b>true</b>;
+                            }
+ 
+                            <b>if</b> (!<span class="r20 r">error</span>) { <b>break</b>; }
+ 
+                            <span class="c">// Try again with the AppData\LocalLow\Temp path using known folder id:</span>
+                            <span class="c">// https://msdn.microsoft.com/library/dd378457.aspx</span>
+                            <span class="i">Guid</span> <span id="r22 rd" class="r22 r">AppDatalocalLowFolderId</span> = <b>new</b> <span class="i">Guid</span>(<a href="../../GuidAssembly/R/a520a1a4-1780-4ff6-bd18-167343c5af16.html" target="n" class="s">&quot;A520A1A4-1780-4FF6-BD18-167343C5AF16&quot;</a>);
+                            <span class="r18 r">tempPath</span> = <a href="#5333f866179641ba" class="i method">GetKnownFolderPath</a>(<span class="r22 r">AppDatalocalLowFolderId</span>) + <span class="s">@&quot;\Temp&quot;</span>;
+                        }
+ 
+                        <span class="c">// Test policy.</span>
+                        <span class="r15 r">result</span> = <a href="#a824c06d237eb723" class="i method">TestSaferPolicy</a>(<span class="r16 r">testPathScript</span>, <span class="r17 r">testPathModule</span>);
+                    }
+                    <b>catch</b> (<span class="i n">System</span>.<span class="i">IO</span>.<span class="i">IOException</span>)
+                    {
+                        <span class="c">// If we fail to test the policy, assume the default.</span>
+                        <span class="r15 r">result</span> = <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>;
+                    }
+                    <b>catch</b> (<span class="i n">System</span>.<span class="i">UnauthorizedAccessException</span>)
+                    {
+                        <span class="c">// This can happen during thread impersonation if the profile temp paths are not accessible.</span>
+                        <span class="c">// Allow policy if impersonated, otherwise disallow.</span>
+                        <span class="r15 r">result</span> =
+                            (<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>().<span class="i">ImpersonationLevel</span> == <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">TokenImpersonationLevel</span>.<span class="i">Impersonation</span>) ?
+                            <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4c7bf0528b9fad3e" class="i field">Allowed</a> : <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>;
+                    }
+                    <b>catch</b> (<span class="i">ArgumentException</span>)
+                    {
+                        <span class="c">// This is for IO.Path.GetTempPath() call when temp paths are not accessible.</span>
+                        <span class="r15 r">result</span> =
+                           (<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>().<span class="i">ImpersonationLevel</span> == <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>.<span class="i">TokenImpersonationLevel</span>.<span class="i">Impersonation</span>) ?
+                           <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4c7bf0528b9fad3e" class="i field">Allowed</a> : <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>;
+                    }
+                    <b>finally</b>
+                    {
+                        <span class="c">// Ok to leave the test scripts in the temp folder if they happen to be in use</span>
+                        <span class="c">// so that PowerShell will still startup.</span>
+                        <a href="../utils/PathUtils.cs.html#fdaf75f786a21eb9" class="t t">PathUtils</a>.<a href="../utils/PathUtils.cs.html#559090b4830d20e9" class="i method">TryDeleteFile</a>(<span class="r16 r">testPathScript</span>);
+                        <a href="../utils/PathUtils.cs.html#fdaf75f786a21eb9" class="t t">PathUtils</a>.<a href="../utils/PathUtils.cs.html#559090b4830d20e9" class="i method">TryDeleteFile</a>(<span class="r17 r">testPathModule</span>);
+                    }
+ 
+                    <a href="#5132d056e65f6590" class="i field">s_cachedSaferSystemPolicy</a> = <span class="r15 r">result</span>;
+                }
+ 
+                <b>if</b> (<span class="r15 r">result</span> == <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>)
+                {
+                    <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>;
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>;
+                }
+            }
+            <b>else</b>
+            {
+                <span class="c">// We got a path. Return the result for that path.</span>
+                <span class="r15 r">result</span> = <a href="SecuritySupport.cs.html#5c234bd2337db61c" class="t t">SecuritySupport</a>.<a href="SecuritySupport.cs.html#03e8bd6c6938b551" class="i method">GetSaferPolicy</a>(<span class="r13 r">path</span>, <span class="r14 r">handle</span>);
+                <b>if</b> (<span class="r15 r">result</span> == <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>)
+                {
+                    <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>;
+                }
+ 
+                <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>;
+            }
+        }
+ 
+        <b>private static</b> <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>? <a id="5132d056e65f6590" href="../R/5132d056e65f6590.html" target="n" data-glyph="46,1" class="i field">s_cachedSaferSystemPolicy</a> = <b>null</b>;
+ 
+        <b>private static string</b> <a id="5333f866179641ba" href="../R/5333f866179641ba.html" target="n" data-glyph="76,1" class="i method">GetKnownFolderPath</a>(<span class="i">Guid</span> <span id="r23 rd" class="r23 r">knownFolderId</span>)
+        {
+            <span class="i">IntPtr</span> <span id="r24 rd" class="r24 r">pszPath</span> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+            <b>try</b>
+            {
+                <b>int</b> <span id="r25 rd" class="r25 r">hr</span> = <a href="#6ebd3283cc31c6ae" class="t t">WldpNativeMethods</a>.<span class="i">SHGetKnownFolderPath</span>(<span class="r23 r">knownFolderId</span>, 0, <span class="i">IntPtr</span>.<span class="i">Zero</span>, <b>out</b> <span class="r24 r">pszPath</span>);
+                <b>if</b> (<span class="r25 r">hr</span> &gt;= 0)
+                {
+                    <b>return</b> <span class="i">Marshal</span>.<span class="i">PtrToStringAuto</span>(<span class="r24 r">pszPath</span>);
+                }
+ 
+                <b>throw</b> <b>new</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">IOException</span>();
+            }
+            <b>finally</b>
+            {
+                <b>if</b> (<span class="r24 r">pszPath</span> != <span class="i">IntPtr</span>.<span class="i">Zero</span>)
+                {
+                    <span class="i">Marshal</span>.<span class="i">FreeCoTaskMem</span>(<span class="r24 r">pszPath</span>);
+                }
+            }
+        }
+ 
+        <b>private static</b> <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a> <a id="a824c06d237eb723" href="../R/a824c06d237eb723.html" target="n" data-glyph="76,1" class="i method">TestSaferPolicy</a>(<b>string</b> <span id="r26 rd" class="r26 r">testPathScript</span>, <b>string</b> <span id="r27 rd" class="r27 r">testPathModule</span>)
+        {
+            <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a> <span id="r28 rd" class="r28 r">result</span> = <a href="SecuritySupport.cs.html#5c234bd2337db61c" class="t t">SecuritySupport</a>.<a href="SecuritySupport.cs.html#03e8bd6c6938b551" class="i method">GetSaferPolicy</a>(<span class="r26 r">testPathScript</span>, <b>null</b>);
+            <b>if</b> (<span class="r28 r">result</span> == <a href="SecuritySupport.cs.html#58419a9424af463c" class="t t">SaferPolicy</a>.<a href="SecuritySupport.cs.html#4b51340b630e2fd5" class="i field">Disallowed</a>)
+            {
+                <span class="r28 r">result</span> = <a href="SecuritySupport.cs.html#5c234bd2337db61c" class="t t">SecuritySupport</a>.<a href="SecuritySupport.cs.html#03e8bd6c6938b551" class="i method">GetSaferPolicy</a>(<span class="r27 r">testPathModule</span>, <b>null</b>);
+            }
+ 
+            <b>return</b> <span class="r28 r">result</span>;
+        }
+ 
+        <b>private static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <a id="3107e6a0d3801e67" href="../R/3107e6a0d3801e67.html" target="n" data-glyph="76,1" class="i method">GetDebugLockdownPolicy</a>(<b>string</b> <span id="r2 rd" class="r2 r">path</span>)
+        {
+            <a href="#1f0be69d676d0b28" class="i field">s_allowDebugOverridePolicy</a> = <b>true</b>;
+ 
+            <span class="c">// Support fall-back debug hook for path exclusions on non-WOA platforms</span>
+            <b>if</b> (<span class="r2 r">path</span> != <b>null</b>)
+            {
+                <span class="c">// Assume everything under SYSTEM32 is trusted, with a purposefully sloppy</span>
+                <span class="c">// check so that we can actually put it in the filename during testing.</span>
+                <b>if</b> (<span class="r2 r">path</span>.<span class="i">Contains</span>(<span class="s">&quot;System32&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                {
+                    <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>;
+                }
+ 
+                <span class="c">// No explicit debug allowance for the file, so return the system policy if there is one.</span>
+                <b>return</b> <a href="#6b5f968b5c4d577a" class="i field">s_systemLockdownPolicy</a>.<span class="i">GetValueOrDefault</span>(<a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>);
+            }
+ 
+            <span class="c">// Support fall-back debug hook for system-wide policy on non-WOA platforms</span>
+            <b>uint</b> <span id="r29 rd" class="r29 r">pdwLockdownState</span> = 0;
+            <b>object</b> <span id="r30 rd" class="r30 r">result</span> = <span class="i">Environment</span>.<span class="i">GetEnvironmentVariable</span>(<span class="s">&quot;__PSLockdownPolicy&quot;</span>, <span class="i">EnvironmentVariableTarget</span>.<span class="i">Machine</span>);
+            <b>if</b> (<span class="r30 r">result</span> != <b>null</b>)
+            {
+                <span class="r29 r">pdwLockdownState</span> = <a href="../engine/LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../engine/LanguagePrimitives.cs.html#8b9327b10b12742d" class="i method">ConvertTo</a>&lt;<b>uint</b>&gt;(<span class="r30 r">result</span>);
+                <b>return</b> <a href="#00ecfa81538351a4" class="i method">GetLockdownPolicyForResult</a>(<span class="r29 r">pdwLockdownState</span>);
+            }
+ 
+            <span class="c">// If the system-wide debug policy had no preference, then there is no enforcement.</span>
+            <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>;
+        }
+ 
+        <b>private static bool</b> <a id="d0456f05e6c62f67" href="../R/d0456f05e6c62f67.html" target="n" data-glyph="46,1" class="i field">s_hadMissingWldpAssembly</a> = <b>false</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets lockdown policy as applied to a COM object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if the COM object is allowed, False otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="c0a33cb881d3c78b" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">IsClassInApprovedList</a>(<span class="i">Guid</span> <span id="r31 rd" class="r31 r">clsid</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#cbe1229a0fd89e10" class="t t">WLDP_HOST_INFORMATION</a> <span id="r32 rd" class="r32 r">hostInformation</span> = <b>new</b> <span class="t">WLDP_HOST_INFORMATION</span>();
+                <span class="r32 r">hostInformation</span>.<a href="#b41ee75af4ea260f" class="i field">dwRevision</a> = <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#8188dd061ce4c184" class="i field">WLDP_HOST_INFORMATION_REVISION</a>;
+                <span class="r32 r">hostInformation</span>.<a href="#59e0d0882f972879" class="i field">dwHostId</a> = <a href="#ef30ef40917094b3" class="t t">WLDP_HOST_ID</a>.<a href="#1157212442fe0d47" class="i field">WLDP_HOST_ID_POWERSHELL</a>;
+ 
+                <b>int</b> <span id="r33 rd" class="r33 r">pIsApproved</span> = 0;
+                <b>int</b> <span id="r34 rd" class="r34 r">result</span> = <a href="#6ebd3283cc31c6ae" class="t t">WldpNativeMethods</a>.<a href="#0c86221815bbd7bd" class="i method">WldpIsClassInApprovedList</a>(<b>ref</b> <span class="r31 r">clsid</span>, <b>ref</b> <span class="r32 r">hostInformation</span>, <b>ref</b> <span class="r33 r">pIsApproved</span>, 0);
+ 
+                <b>if</b> (<span class="r34 r">result</span> &gt;= 0)
+                {
+                    <b>if</b> (<span class="r33 r">pIsApproved</span> == 1)
+                    {
+                        <span class="c">// Hook for testability. If we&#39;ve got an environmental override, say that ADODB.Parameter</span>
+                        <span class="c">// is not allowed.</span>
+                        <span class="c">// 0000050b-0000-0010-8000-00aa006d2ea4 = ADODB.Parameter</span>
+                        <b>if</b> (<a href="#1f0be69d676d0b28" class="i field">s_allowDebugOverridePolicy</a>)
+                        {
+                            <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r31 r">clsid</span>.<span class="i">ToString</span>(), <a href="../../GuidAssembly/R/0000050b-0000-0010-8000-00aa006d2ea4.html" target="n" class="s">&quot;0000050b-0000-0010-8000-00aa006d2ea4&quot;</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                            {
+                                <b>return</b> <b>false</b>;
+                            }
+                        }
+ 
+                        <b>return</b> <b>true</b>;
+                    }
+                }
+ 
+                <b>return</b> <b>false</b>;
+            }
+            <b>catch</b> (<span class="i">DllNotFoundException</span>)
+            {
+                <span class="c">// Hook for testability. IsClassInApprovedList is only called when the system is in global lockdown mode,</span>
+                <span class="c">// so this wouldn&#39;t be allowed in regular ConstrainedLanguage mode.</span>
+                <span class="c">// f6d90f11-9c73-11d3-b32e-00c04f990bb4 = MSXML2.DOMDocument</span>
+                <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r31 r">clsid</span>.<span class="i">ToString</span>(), <a href="../../GuidAssembly/R/f6d90f11-9c73-11d3-b32e-00c04f990bb4.html" target="n" class="s">&quot;f6d90f11-9c73-11d3-b32e-00c04f990bb4&quot;</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                {
+                    <b>return</b> <b>true</b>;
+                }
+ 
+                <b>return</b> <b>false</b>;
+            }
+        }
+ 
+        <b>private static</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a> <a id="00ecfa81538351a4" href="../R/00ecfa81538351a4.html" target="n" data-glyph="76,1" class="i method">GetLockdownPolicyForResult</a>(<b>uint</b> <span id="r35 rd" class="r35 r">pdwLockdownState</span>)
+        {
+            <b>if</b> ((<span class="r35 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#29e13ce3fa72f713" class="i field">WLDP_LOCKDOWN_UMCIAUDIT_FLAG</a>) ==
+                <a href="#6b51558a7a8cde26" class="t t">SystemPolicy</a>.<a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#29e13ce3fa72f713" class="i field">WLDP_LOCKDOWN_UMCIAUDIT_FLAG</a>)
+            {
+                <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#9fd19577afbedc4d" class="i field">Audit</a>;
+            }
+            <b>else</b> <b>if</b> ((<span class="r35 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#947a63a906f8f6be" class="i field">WLDP_LOCKDOWN_UMCIENFORCE_FLAG</a>) ==
+                <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#947a63a906f8f6be" class="i field">WLDP_LOCKDOWN_UMCIENFORCE_FLAG</a>)
+            {
+                <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#5d74206001d0b817" class="i field">Enforce</a>;
+            }
+            <b>else</b>
+            {
+                <b>return</b> <a href="#9f0915f7b351778e" class="t t">SystemEnforcementMode</a>.<a href="#81a0a3024e2e8559" class="i field">None</a>;
+            }
+        }
+ 
+        <b>internal static string</b> <a id="4bd6b521060cacbc" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">DumpLockdownState</a>(<b>uint</b> <span id="r36 rd" class="r36 r">pdwLockdownState</span>)
+        {
+            <b>string</b> <span id="r37 rd" class="r37 r">returnValue</span> = <b>string</b>.<span class="i">Empty</span>;
+ 
+            <b>if</b> ((<span class="r36 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#0aeddd6ca5c4a852" class="i field">WLDP_LOCKDOWN_DEFINED_FLAG</a>) == <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#0aeddd6ca5c4a852" class="i field">WLDP_LOCKDOWN_DEFINED_FLAG</a>)
+            {
+                <span class="r37 r">returnValue</span> += <span class="s">&quot;WLDP_LOCKDOWN_DEFINED_FLAG\r\n&quot;</span>;
+            }
+ 
+            <b>if</b> ((<span class="r36 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#dd06d689a01e3633" class="i field">WLDP_LOCKDOWN_SECUREBOOT_FLAG</a>) == <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#dd06d689a01e3633" class="i field">WLDP_LOCKDOWN_SECUREBOOT_FLAG</a>)
+            {
+                <span class="r37 r">returnValue</span> += <span class="s">&quot;WLDP_LOCKDOWN_SECUREBOOT_FLAG\r\n&quot;</span>;
+            }
+ 
+            <b>if</b> ((<span class="r36 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#b284818f206b18c5" class="i field">WLDP_LOCKDOWN_DEBUGPOLICY_FLAG</a>) == <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#b284818f206b18c5" class="i field">WLDP_LOCKDOWN_DEBUGPOLICY_FLAG</a>)
+            {
+                <span class="r37 r">returnValue</span> += <span class="s">&quot;WLDP_LOCKDOWN_DEBUGPOLICY_FLAG\r\n&quot;</span>;
+            }
+ 
+            <b>if</b> ((<span class="r36 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#947a63a906f8f6be" class="i field">WLDP_LOCKDOWN_UMCIENFORCE_FLAG</a>) == <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#947a63a906f8f6be" class="i field">WLDP_LOCKDOWN_UMCIENFORCE_FLAG</a>)
+            {
+                <span class="r37 r">returnValue</span> += <span class="s">&quot;WLDP_LOCKDOWN_UMCIENFORCE_FLAG\r\n&quot;</span>;
+            }
+ 
+            <b>if</b> ((<span class="r36 r">pdwLockdownState</span> &amp; <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#29e13ce3fa72f713" class="i field">WLDP_LOCKDOWN_UMCIAUDIT_FLAG</a>) == <a href="#a448b406a6c6f49e" class="t t">WldpNativeConstants</a>.<a href="#29e13ce3fa72f713" class="i field">WLDP_LOCKDOWN_UMCIAUDIT_FLAG</a>)
+            {
+                <span class="r37 r">returnValue</span> += <span class="s">&quot;WLDP_LOCKDOWN_UMCIAUDIT_FLAG\r\n&quot;</span>;
+            }
+ 
+            <b>return</b> <span class="r37 r">returnValue</span>;
+        }
+ 
+        <span class="c">// Overrides for features that should only be enabled in debug mode</span>
+        <b>internal static bool</b> <a id="eed1187a8cd37f30" href="../R/../../0000000000.html" target="n" data-glyph="104,1" class="i property">XamlWorkflowSupported</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Native constants for dealing with the lockdown policy.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static class</b> <a id="a448b406a6c6f49e" href="../R/a448b406a6c6f49e.html" target="n" data-glyph="2,1" class="t t">WldpNativeConstants</a>
+        {
+            <b>internal const uint</b> <a id="8188dd061ce4c184" href="../R/8188dd061ce4c184.html" target="n" data-glyph="8,2" class="i field">WLDP_HOST_INFORMATION_REVISION</a> = 0x00000001;
+ 
+            <b>internal const uint</b> <a id="c7c302d6f6a8fe03" href="../R/../../0000000000.html" target="n" data-glyph="8,2" class="i field">WLDP_LOCKDOWN_UNDEFINED</a> = 0;
+            <b>internal const uint</b> <a id="0aeddd6ca5c4a852" href="../R/0aeddd6ca5c4a852.html" target="n" data-glyph="8,2" class="i field">WLDP_LOCKDOWN_DEFINED_FLAG</a> = 0x80000000;
+            <b>internal const uint</b> <a id="dd06d689a01e3633" href="../R/dd06d689a01e3633.html" target="n" data-glyph="8,2" class="i field">WLDP_LOCKDOWN_SECUREBOOT_FLAG</a> = 1;
+            <b>internal const uint</b> <a id="b284818f206b18c5" href="../R/b284818f206b18c5.html" target="n" data-glyph="8,2" class="i field">WLDP_LOCKDOWN_DEBUGPOLICY_FLAG</a> = 2;
+            <b>internal const uint</b> <a id="947a63a906f8f6be" href="../R/947a63a906f8f6be.html" target="n" data-glyph="8,2" class="i field">WLDP_LOCKDOWN_UMCIENFORCE_FLAG</a> = 4;
+            <b>internal const uint</b> <a id="29e13ce3fa72f713" href="../R/29e13ce3fa72f713.html" target="n" data-glyph="8,2" class="i field">WLDP_LOCKDOWN_UMCIAUDIT_FLAG</a> = 8;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The different host IDs understood by the lockdown policy.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal enum</b> <a id="ef30ef40917094b3" href="../R/ef30ef40917094b3.html" target="n" data-glyph="20,1" class="t t"><span id="c23987d564c621bb">WLDP_HOST_ID</span></a>
+        {
+            <a id="e1162c2b9b9a0442" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_UNKNOWN</a> = 0,
+            <a id="a6bc2fb3389611a9" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_GLOBAL</a> = 1,
+            <a id="50f470a02b896314" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_VBA</a> = 2,
+            <a id="79b6392fd9d794c5" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_WSH</a> = 3,
+            <a id="1157212442fe0d47" href="../R/1157212442fe0d47.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_POWERSHELL</a> = 4,
+            <a id="e76aca0875df1873" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_IE</a> = 5,
+            <a id="2145d2e26252df2a" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_MSI</a> = 6,
+            <a id="5396eafb9fa53d1b" href="../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">WLDP_HOST_ID_MAX</a> = 7,
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host information structure to contain the lockdown policy request.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">StructLayoutAttribute</span>(<span class="i">LayoutKind</span>.<span class="i">Sequential</span>)]
+        <b>internal struct</b> <a id="cbe1229a0fd89e10" href="../R/cbe1229a0fd89e10.html" target="n" data-glyph="110,1" class="t t"><span id="d784ad1d6fbc1543">WLDP_HOST_INFORMATION</span></a>
+        {
+            <span class="c">///</span><span class="c"> DWORD-&gt;unsigned int</span>
+            <b>internal uint</b> <a id="b41ee75af4ea260f" href="../R/b41ee75af4ea260f.html" target="n" data-glyph="44,2" class="i field">dwRevision</a>;
+ 
+            <span class="c">///</span><span class="c"> WLDP_HOST_ID-&gt;_WLDP_HOST_ID</span>
+            <b>internal</b> <a href="#ef30ef40917094b3" class="t t">WLDP_HOST_ID</a> <a id="59e0d0882f972879" href="../R/59e0d0882f972879.html" target="n" data-glyph="44,2" class="i field">dwHostId</a>;
+ 
+            <span class="c">///</span><span class="c"> PCWSTR-&gt;WCHAR*</span>
+            [<span class="i">MarshalAsAttribute</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)]
+            <b>internal string</b> <a id="f49c76bb2a4e4ec5" href="../R/f49c76bb2a4e4ec5.html" target="n" data-glyph="44,2" class="i field">szSource</a>;
+ 
+            <span class="c">// HANDLE-&gt;IntPtr</span>
+            <b>internal</b> <span class="i">IntPtr</span> <a id="a2940a41da8ef4a3" href="../R/a2940a41da8ef4a3.html" target="n" data-glyph="44,2" class="i field">hSource</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Native methods for dealing with the lockdown policy.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static class</b> <a id="6ebd3283cc31c6ae" href="../R/6ebd3283cc31c6ae.html" target="n" data-glyph="2,1" class="t t">WldpNativeMethods</a>
+        {
+            <span class="c">///</span><span class="c"> Return Type: HRESULT-&gt;LONG-&gt;int</span>
+            <span class="c">///</span><span class="c"> pHostInformation: PWLDP_HOST_INFORMATION-&gt;_WLDP_HOST_INFORMATION*</span>
+            <span class="c">///</span><span class="c"> pdwLockdownState: PDWORD-&gt;DWORD*</span>
+            <span class="c">///</span><span class="c"> dwFlags: DWORD-&gt;unsigned int</span>
+            [<span class="i">DefaultDllImportSearchPathsAttribute</span>(<span class="i">DllImportSearchPath</span>.<span class="i">System32</span>)]
+            [<span class="i">DllImportAttribute</span>(<span class="s">&quot;wldp.dll&quot;</span>, <span class="i">EntryPoint</span> = <span class="s">&quot;WldpGetLockdownPolicy&quot;</span>)]
+            <b>internal static extern int</b> <a id="67409af38c31d579" href="../R/67409af38c31d579.html" target="n" data-glyph="74,2" class="i method">WldpGetLockdownPolicy</a>(<b>ref</b> <a href="#cbe1229a0fd89e10" class="t t">WLDP_HOST_INFORMATION</a> <span id="r38 rd" class="r38 r">pHostInformation</span>, <b>ref uint</b> <span id="r39 rd" class="r39 r">pdwLockdownState</span>, <b>uint</b> <span id="r40 rd" class="r40 r">dwFlags</span>);
+ 
+            <span class="c">///</span><span class="c"> Return Type: HRESULT-&gt;LONG-&gt;int</span>
+            <span class="c">///</span><span class="c"> rclsid: IID*</span>
+            <span class="c">///</span><span class="c"> pHostInformation: PWLDP_HOST_INFORMATION-&gt;_WLDP_HOST_INFORMATION*</span>
+            <span class="c">///</span><span class="c"> ptIsApproved: PBOOL-&gt;BOOL*</span>
+            <span class="c">///</span><span class="c"> dwFlags: DWORD-&gt;unsigned int</span>
+            [<span class="i">DefaultDllImportSearchPathsAttribute</span>(<span class="i">DllImportSearchPath</span>.<span class="i">System32</span>)]
+            [<span class="i">DllImportAttribute</span>(<span class="s">&quot;wldp.dll&quot;</span>, <span class="i">EntryPoint</span> = <span class="s">&quot;WldpIsClassInApprovedList&quot;</span>)]
+            <b>internal static extern int</b> <a id="0c86221815bbd7bd" href="../R/0c86221815bbd7bd.html" target="n" data-glyph="74,2" class="i method">WldpIsClassInApprovedList</a>(<b>ref</b> <span class="i">Guid</span> <span id="r41 rd" class="r41 r">rclsid</span>, <b>ref</b> <a href="#cbe1229a0fd89e10" class="t t">WLDP_HOST_INFORMATION</a> <span id="r42 rd" class="r42 r">pHostInformation</span>, <b>ref int</b> <span id="r43 rd" class="r43 r">ptIsApproved</span>, <b>uint</b> <span id="r44 rd" class="r44 r">dwFlags</span>);
+ 
+            [<span class="i">DllImport</span>(<span class="s">&quot;shell32.dll&quot;</span>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>, <span class="i">SetLastError</span> = <b>true</b>)]
+            <b>internal static extern int</b> <a id="e04f205201eca016" href="../R/../../0000000000.html" target="n" data-glyph="74,2" class="i method">SHGetKnownFolderPath</a>(
+                [<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPStruct</span>)]
+                <span class="i">Guid</span> <span id="r45 rd" class="r45 r">rfid</span>,
+                <b>int</b> <span id="r46 rd" class="r46 r">dwFlags</span>,
+                <span class="i">IntPtr</span> <span id="r47 rd" class="r47 r">hToken</span>,
+                <b>out</b> <span class="i">IntPtr</span> <span id="r48 rd" class="r48 r">pszPath</span>);
+        }
+    }
+}
+ 
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+</pre></td></tr></table></div></body></html>

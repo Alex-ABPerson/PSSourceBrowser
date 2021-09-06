@@ -1,0 +1,225 @@
+﻿<!DOCTYPE html>
+<html><head><title>GlobalAssemblyCache.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(216);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/parser/GlobalAssemblyCache.cs" target="_top">engine\parser\GlobalAssemblyCache.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<span class="c">// Code in this file was copied from https://github.com/dotnet/roslyn</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CORECLR</span> <span class="c">// Only enable/port what is needed by CORE CLR.</span>
+<span class="e">namespace Microsoft.CodeAnalysis
+{
+    /// &lt;summary&gt;
+    /// Provides APIs to enumerate and look up assemblies stored in the Global Assembly Cache.
+    /// &lt;/summary&gt;
+    internal static class GlobalAssemblyCache
+    {
+        /// &lt;summary&gt;
+        /// Represents the current Processor architecture.
+        /// &lt;/summary&gt;
+        public static readonly ProcessorArchitecture[] CurrentArchitectures = (IntPtr.Size == 4)
+            ? new[] { ProcessorArchitecture.None, ProcessorArchitecture.MSIL, ProcessorArchitecture.X86 }
+ 
+            : new[] { ProcessorArchitecture.None, ProcessorArchitecture.MSIL, ProcessorArchitecture.Amd64 };
+ 
+</span><span class="k preprocess">#</span><span class="k preprocess">region</span> Interop
+<span class="e">
+        private const int MAX_PATH = 260;
+ 
+        [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid(&quot;21b8916c-f28e-11d2-a473-00c04f8ef448&quot;)]
+        private interface IAssemblyEnum
+        {
+            [PreserveSig]
+            int GetNextAssembly(out FusionAssemblyIdentity.IApplicationContext ppAppCtx, out FusionAssemblyIdentity.IAssemblyName ppName, uint dwFlags);
+ 
+            [PreserveSig]
+            int Reset();
+ 
+            [PreserveSig]
+            int Clone(out IAssemblyEnum ppEnum);
+        }
+ 
+        [ComImport, Guid(&quot;e707dcde-d1cd-11d2-bab9-00c04f8eceae&quot;), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IAssemblyCache
+        {
+            void UninstallAssembly();
+ 
+            void QueryAssemblyInfo(uint dwFlags, [MarshalAs(UnmanagedType.LPWStr)] string pszAssemblyName, ref ASSEMBLY_INFO pAsmInfo);
+ 
+            void CreateAssemblyCacheItem();
+            void CreateAssemblyScavenger();
+            void InstallAssembly();
+        }
+ 
+        [StructLayout(LayoutKind.Sequential)]
+        private unsafe struct ASSEMBLY_INFO
+        {
+            public uint cbAssemblyInfo;
+            public uint dwAssemblyFlags;
+            public ulong uliAssemblySizeInKB;
+            public char* pszCurrentAssemblyPathBuf;
+            public uint cchBuf;
+        }
+ 
+        private enum ASM_CACHE
+        {
+            ZAP = 0x1,
+            GAC = 0x2,                // C:\Windows\Assembly\GAC
+            DOWNLOAD = 0x4,
+            ROOT = 0x8,               // C:\Windows\Assembly
+            GAC_MSIL = 0x10,
+            GAC_32 = 0x20,            // C:\Windows\Assembly\GAC_32
+            GAC_64 = 0x40,            // C:\Windows\Assembly\GAC_64
+            ROOT_EX = 0x80,           // C:\Windows\Microsoft.NET\assembly
+        }
+ 
+        [DllImport(&quot;clr&quot;, CharSet = CharSet.Auto, PreserveSig = true)]
+        private static extern int CreateAssemblyEnum(out IAssemblyEnum ppEnum, FusionAssemblyIdentity.IApplicationContext pAppCtx, FusionAssemblyIdentity.IAssemblyName pName, ASM_CACHE dwFlags, IntPtr pvReserved);
+ 
+        [DllImport(&quot;clr&quot;, CharSet = CharSet.Auto, PreserveSig = false)]
+        private static extern void CreateAssemblyCache(out IAssemblyCache ppAsmCache, uint dwReserved);
+ 
+</span><span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+<span class="e">
+        private const int S_OK = 0;
+        private const int S_FALSE = 1;
+ 
+        // Internal for testing.
+        internal static IEnumerable&lt;FusionAssemblyIdentity.IAssemblyName&gt; GetAssemblyObjects(
+            FusionAssemblyIdentity.IAssemblyName partialNameFilter,
+            ProcessorArchitecture[] architectureFilter)
+        {
+            IAssemblyEnum enumerator;
+ 
+            int hr = CreateAssemblyEnum(out enumerator, null, partialNameFilter, ASM_CACHE.GAC, IntPtr.Zero);
+            if (hr == S_FALSE)
+            {
+                // no assembly found
+                yield break;
+            }
+ 
+            if (hr != S_OK)
+            {
+                Exception e = Marshal.GetExceptionForHR(hr);
+                if (e is FileNotFoundException)
+                {
+                    // invalid assembly name:
+                    yield break;
+                }
+ 
+                if (e != null)
+                {
+                    throw e;
+                }
+                // for some reason it might happen that CreateAssemblyEnum returns non-zero HR that doesn&#39;t correspond to any exception:
+                throw new ArgumentException(&quot;Invalid assembly name&quot;);
+            }
+ 
+            while (true)
+            {
+                FusionAssemblyIdentity.IAssemblyName nameObject;
+ 
+                FusionAssemblyIdentity.IApplicationContext applicationContext;
+                hr = enumerator.GetNextAssembly(out applicationContext, out nameObject, 0);
+                if (hr != 0)
+                {
+                    if (hr &lt; 0)
+                    {
+                        Marshal.ThrowExceptionForHR(hr);
+                    }
+ 
+                    break;
+                }
+ 
+                if (architectureFilter != null)
+                {
+                    var assemblyArchitecture = FusionAssemblyIdentity.GetProcessorArchitecture(nameObject);
+                    if (!architectureFilter.Contains(assemblyArchitecture))
+                    {
+                        continue;
+                    }
+                }
+ 
+                yield return nameObject;
+            }
+        }
+ 
+        /// &lt;summary&gt;
+        /// Looks up specified partial assembly name in the GAC and returns the best matching full assembly name/&gt;.
+        /// &lt;/summary&gt;
+        /// &lt;param name=&quot;displayName&quot;&gt;The display name of an assembly.&lt;/param&gt;
+        /// &lt;param name=&quot;location&quot;&gt;Full path name of the resolved assembly.&lt;/param&gt;
+        /// &lt;param name=&quot;architectureFilter&quot;&gt;The optional processor architecture.&lt;/param&gt;
+        /// &lt;param name=&quot;preferredCulture&quot;&gt;The optional preferred culture information.&lt;/param&gt;
+        /// &lt;returns&gt;An assembly identity or null, if &lt;paramref name=&quot;displayName&quot;/&gt; can&#39;t be resolved.&lt;/returns&gt;
+        /// &lt;exception cref=&quot;ArgumentNullException&quot;&gt;&lt;paramref name=&quot;displayName&quot;/&gt; is null.&lt;/exception&gt;
+        public static unsafe string ResolvePartialName(
+            string displayName,
+            out string location,
+            ProcessorArchitecture[] architectureFilter = null,
+            CultureInfo preferredCulture = null)
+        {
+            if (displayName == null)
+            {
+                throw new ArgumentNullException(&quot;displayName&quot;);
+            }
+ 
+            location = null;
+            FusionAssemblyIdentity.IAssemblyName nameObject = FusionAssemblyIdentity.ToAssemblyNameObject(displayName);
+            if (nameObject == null)
+            {
+                return null;
+            }
+ 
+            var candidates = GetAssemblyObjects(nameObject, architectureFilter);
+            string cultureName = (preferredCulture != null &amp;&amp; !preferredCulture.IsNeutralCulture) ? preferredCulture.Name : null;
+ 
+            var bestMatch = FusionAssemblyIdentity.GetBestMatch(candidates, cultureName);
+            if (bestMatch == null)
+            {
+                return null;
+            }
+ 
+            string fullName = FusionAssemblyIdentity.GetDisplayName(bestMatch, FusionAssemblyIdentity.ASM_DISPLAYF.FULL);
+ 
+            fixed (char* p = new char[MAX_PATH])
+            {
+                ASSEMBLY_INFO info = new ASSEMBLY_INFO
+                {
+                    cbAssemblyInfo = (uint)Marshal.SizeOf(typeof(ASSEMBLY_INFO)),
+                    pszCurrentAssemblyPathBuf = p,
+                    cchBuf = (uint)MAX_PATH
+                };
+ 
+                IAssemblyCache assemblyCacheObject;
+                CreateAssemblyCache(out assemblyCacheObject, 0);
+                assemblyCacheObject.QueryAssemblyInfo(0, fullName, ref info);
+                Debug.Assert(info.pszCurrentAssemblyPathBuf != null);
+                Debug.Assert(info.pszCurrentAssemblyPathBuf[info.cchBuf - 1] == &#39;\0&#39;);
+ 
+                var result = Marshal.PtrToStringUni((IntPtr)info.pszCurrentAssemblyPathBuf, (int)info.cchBuf - 1);
+                Debug.Assert(result.IndexOf(&#39;\0&#39;) == -1);
+                location = result;
+            }
+ 
+            return fullName;
+        }
+    }
+}
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span> <span class="c">// !CORECLR</span>
+</pre></td></tr></table></div></body></html>

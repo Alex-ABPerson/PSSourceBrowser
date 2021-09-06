@@ -1,0 +1,797 @@
+﻿<!DOCTYPE html>
+<html><head><title>EventProvider.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(788);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.CoreCLR.Eventing/DotNetCode/Eventing/EventProvider.cs" target="_top">DotNetCode\Eventing\EventProvider.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.CoreCLR.Eventing" target="_top">src\Microsoft.PowerShell.CoreCLR.Eventing\Microsoft.PowerShell.CoreCLR.Eventing.csproj</a> (Microsoft.PowerShell.CoreCLR.Eventing)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">ComponentModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i n">Eventing</span>
+{
+    <b>public class</b> <a id="a714f53b70aabe67" href="../../R/a714f53b70aabe67.html" target="n" data-glyph="0,0" class="t t">EventProvider</a> : <span class="i">IDisposable</span>
+    {
+        [<span class="i">SecurityCritical</span>]
+        <b>private</b> <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#3f67193f2dc84c5e" class="t t">EtwEnableCallback</a> <a id="4deba0ebe4872dde" href="../../R/4deba0ebe4872dde.html" target="n" data-glyph="46,1" class="i field">_etwCallback</a>;  <span class="c">// Trace Callback function</span>
+ 
+        <b>private long</b> <a id="5ba26ce16b2f8f41" href="../../R/5ba26ce16b2f8f41.html" target="n" data-glyph="46,1" class="i field">_regHandle</a>;                       <span class="c">// Trace Registration Handle</span>
+        <b>private byte</b> <a id="21ddf2e4df9be9e9" href="../../R/21ddf2e4df9be9e9.html" target="n" data-glyph="46,1" class="i field">_level</a>;                            <span class="c">// Tracing Level</span>
+        <b>private long</b> <a id="4b17ceba2b334bac" href="../../R/4b17ceba2b334bac.html" target="n" data-glyph="46,1" class="i field">_anyKeywordMask</a>;                  <span class="c">// Trace Enable Flags</span>
+        <b>private long</b> <a id="5868b9f0c2d43e57" href="../../R/5868b9f0c2d43e57.html" target="n" data-glyph="46,1" class="i field">_allKeywordMask</a>;                  <span class="c">// Match all keyword</span>
+        <b>private int</b> <a id="905d77fb5cb7acfc" href="../../R/905d77fb5cb7acfc.html" target="n" data-glyph="46,1" class="i field">_enabled</a>;                           <span class="c">// Enabled flag from Trace callback</span>
+        <b>private readonly</b> <span class="i">Guid</span> <a id="3e36e167e8be09e5" href="../../R/3e36e167e8be09e5.html" target="n" data-glyph="46,1" class="i field">_providerId</a>;              <span class="c">// Control Guid</span>
+        <b>private int</b> <a id="ead0c8779df77b8b" href="../../R/ead0c8779df77b8b.html" target="n" data-glyph="46,1" class="i field">_disposed</a>;                          <span class="c">// when 1, provider has unregister</span>
+ 
+        [<span class="i">ThreadStatic</span>]
+        <b>private static</b> <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a> <a id="80837c81be44e287" href="../../R/80837c81be44e287.html" target="n" data-glyph="46,1" class="i field">t_returnCode</a>; <span class="c">// thread slot to keep last error</span>
+ 
+        [<span class="i">ThreadStatic</span>]
+        <b>private static</b> <span class="i">Guid</span> <a id="59abb12f3853d94b" href="../../R/59abb12f3853d94b.html" target="n" data-glyph="46,1" class="i field">t_activityId</a>;
+ 
+        <b>private const int</b> <a id="a837a23458a4bc8f" href="../../R/a837a23458a4bc8f.html" target="n" data-glyph="10,1" class="i field">s_basicTypeAllocationBufferSize</a> = 16;
+        <b>private const int</b> <a id="31fbf1e320d6164c" href="../../R/31fbf1e320d6164c.html" target="n" data-glyph="10,1" class="i field">s_etwMaxNumberArguments</a> = 32;
+        <b>private const int</b> <a id="bdebaec2ed9bcdbf" href="../../R/bdebaec2ed9bcdbf.html" target="n" data-glyph="10,1" class="i field">s_etwAPIMaxStringCount</a> = 8;
+        <b>private const int</b> <a id="750ed30ec397f160" href="../../R/../../0000000000.html" target="n" data-glyph="10,1" class="i field">s_maxEventDataDescriptors</a> = 128;
+        <b>private const int</b> <a id="3c12d49098c09500" href="../../R/3c12d49098c09500.html" target="n" data-glyph="10,1" class="i field">s_traceEventMaximumSize</a> = 65482;
+        <b>private const int</b> <a id="37f3238e22740999" href="../../R/37f3238e22740999.html" target="n" data-glyph="10,1" class="i field">s_traceEventMaximumStringSize</a> = 32724;
+ 
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Design&quot;</span>, <span class="s">&quot;CA1034:NestedTypesShouldNotBeVisible&quot;</span>)]
+        <b>public enum</b> <a id="cc349905d1a7d922" href="../../R/cc349905d1a7d922.html" target="n" data-glyph="18,1" class="t t"><span id="931c77c659dba5a5">WriteEventErrorCode</span></a> : <b>int</b>
+        {
+            <span class="c">// check mapping to runtime codes</span>
+            <a id="de04b72bb36037fe" href="../../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">NoError</a> = 0,
+            <a id="b80c4389aefcdc6f" href="../../R/b80c4389aefcdc6f.html" target="n" data-glyph="24,2" class="i field">NoFreeBuffers</a> = 1,
+            <a id="580accdd648ccedf" href="../../R/580accdd648ccedf.html" target="n" data-glyph="24,2" class="i field">EventTooBig</a> = 2
+        }
+ 
+        [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Explicit</span>, <span class="i">Size</span> = 16)]
+        <b>private struct</b> <a id="5be0a890ae8aa488" href="../../R/5be0a890ae8aa488.html" target="n" data-glyph="112,1" class="t t"><span id="5c321cde211ef58e">EventData</span></a>
+        {
+            [<span class="i">FieldOffset</span>(0)]
+            <b>internal ulong</b> <a id="a6ab2a981be84454" href="../../R/a6ab2a981be84454.html" target="n" data-glyph="44,2" class="i field">DataPointer</a>;
+ 
+            [<span class="i">FieldOffset</span>(8)]
+            <b>internal uint</b> <a id="1ec6cd16cdd8f9f2" href="../../R/1ec6cd16cdd8f9f2.html" target="n" data-glyph="44,2" class="i field">Size</a>;
+ 
+            [<span class="i">FieldOffset</span>(12)]
+            <b>internal int</b> <a id="e0b04842ce499f38" href="../../R/e0b04842ce499f38.html" target="n" data-glyph="44,2" class="i field">Reserved</a>;
+        }
+ 
+        <b>private enum</b> <a id="d76cec43571bf74e" href="../../R/d76cec43571bf74e.html" target="n" data-glyph="22,1" class="t t"><span id="4d85b5d3dc5a8452">ActivityControl</span></a> : <b>uint</b>
+        {
+            <a id="2f5d08b2dd3357e0" href="../../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">EVENT_ACTIVITY_CTRL_GET_ID</a> = 1,
+            <a id="8a109b3ed30d940b" href="../../R/8a109b3ed30d940b.html" target="n" data-glyph="24,2" class="i field">EVENT_ACTIVITY_CTRL_SET_ID</a> = 2,
+            <a id="7da56df68e4c8af6" href="../../R/7da56df68e4c8af6.html" target="n" data-glyph="24,2" class="i field">EVENT_ACTIVITY_CTRL_CREATE_ID</a> = 3,
+            <a id="c4bce448350fb932" href="../../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">EVENT_ACTIVITY_CTRL_GET_SET_ID</a> = 4,
+            <a id="bc526c8234113af2" href="../../R/../../0000000000.html" target="n" data-glyph="24,2" class="i field">EVENT_ACTIVITY_CTRL_CREATE_SET_ID</a> = 5
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor for EventProvider class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">providerGuid</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Unique GUID among all trace sources running on a system</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SecuritySafeCritical</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Naming&quot;</span>, <span class="s">&quot;CA1720:IdentifiersShouldNotContainTypeNames&quot;</span>, <span class="i">MessageId</span> = <span class="s">&quot;guid&quot;</span>)]
+        <b>public</b> <a id="6ef09ddb6e8e5854" href="../../R/6ef09ddb6e8e5854.html" target="n" data-glyph="72,1" class="t constructor">EventProvider</a>(<span class="i">Guid</span> <span id="r0 rd" class="r0 r">providerGuid</span>)
+        {
+            <a href="#3e36e167e8be09e5" class="i field">_providerId</a> = <span class="r0 r">providerGuid</span>;
+ 
+            <span class="c">//</span>
+            <span class="c">// EtwRegister the ProviderId with ETW</span>
+            <span class="c">//</span>
+            <a href="#2f51edb2a28080f1" class="i method">EtwRegister</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method registers the controlGuid of this class with ETW.</span>
+        <span class="c">///</span><span class="c"> We need to be running on Vista or above. If not an</span>
+        <span class="c">///</span><span class="c"> PlatformNotSupported exception will be thrown.</span>
+        <span class="c">///</span><span class="c"> If for some reason the ETW EtwRegister call failed</span>
+        <span class="c">///</span><span class="c"> a NotSupported exception will be thrown.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>private unsafe void</b> <a id="2f51edb2a28080f1" href="../../R/2f51edb2a28080f1.html" target="n" data-glyph="76,1" class="i method">EtwRegister</a>()
+        {
+            <b>uint</b> <span id="r1 rd" class="r1 r">status</span>;
+ 
+            <a href="#4deba0ebe4872dde" class="i field">_etwCallback</a> = <b>new</b> <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<span class="t">EtwEnableCallback</span>(<span class="i">EtwEnableCallBack</span>);
+ 
+            <span class="r1 r">status</span> = <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#d3abe8930693a8f2" class="i method">EventRegister</a>(<b>in</b> <a href="#3e36e167e8be09e5" class="i field">_providerId</a>, <a href="#4deba0ebe4872dde" class="i field">_etwCallback</a>, <b>null</b>, <b>ref</b> <a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>);
+            <b>if</b> (<span class="r1 r">status</span> != 0)
+            {
+                <b>throw</b> <b>new</b> <span class="i">Win32Exception</span>((<b>int</b>)<span class="r1 r">status</span>);
+            }
+        }
+ 
+        <span class="c">//</span>
+        <span class="c">// implement Dispose Pattern to early deregister from ETW instead of waiting for</span>
+        <span class="c">// the finalizer to call deregistration.</span>
+        <span class="c">// Once the user is done with the provider it needs to call Close() or Dispose()</span>
+        <span class="c">// If neither are called the finalizer will unregister the provider anyway</span>
+        <span class="c">//</span>
+        <b>public void</b> <a id="f29c572529f7c8bc" href="../../R/f29c572529f7c8bc.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#7f1434da6b68eb66" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#a714f53b70aabe67" class="k">this</a>);
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecuritySafeCritical</span>]
+        <b>protected virtual void</b> <a id="7f1434da6b68eb66" href="../../R/7f1434da6b68eb66.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r2 rd" class="r2 r">disposing</span>)
+        {
+            <span class="c">//</span>
+            <span class="c">// explicit cleanup is done by calling Dispose with true from</span>
+            <span class="c">// Dispose() or Close(). The disposing argument is ignored because there</span>
+            <span class="c">// are no unmanaged resources.</span>
+            <span class="c">// The finalizer calls Dispose with false.</span>
+            <span class="c">//</span>
+ 
+            <span class="c">//</span>
+            <span class="c">// check if the object has been already disposed</span>
+            <span class="c">//</span>
+            <b>if</b> (<a href="#ead0c8779df77b8b" class="i field">_disposed</a> == 1) <b>return</b>;
+ 
+            <b>if</b> (<span class="i">Interlocked</span>.<span class="i">Exchange</span>(<b>ref</b> <a href="#ead0c8779df77b8b" class="i field">_disposed</a>, 1) != 0)
+            {
+                <span class="c">// somebody is already disposing the provider</span>
+                <b>return</b>;
+            }
+ 
+            <span class="c">//</span>
+            <span class="c">// Disables Tracing in the provider, then unregister</span>
+            <span class="c">//</span>
+ 
+            <a href="#905d77fb5cb7acfc" class="i field">_enabled</a> = 0;
+ 
+            <a href="#f3adcef9271424eb" class="i method">Deregister</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method deregisters the controlGuid of this class with ETW.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public virtual void</b> <a id="c9d07140e41327dc" href="../../R/c9d07140e41327dc.html" target="n" data-glyph="72,1" class="i method">Close</a>()
+        {
+            <a href="#f29c572529f7c8bc" class="i method">Dispose</a>();
+        }
+ 
+        ~<a id="e85c461636ceba4e" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="t method">EventProvider</a>()
+        {
+            <a href="#7f1434da6b68eb66" class="i method">Dispose</a>(<b>false</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method un-registers from ETW.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>private unsafe void</b> <a id="f3adcef9271424eb" href="../../R/f3adcef9271424eb.html" target="n" data-glyph="76,1" class="i method">Deregister</a>()
+        {
+            <span class="c">//</span>
+            <span class="c">// Unregister from ETW using the RegHandle saved from</span>
+            <span class="c">// the register call.</span>
+            <span class="c">//</span>
+ 
+            <b>if</b> (<a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a> != 0)
+            {
+                <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#10f155a6bb78d1df" class="i method">EventUnregister</a>(<a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>);
+                <a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a> = 0;
+            }
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>private unsafe void</b> <a id="e41438004bd6a5c4" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">EtwEnableCallBack</a>(
+                        [<span class="i">In</span>] <b>ref</b> <span class="i n">System</span>.<span class="i">Guid</span> <span id="r3 rd" class="r3 r">sourceId</span>,
+                        [<span class="i">In</span>] <b>int</b> <span id="r4 rd" class="r4 r">isEnabled</span>,
+                        [<span class="i">In</span>] <b>byte</b> <span id="r5 rd" class="r5 r">setLevel</span>,
+                        [<span class="i">In</span>] <b>long</b> <span id="r6 rd" class="r6 r">anyKeyword</span>,
+                        [<span class="i">In</span>] <b>long</b> <span id="r7 rd" class="r7 r">allKeyword</span>,
+                        [<span class="i">In</span>] <b>void</b>* <span id="r8 rd" class="r8 r">filterData</span>,
+                        [<span class="i">In</span>] <b>void</b>* <span id="r9 rd" class="r9 r">callbackContext</span>
+                        )
+        {
+            <a href="#905d77fb5cb7acfc" class="i field">_enabled</a> = <span class="r4 r">isEnabled</span>;
+            <a href="#21ddf2e4df9be9e9" class="i field">_level</a> = <span class="r5 r">setLevel</span>;
+            <a href="#4b17ceba2b334bac" class="i field">_anyKeywordMask</a> = <span class="r6 r">anyKeyword</span>;
+            <a href="#5868b9f0c2d43e57" class="i field">_allKeywordMask</a> = <span class="r7 r">allKeyword</span>;
+            <b>return</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> IsEnabled, method used to test if provider is enabled.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="d8a060fc37bfb347" href="../../R/d8a060fc37bfb347.html" target="n" data-glyph="72,1" class="i method">IsEnabled</a>()
+        {
+            <b>return</b> <a href="#905d77fb5cb7acfc" class="i field">_enabled</a> != 0;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> IsEnabled, method used to test if event is enabled.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">level</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Level to test</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">keywords</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Keyword to test</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="206333c1f6b0e3c6" href="../../R/206333c1f6b0e3c6.html" target="n" data-glyph="72,1" class="i method">IsEnabled</a>(<b>byte</b> <span id="r10 rd" class="r10 r">level</span>, <b>long</b> <span id="r11 rd" class="r11 r">keywords</span>)
+        {
+            <span class="c">//</span>
+            <span class="c">// If not enabled at all, return false.</span>
+            <span class="c">//</span>
+ 
+            <b>if</b> (<a href="#905d77fb5cb7acfc" class="i field">_enabled</a> == 0)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <span class="c">// This also covers the case of Level == 0.</span>
+            <b>if</b> ((<span class="r10 r">level</span> &lt;= <a href="#21ddf2e4df9be9e9" class="i field">_level</a>) ||
+                (<a href="#21ddf2e4df9be9e9" class="i field">_level</a> == 0))
+            {
+                <span class="c">//</span>
+                <span class="c">// Check if Keyword is enabled</span>
+                <span class="c">//</span>
+ 
+                <b>if</b> ((<span class="r11 r">keywords</span> == 0) ||
+                    (((<span class="r11 r">keywords</span> &amp; <a href="#4b17ceba2b334bac" class="i field">_anyKeywordMask</a>) != 0) &amp;&amp;
+                     ((<span class="r11 r">keywords</span> &amp; <a href="#5868b9f0c2d43e57" class="i field">_allKeywordMask</a>) == <a href="#5868b9f0c2d43e57" class="i field">_allKeywordMask</a>)))
+                {
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>public static</b> <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a> <a id="c5a5461dcf51430f" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">GetLastWriteEventError</a>()
+        {
+            <b>return</b> <a href="#80837c81be44e287" class="i field">t_returnCode</a>;
+        }
+ 
+        <span class="c">//</span>
+        <span class="c">// Helper function to set the last error on the thread</span>
+        <span class="c">//</span>
+        <b>private static void</b> <a id="58bc9612c371b040" href="../../R/58bc9612c371b040.html" target="n" data-glyph="76,1" class="i method">SetLastError</a>(<b>int</b> <span id="r12 rd" class="r12 r">error</span>)
+        {
+            <b>switch</b> (<span class="r12 r">error</span>)
+            {
+                <b>case</b> <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#eecacc755c672d19" class="i field">ERROR_ARITHMETIC_OVERFLOW</a>:
+                <b>case</b> <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#28fae2f7bb651383" class="i field">ERROR_MORE_DATA</a>:
+                    <a href="#80837c81be44e287" class="i field">t_returnCode</a> = <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a>.<a href="#580accdd648ccedf" class="i field">EventTooBig</a>;
+                    <b>break</b>;
+                <b>case</b> <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#ddd48797d625b449" class="i field">ERROR_NOT_ENOUGH_MEMORY</a>:
+                    <a href="#80837c81be44e287" class="i field">t_returnCode</a> = <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a>.<a href="#b80c4389aefcdc6f" class="i field">NoFreeBuffers</a>;
+                    <b>break</b>;
+            }
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>private static unsafe string</b> <a id="2714dcecea85ef70" href="../../R/2714dcecea85ef70.html" target="n" data-glyph="76,1" class="i method">EncodeObject</a>(<b>ref object</b> <span id="r13 rd" class="r13 r">data</span>, <a href="#5be0a890ae8aa488" class="t t">EventData</a>* <span id="r14 rd" class="r14 r">dataDescriptor</span>, <b>byte</b>* <span id="r15 rd" class="r15 r">dataBuffer</span>)
+        <span class="c">/*++
+ 
+        Routine Description:
+ 
+           This routine is used by WriteEvent to unbox the object type and
+           to fill the passed in ETW data descriptor.
+ 
+        Arguments:
+ 
+           data - argument to be decoded
+ 
+           dataDescriptor - pointer to the descriptor to be filled
+ 
+           dataBuffer - storage buffer for storing user data, needed because cant get the address of the object
+ 
+        Return Value:
+ 
+           null if the object is a basic type other than string. String otherwise
+ 
+        --*/</span>
+        {
+            <span class="r14 r">dataDescriptor</span>-&gt;<a href="#e0b04842ce499f38" class="i field">Reserved</a> = 0;
+ 
+            <b>string</b> <span id="r16 rd" class="r16 r">sRet</span> = <span class="r13 r">data</span> <b>as string</b>;
+            <b>if</b> (<span class="r16 r">sRet</span> != <b>null</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)((<span class="r16 r">sRet</span>.<span class="i">Length</span> + 1) * 2);
+                <b>return</b> <span class="r16 r">sRet</span>;
+            }
+ 
+            <b>if</b> (<span class="r13 r">data</span> == <b>null</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = 0;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = 0;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is</b> <span class="i">IntPtr</span>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<span class="i">IntPtr</span>);
+                <span class="i">IntPtr</span>* <span id="r17 rd" class="r17 r">intptrPtr</span> = (<span class="i">IntPtr</span>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r17 r">intptrPtr</span> = (<span class="i">IntPtr</span>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r17 r">intptrPtr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is int</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>int</b>);
+                <b>int</b>* <span id="r18 rd" class="r18 r">intptrPtr</span> = (<b>int</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r18 r">intptrPtr</span> = (<b>int</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r18 r">intptrPtr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is long</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>long</b>);
+                <b>long</b>* <span id="r19 rd" class="r19 r">longptr</span> = (<b>long</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r19 r">longptr</span> = (<b>long</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r19 r">longptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is uint</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>uint</b>);
+                <b>uint</b>* <span id="r20 rd" class="r20 r">uintptr</span> = (<b>uint</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r20 r">uintptr</span> = (<b>uint</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r20 r">uintptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is ulong</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>ulong</b>);
+                <b>ulong</b>* <span id="r21 rd" class="r21 r">ulongptr</span> = (<b>ulong</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r21 r">ulongptr</span> = (<b>ulong</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r21 r">ulongptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is char</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>char</b>);
+                <b>char</b>* <span id="r22 rd" class="r22 r">charptr</span> = (<b>char</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r22 r">charptr</span> = (<b>char</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r22 r">charptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is byte</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>byte</b>);
+                <b>byte</b>* <span id="r23 rd" class="r23 r">byteptr</span> = (<b>byte</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r23 r">byteptr</span> = (<b>byte</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r23 r">byteptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is short</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>short</b>);
+                <b>short</b>* <span id="r24 rd" class="r24 r">shortptr</span> = (<b>short</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r24 r">shortptr</span> = (<b>short</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r24 r">shortptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is sbyte</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>sbyte</b>);
+                <b>sbyte</b>* <span id="r25 rd" class="r25 r">sbyteptr</span> = (<b>sbyte</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r25 r">sbyteptr</span> = (<b>sbyte</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r25 r">sbyteptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is ushort</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>ushort</b>);
+                <b>ushort</b>* <span id="r26 rd" class="r26 r">ushortptr</span> = (<b>ushort</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r26 r">ushortptr</span> = (<b>ushort</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r26 r">ushortptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is float</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>float</b>);
+                <b>float</b>* <span id="r27 rd" class="r27 r">floatptr</span> = (<b>float</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r27 r">floatptr</span> = (<b>float</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r27 r">floatptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is double</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>double</b>);
+                <b>double</b>* <span id="r28 rd" class="r28 r">doubleptr</span> = (<b>double</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r28 r">doubleptr</span> = (<b>double</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r28 r">doubleptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is bool</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>bool</b>);
+                <b>bool</b>* <span id="r29 rd" class="r29 r">boolptr</span> = (<b>bool</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r29 r">boolptr</span> = (<b>bool</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r29 r">boolptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is</b> <span class="i">Guid</span>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<span class="i">Guid</span>);
+                <span class="i">Guid</span>* <span id="r30 rd" class="r30 r">guidptr</span> = (<span class="i">Guid</span>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r30 r">guidptr</span> = (<span class="i">Guid</span>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r30 r">guidptr</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="r13 r">data</span> <b>is decimal</b>)
+            {
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)<b>sizeof</b>(<b>decimal</b>);
+                <b>decimal</b>* <span id="r31 rd" class="r31 r">decimalptr</span> = (<b>decimal</b>*)<span class="r15 r">dataBuffer</span>;
+                *<span class="r31 r">decimalptr</span> = (<b>decimal</b>)<span class="r13 r">data</span>;
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r31 r">decimalptr</span>;
+            }
+            <b>else</b>
+            {
+                <span class="c">// To our eyes, everything else is a just a string</span>
+                <span class="r16 r">sRet</span> = <span class="r13 r">data</span>.<span class="i">ToString</span>();
+                <span class="r14 r">dataDescriptor</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)((<span class="r16 r">sRet</span>.<span class="i">Length</span> + 1) * 2);
+                <b>return</b> <span class="r16 r">sRet</span>;
+            }
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> WriteMessageEvent, method to write a string with level and Keyword.</span>
+        <span class="c">///</span><span class="c"> The activity ID will be propagated only if the call stays on the same native thread as SetActivityId().</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">eventMessage</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Message to write</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">eventLevel</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Level to test</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">eventKeywords</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Keyword to test</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>public bool</b> <a id="8d414ee5303d6764" href="../../R/8d414ee5303d6764.html" target="n" data-glyph="72,1" class="i method">WriteMessageEvent</a>(<b>string</b> <span id="r32 rd" class="r32 r">eventMessage</span>, <b>byte</b> <span id="r33 rd" class="r33 r">eventLevel</span>, <b>long</b> <span id="r34 rd" class="r34 r">eventKeywords</span>)
+        {
+            <b>int</b> <span id="r35 rd" class="r35 r">status</span> = 0;
+ 
+            <b>if</b> (<span class="r32 r">eventMessage</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r32 r">eventMessage</span>));
+            }
+ 
+            <b>if</b> (<a href="#206333c1f6b0e3c6" class="i method">IsEnabled</a>(<span class="r33 r">eventLevel</span>, <span class="r34 r">eventKeywords</span>))
+            {
+                <b>if</b> (<span class="r32 r">eventMessage</span>.<span class="i">Length</span> &gt; <a href="#37f3238e22740999" class="i field">s_traceEventMaximumStringSize</a>)
+                {
+                    <a href="#80837c81be44e287" class="i field">t_returnCode</a> = <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a>.<a href="#580accdd648ccedf" class="i field">EventTooBig</a>;
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>unsafe</b>
+                {
+                    <b>fixed</b> (<b>char</b>* <span id="r36 rd" class="r36 r">pdata</span> = <span class="r32 r">eventMessage</span>)
+                    {
+                        <span class="r35 r">status</span> = (<b>int</b>)<a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#5a080392df1c7a66" class="i method">EventWriteString</a>(<a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>, <span class="r33 r">eventLevel</span>, <span class="r34 r">eventKeywords</span>, <span class="r36 r">pdata</span>);
+                    }
+ 
+                    <b>if</b> (<span class="r35 r">status</span> != 0)
+                    {
+                        <a href="#58bc9612c371b040" class="i method">SetLastError</a>(<span class="r35 r">status</span>);
+                        <b>return</b> <b>false</b>;
+                    }
+                }
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> WriteMessageEvent, method to write a string with level=0 and Keyword=0</span>
+        <span class="c">///</span><span class="c"> The activity ID will be propagated only if the call stays on the same native thread as SetActivityId().</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">eventMessage</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Message to log</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="b4eb985d1f5934de" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteMessageEvent</a>(<b>string</b> <span id="r37 rd" class="r37 r">eventMessage</span>)
+        {
+            <b>return</b> <a href="#8d414ee5303d6764" class="i method">WriteMessageEvent</a>(<span class="r37 r">eventMessage</span>, 0, 0);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> WriteEvent method to write parameters with event schema properties.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">eventDescriptor</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event Descriptor for this event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">eventPayload</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="14d9838ce0b5413f" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteEvent</a>(<b>in</b> <a href="EventDescriptor.cs.html#50bb26e525268273" class="t t">EventDescriptor</a> <span id="r38 rd" class="r38 r">eventDescriptor</span>, <b>params object</b>[] <span id="r39 rd" class="r39 r">eventPayload</span>)
+        {
+            <b>return</b> <span class="i">WriteTransferEvent</span>(<b>in</b> <span class="r38 r">eventDescriptor</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r39 r">eventPayload</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> WriteEvent, method to write a string with event schema properties.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">eventDescriptor</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event Descriptor for this event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> string to log.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Usage&quot;</span>, <span class="s">&quot;CA2208:InstantiateArgumentExceptionsCorrectly&quot;</span>)]
+        <b>public bool</b> <a id="407991361ac2bfe4" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteEvent</a>(<b>in</b> <a href="EventDescriptor.cs.html#50bb26e525268273" class="t t">EventDescriptor</a> <span id="r40 rd" class="r40 r">eventDescriptor</span>, <b>string</b> <span id="r41 rd" class="r41 r">data</span>)
+        {
+            <b>uint</b> <span id="r42 rd" class="r42 r">status</span> = 0;
+ 
+            <b>if</b> (<span class="r41 r">data</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r41 r">data</span>));
+            }
+ 
+            <b>if</b> (<a href="#206333c1f6b0e3c6" class="i method">IsEnabled</a>(<span class="r40 r">eventDescriptor</span>.<a href="EventDescriptor.cs.html#fee188f225312ea2" class="i property">Level</a>, <span class="r40 r">eventDescriptor</span>.<a href="EventDescriptor.cs.html#1e4f6ab83a992121" class="i property">Keywords</a>))
+            {
+                <b>if</b> (<span class="r41 r">data</span>.<span class="i">Length</span> &gt; <a href="#37f3238e22740999" class="i field">s_traceEventMaximumStringSize</a>)
+                {
+                    <a href="#80837c81be44e287" class="i field">t_returnCode</a> = <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a>.<a href="#580accdd648ccedf" class="i field">EventTooBig</a>;
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <a href="#5be0a890ae8aa488" class="t t">EventData</a> <span id="r43 rd" class="r43 r">userData</span>;
+ 
+                <span class="r43 r">userData</span>.<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a> = (<b>uint</b>)((<span class="r41 r">data</span>.<span class="i">Length</span> + 1) * 2);
+                <span class="r43 r">userData</span>.<a href="#e0b04842ce499f38" class="i field">Reserved</a> = 0;
+ 
+                <b>unsafe</b>
+                {
+                    <b>fixed</b> (<b>char</b>* <span id="r44 rd" class="r44 r">pdata</span> = <span class="r41 r">data</span>)
+                    {
+                        <span class="i">Guid</span> <span id="r45 rd" class="r45 r">activityId</span> = <a href="#35c2c2f721948ee1" class="i method">GetActivityId</a>();
+                        <span class="r43 r">userData</span>.<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r44 r">pdata</span>;
+ 
+                        <span class="r42 r">status</span> = <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<span class="i">EventWriteTransfer</span>(<a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>,
+                                                                        <b>in</b> <span class="r40 r">eventDescriptor</span>,
+                                                                        (<span class="r45 r">activityId</span> == <span class="i">Guid</span>.<span class="i">Empty</span>) ? <b>null</b> : &amp;<span class="r45 r">activityId</span>,
+                                                                        <b>null</b>,
+                                                                        1,
+                                                                        &amp;<span class="r43 r">userData</span>);
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r42 r">status</span> != 0)
+            {
+                <a href="#58bc9612c371b040" class="i method">SetLastError</a>((<b>int</b>)<span class="r42 r">status</span>);
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> WriteEvent, method to be used by generated code on a derived class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">eventDescriptor</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event Descriptor for this event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">dataCount</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> number of event descriptors</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> pointer do the event data</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>protected bool</b> <a id="06b279da3c668920" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">WriteEvent</a>(<b>in</b> <a href="EventDescriptor.cs.html#50bb26e525268273" class="t t">EventDescriptor</a> <span id="r46 rd" class="r46 r">eventDescriptor</span>, <b>int</b> <span id="r47 rd" class="r47 r">dataCount</span>, <span class="i">IntPtr</span> <span id="r48 rd" class="r48 r">data</span>)
+        {
+            <b>uint</b> <span id="r49 rd" class="r49 r">status</span> = 0;
+ 
+            <b>unsafe</b>
+            {
+                <span class="i">Guid</span> <span id="r50 rd" class="r50 r">activityId</span> = <a href="#35c2c2f721948ee1" class="i method">GetActivityId</a>();
+ 
+                <span class="r49 r">status</span> = <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<span class="i">EventWriteTransfer</span>(
+                                    <a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>,
+                                    <b>in</b> <span class="r46 r">eventDescriptor</span>,
+                                    (<span class="r50 r">activityId</span> == <span class="i">Guid</span>.<span class="i">Empty</span>) ? <b>null</b> : &amp;<span class="r50 r">activityId</span>,
+                                    <b>null</b>,
+                                    (<b>uint</b>)<span class="r47 r">dataCount</span>,
+                                    (<b>void</b>*)<span class="r48 r">data</span>);
+            }
+ 
+            <b>if</b> (<span class="r49 r">status</span> != 0)
+            {
+                <a href="#58bc9612c371b040" class="i method">SetLastError</a>((<b>int</b>)<span class="r49 r">status</span>);
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> WriteTransferEvent, method to write a parameters with event schema properties.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r51 r">eventDescriptor</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event Descriptor for this event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r52 r">relatedActivityId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r53 r">eventPayload</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>public bool</b> <a id="f5c55852bd6cf7bc" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteTransferEvent</a>(<b>in</b> <a href="EventDescriptor.cs.html#50bb26e525268273" class="t t">EventDescriptor</a> <span id="r51 rd" class="r51 r">eventDescriptor</span>, <span class="i">Guid</span> <span id="r52 rd" class="r52 r">relatedActivityId</span>, <b>params object</b>[] <span id="r53 rd" class="r53 r">eventPayload</span>)
+        {
+            <b>uint</b> <span id="r54 rd" class="r54 r">status</span> = 0;
+ 
+            <b>if</b> (<a href="#206333c1f6b0e3c6" class="i method">IsEnabled</a>(<span class="r51 r">eventDescriptor</span>.<a href="EventDescriptor.cs.html#fee188f225312ea2" class="i property">Level</a>, <span class="r51 r">eventDescriptor</span>.<a href="EventDescriptor.cs.html#1e4f6ab83a992121" class="i property">Keywords</a>))
+            {
+                <span class="i">Guid</span> <span id="r55 rd" class="r55 r">activityId</span> = <a href="#35c2c2f721948ee1" class="i method">GetActivityId</a>();
+ 
+                <b>unsafe</b>
+                {
+                    <b>int</b> <span id="r56 rd" class="r56 r">argCount</span> = 0;
+                    <a href="#5be0a890ae8aa488" class="t t">EventData</a>* <span id="r57 rd" class="r57 r">userDataPtr</span> = <b>null</b>;
+ 
+                    <b>if</b> ((<span class="r53 r">eventPayload</span> != <b>null</b>) &amp;&amp; (<span class="r53 r">eventPayload</span>.<span class="i">Length</span> != 0))
+                    {
+                        <span class="r56 r">argCount</span> = <span class="r53 r">eventPayload</span>.<span class="i">Length</span>;
+                        <b>if</b> (<span class="r56 r">argCount</span> &gt; <a href="#31fbf1e320d6164c" class="i field">s_etwMaxNumberArguments</a>)
+                        {
+                            <span class="c">//</span>
+                            <span class="c">// too many arguments to log</span>
+                            <span class="c">//</span>
+                            <b>throw</b> <b>new</b> <span class="i">ArgumentOutOfRangeException</span>(<b>nameof</b>(<span class="r53 r">eventPayload</span>),
+                                <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="i">DotNetEventingStrings</span>.<span class="i">ArgumentOutOfRange_MaxArgExceeded</span>, <a href="#31fbf1e320d6164c" class="i field">s_etwMaxNumberArguments</a>));
+                        }
+ 
+                        <b>uint</b> <span id="r58 rd" class="r58 r">totalEventSize</span> = 0;
+                        <b>int</b> <span id="r59 rd" class="r59 r">index</span>;
+                        <b>int</b> <span id="r60 rd" class="r60 r">stringIndex</span> = 0;
+                        <b>int</b>[] <span id="r61 rd" class="r61 r">stringPosition</span> = <b>new</b> <b>int</b>[<a href="#bdebaec2ed9bcdbf" class="i field">s_etwAPIMaxStringCount</a>]; <span class="c">// used to keep the position of strings in the eventPayload parameter</span>
+                        <b>string</b>[] <span id="r62 rd" class="r62 r">dataString</span> = <b>new</b> <b>string</b>[<a href="#bdebaec2ed9bcdbf" class="i field">s_etwAPIMaxStringCount</a>]; <span class="c">// string arrays from the eventPayload parameter</span>
+                        <a href="#5be0a890ae8aa488" class="t t">EventData</a>* <span id="r63 rd" class="r63 r">userData</span> = <b>stackalloc</b> <a href="#5be0a890ae8aa488" class="t t">EventData</a>[<span class="r56 r">argCount</span>];             <span class="c">// allocation for the data descriptors</span>
+                        <span class="r57 r">userDataPtr</span> = (<a href="#5be0a890ae8aa488" class="t t">EventData</a>*)<span class="r63 r">userData</span>;
+                        <b>byte</b>* <span id="r64 rd" class="r64 r">dataBuffer</span> = <b>stackalloc byte</b>[<a href="#a837a23458a4bc8f" class="i field">s_basicTypeAllocationBufferSize</a> * <span class="r56 r">argCount</span>]; <span class="c">// 16 byte for unboxing non-string argument</span>
+                        <b>byte</b>* <span id="r65 rd" class="r65 r">currentBuffer</span> = <span class="r64 r">dataBuffer</span>;
+ 
+                        <span class="c">//</span>
+                        <span class="c">// The loop below goes through all the arguments and fills in the data</span>
+                        <span class="c">// descriptors. For strings save the location in the dataString array.</span>
+                        <span class="c">// Calculates the total size of the event by adding the data descriptor</span>
+                        <span class="c">// size value set in EncodeObjec method.</span>
+                        <span class="c">//</span>
+                        <b>for</b> (<span class="r59 r">index</span> = 0; <span class="r59 r">index</span> &lt; <span class="r53 r">eventPayload</span>.<span class="i">Length</span>; <span class="r59 r">index</span>++)
+                        {
+                            <b>string</b> <span id="r66 rd" class="r66 r">isString</span>;
+                            <span class="r66 r">isString</span> = <a href="#2714dcecea85ef70" class="i method">EncodeObject</a>(<b>ref</b> <span class="r53 r">eventPayload</span>[<span class="r59 r">index</span>], <span class="r57 r">userDataPtr</span>, <span class="r65 r">currentBuffer</span>);
+                            <span class="r65 r">currentBuffer</span> += <a href="#a837a23458a4bc8f" class="i field">s_basicTypeAllocationBufferSize</a>;
+                            <span class="r58 r">totalEventSize</span> += <span class="r57 r">userDataPtr</span>-&gt;<a href="#1ec6cd16cdd8f9f2" class="i field">Size</a>;
+                            <span class="r57 r">userDataPtr</span>++;
+                            <b>if</b> (<span class="r66 r">isString</span> != <b>null</b>)
+                            {
+                                <b>if</b> (<span class="r60 r">stringIndex</span> &lt; <a href="#bdebaec2ed9bcdbf" class="i field">s_etwAPIMaxStringCount</a>)
+                                {
+                                    <span class="r62 r">dataString</span>[<span class="r60 r">stringIndex</span>] = <span class="r66 r">isString</span>;
+                                    <span class="r61 r">stringPosition</span>[<span class="r60 r">stringIndex</span>] = <span class="r59 r">index</span>;
+                                    <span class="r60 r">stringIndex</span>++;
+                                }
+                                <b>else</b>
+                                {
+                                    <b>throw</b> <b>new</b> <span class="i">ArgumentOutOfRangeException</span>(<b>nameof</b>(<span class="r53 r">eventPayload</span>),
+                                        <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="i">DotNetEventingStrings</span>.<span class="i">ArgumentOutOfRange_MaxStringsExceeded</span>, <a href="#bdebaec2ed9bcdbf" class="i field">s_etwAPIMaxStringCount</a>));
+                                }
+                            }
+                        }
+ 
+                        <b>if</b> (<span class="r58 r">totalEventSize</span> &gt; <a href="#3c12d49098c09500" class="i field">s_traceEventMaximumSize</a>)
+                        {
+                            <a href="#80837c81be44e287" class="i field">t_returnCode</a> = <a href="#cc349905d1a7d922" class="t t">WriteEventErrorCode</a>.<a href="#580accdd648ccedf" class="i field">EventTooBig</a>;
+                            <b>return</b> <b>false</b>;
+                        }
+ 
+                        <b>fixed</b> (<b>char</b>* <span id="r67 rd" class="r67 r">v0</span> = <span class="r62 r">dataString</span>[0], <span id="r68 rd" class="r68 r">v1</span> = <span class="r62 r">dataString</span>[1], <span id="r69 rd" class="r69 r">v2</span> = <span class="r62 r">dataString</span>[2], <span id="r70 rd" class="r70 r">v3</span> = <span class="r62 r">dataString</span>[3],
+                                <span id="r71 rd" class="r71 r">v4</span> = <span class="r62 r">dataString</span>[4], <span id="r72 rd" class="r72 r">v5</span> = <span class="r62 r">dataString</span>[5], <span id="r73 rd" class="r73 r">v6</span> = <span class="r62 r">dataString</span>[6], <span id="r74 rd" class="r74 r">v7</span> = <span class="r62 r">dataString</span>[7])
+                        {
+                            <span class="r57 r">userDataPtr</span> = (<a href="#5be0a890ae8aa488" class="t t">EventData</a>*)<span class="r63 r">userData</span>;
+                            <b>if</b> (<span class="r62 r">dataString</span>[0] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[0]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r67 r">v0</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[1] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[1]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r68 r">v1</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[2] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[2]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r69 r">v2</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[3] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[3]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r70 r">v3</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[4] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[4]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r71 r">v4</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[5] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[5]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r72 r">v5</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[6] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[6]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r73 r">v6</span>;
+                            }
+ 
+                            <b>if</b> (<span class="r62 r">dataString</span>[7] != <b>null</b>)
+                            {
+                                <span class="r57 r">userDataPtr</span>[<span class="r61 r">stringPosition</span>[7]].<a href="#a6ab2a981be84454" class="i field">DataPointer</a> = (<b>ulong</b>)<span class="r74 r">v7</span>;
+                            }
+                        }
+                    }
+ 
+                    <span class="r54 r">status</span> = <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<span class="i">EventWriteTransfer</span>(<a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>,
+                                                                    <b>in</b> <span class="r51 r">eventDescriptor</span>,
+                                                                    (<span class="r55 r">activityId</span> == <span class="i">Guid</span>.<span class="i">Empty</span>) ? <b>null</b> : &amp;<span class="r55 r">activityId</span>,
+                                                                    (<span class="r52 r">relatedActivityId</span> == <span class="i">Guid</span>.<span class="i">Empty</span>) ? <b>null</b> : &amp;<span class="r52 r">relatedActivityId</span>,
+                                                                    (<b>uint</b>)<span class="r56 r">argCount</span>,
+                                                                    <span class="r57 r">userDataPtr</span>);
+                }
+            }
+ 
+            <b>if</b> (<span class="r54 r">status</span> != 0)
+            {
+                <a href="#58bc9612c371b040" class="i method">SetLastError</a>((<b>int</b>)<span class="r54 r">status</span>);
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>protected bool</b> <a id="b752b5d2f993e27b" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">WriteTransferEvent</a>(<b>in</b> <a href="EventDescriptor.cs.html#50bb26e525268273" class="t t">EventDescriptor</a> <span id="r75 rd" class="r75 r">eventDescriptor</span>, <span class="i">Guid</span> <span id="r76 rd" class="r76 r">relatedActivityId</span>, <b>int</b> <span id="r77 rd" class="r77 r">dataCount</span>, <span class="i">IntPtr</span> <span id="r78 rd" class="r78 r">data</span>)
+        {
+            <b>uint</b> <span id="r79 rd" class="r79 r">status</span> = 0;
+ 
+            <span class="i">Guid</span> <span id="r80 rd" class="r80 r">activityId</span> = <a href="#35c2c2f721948ee1" class="i method">GetActivityId</a>();
+ 
+            <b>unsafe</b>
+            {
+                <span class="r79 r">status</span> = <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<span class="i">EventWriteTransfer</span>(
+                                                <a href="#5ba26ce16b2f8f41" class="i field">_regHandle</a>,
+                                                <b>in</b> <span class="r75 r">eventDescriptor</span>,
+                                                (<span class="r80 r">activityId</span> == <span class="i">Guid</span>.<span class="i">Empty</span>) ? <b>null</b> : &amp;<span class="r80 r">activityId</span>,
+                                                &amp;<span class="r76 r">relatedActivityId</span>,
+                                                (<b>uint</b>)<span class="r77 r">dataCount</span>,
+                                                (<b>void</b>*)<span class="r78 r">data</span>);
+            }
+ 
+            <b>if</b> (<span class="r79 r">status</span> != 0)
+            {
+                <a href="#58bc9612c371b040" class="i method">SetLastError</a>((<b>int</b>)<span class="r79 r">status</span>);
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>private static</b> <span class="i">Guid</span> <a id="35c2c2f721948ee1" href="../../R/35c2c2f721948ee1.html" target="n" data-glyph="76,1" class="i method">GetActivityId</a>()
+        {
+            <b>return</b> <a href="#59abb12f3853d94b" class="i field">t_activityId</a>;
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>public static void</b> <a id="ca6911bf2b7cf1a1" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">SetActivityId</a>(<b>ref</b> <span class="i">Guid</span> <span id="r81 rd" class="r81 r">id</span>)
+        {
+            <a href="#59abb12f3853d94b" class="i field">t_activityId</a> = <span class="r81 r">id</span>;
+            <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#8f4d5a0c33e048ce" class="i method">EventActivityIdControl</a>((<b>int</b>)<a href="#d76cec43571bf74e" class="t t">ActivityControl</a>.<a href="#8a109b3ed30d940b" class="i field">EVENT_ACTIVITY_CTRL_SET_ID</a>, <b>ref</b> <span class="r81 r">id</span>);
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityCritical</span>]
+        <b>public static</b> <span class="i">Guid</span> <a id="b0a633ed59233f02" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">CreateActivityId</a>()
+        {
+            <span class="i">Guid</span> <span id="r82 rd" class="r82 r">newId</span> = <b>new</b>();
+            <a href="UnsafeNativeMethods.cs.html#709022098358381c" class="t t">UnsafeNativeMethods</a>.<a href="UnsafeNativeMethods.cs.html#8f4d5a0c33e048ce" class="i method">EventActivityIdControl</a>((<b>int</b>)<a href="#d76cec43571bf74e" class="t t">ActivityControl</a>.<a href="#7da56df68e4c8af6" class="i field">EVENT_ACTIVITY_CTRL_CREATE_ID</a>, <b>ref</b> <span class="r82 r">newId</span>);
+            <b>return</b> <span class="r82 r">newId</span>;
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

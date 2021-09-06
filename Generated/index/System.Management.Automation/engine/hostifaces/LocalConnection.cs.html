@@ -1,0 +1,1605 @@
+﻿<!DOCTYPE html>
+<html><head><title>LocalConnection.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(1596);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/hostifaces/LocalConnection.cs" target="_top">engine\hostifaces\LocalConnection.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>; <span class="c">// for fxcop</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">Serialization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">LEGACYTELEMETRY</span>
+<span class="e">using Microsoft.PowerShell.Telemetry.Internal;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 1634, 1691 <span class="c">// Stops compiler from warning about unknown warnings</span>
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Runspace class for local runspace.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed</b> <a href="../../P/6fffd57173d247a6.html" target="s" class="k">partial</a> <b>class</b> <a id="6fffd57173d247a6" href="../../R/6fffd57173d247a6.html" target="n" data-glyph="2,0" class="t t">LocalRunspace</a> : <a href="ConnectionBase.cs.html#b5efaa6cd9653c05" class="t t">RunspaceBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct an instance of an Runspace using a custom implementation</span>
+        <span class="c">///</span><span class="c"> of PSHost.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The explicit PSHost implementation</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">initialSessionState</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> configuration information for this minshell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">suppressClone</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, don&#39;t make a copy of the initial session state object</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Maintainability&quot;</span>, <span class="s">&quot;CA1505:AvoidUnmaintainableCode&quot;</span>)]
+        <b>internal</b> <a id="08737a326e227632" href="../../R/08737a326e227632.html" target="n" data-glyph="74,1" class="t constructor">LocalRunspace</a>(<a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r0 rd" class="r0 r">host</span>, <a href="../InitialSessionState.cs.html#b17f88d4755d5fd7" class="t t">InitialSessionState</a> <span id="r1 rd" class="r1 r">initialSessionState</span>, <b>bool</b> <span id="r2 rd" class="r2 r">suppressClone</span>)
+            : <a href="ConnectionBase.cs.html#5a0ce75010f2effa" class="k">base</a>(<span class="r0 r">host</span>, <span class="r1 r">initialSessionState</span>, <span class="r2 r">suppressClone</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Construct an instance of an Runspace using a custom implementation</span>
+        <span class="c">///</span><span class="c"> of PSHost.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The explicit PSHost implementation</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">initialSessionState</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> configuration information for this minshell.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Maintainability&quot;</span>, <span class="s">&quot;CA1505:AvoidUnmaintainableCode&quot;</span>)]
+        <b>internal</b> <a id="da6cdc117989a1a9" href="../../R/da6cdc117989a1a9.html" target="n" data-glyph="74,1" class="t constructor">LocalRunspace</a>(<a href="MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r3 rd" class="r3 r">host</span>, <a href="../InitialSessionState.cs.html#b17f88d4755d5fd7" class="t t">InitialSessionState</a> <span id="r4 rd" class="r4 r">initialSessionState</span>)
+            : <a href="ConnectionBase.cs.html#648f75eecd4bad03" class="k">base</a>(<span class="r3 r">host</span>, <span class="r4 r">initialSessionState</span>)
+        {
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Private data to be used by applications built on top of PowerShell.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Local runspace pool is created with application private data set to an empty </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Runspaces that are part of a </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="RunspacePool.cs.html#c1948c2f22e6b527" class="t t">RunspacePool</a><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> inherit application private data from the pool.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a> <a id="f3442d16e4e4212b" href="../../R/f3442d16e4e4212b.html" target="n" data-glyph="72,1" class="i method">GetApplicationPrivateData</a>()
+        {
+            <span class="c">// if we didn&#39;t get applicationPrivateData from a runspace pool,</span>
+            <span class="c">// then we create a new one</span>
+ 
+            <b>if</b> (<a href="#5cd1dd7c8c2c8d59" class="i field">_applicationPrivateData</a> == <b>null</b>)
+            {
+                <b>lock</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#491abdf8e72c9d24" class="i property">SyncRoot</a>)
+                {
+                    <b>if</b> (<a href="#5cd1dd7c8c2c8d59" class="i field">_applicationPrivateData</a> == <b>null</b>)
+                    {
+                        <a href="#5cd1dd7c8c2c8d59" class="i field">_applicationPrivateData</a> = <b>new</b> <a href="../serialization.cs.html#8d1ee4ea90ea9904" class="t constructor">PSPrimitiveDictionary</a>();
+                    }
+                }
+            }
+ 
+            <b>return</b> <a href="#5cd1dd7c8c2c8d59" class="i field">_applicationPrivateData</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A method that runspace pools can use to propagate application private data into runspaces.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">applicationPrivateData</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="a9853fb07ae389fb" href="../../R/a9853fb07ae389fb.html" target="n" data-glyph="74,1" class="i method">SetApplicationPrivateData</a>(<a href="../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a> <span id="r5 rd" class="r5 r">applicationPrivateData</span>)
+        {
+            <a href="#5cd1dd7c8c2c8d59" class="i field">_applicationPrivateData</a> = <span class="r5 r">applicationPrivateData</span>;
+        }
+ 
+        <b>private</b> <a href="../serialization.cs.html#04756020c00714fe" class="t t">PSPrimitiveDictionary</a> <a id="5cd1dd7c8c2c8d59" href="../../R/5cd1dd7c8c2c8d59.html" target="n" data-glyph="46,1" class="i field">_applicationPrivateData</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the event manager.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../EventManager.cs.html#0fd88f72d27f82bd" class="t t">PSEventManager</a> <a id="aaee99b71dc7e9a9" href="../../R/aaee99b71dc7e9a9.html" target="n" data-glyph="102,1" class="i property">Events</a>
+        {
+            <b>get</b>
+            {
+                <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r6 rd" class="r6 r">context</span> = <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="#21e0e78b9e536812" class="i property">GetExecutionContext</a>;
+ 
+                <b>if</b> (<span class="r6 r">context</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>return</b> <span class="r6 r">context</span>.<a href="../ExecutionContext.cs.html#67642aa960214ec5" class="i property">Events</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This property determines whether a new thread is create for each invocation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Any updates to the value of this property must be done before the Runspace is opened</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="Connection.cs.html#340ccbbd1c6e8b87" class="t t">InvalidRunspaceStateException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An attempt to change this property was made after opening the Runspace</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">InvalidOperationException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The thread options cannot be changed to the requested value</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="Connection.cs.html#e3e452d2492397a5" class="t t">PSThreadOptions</a> <a id="f126bf5d2140af0f" href="../../R/f126bf5d2140af0f.html" target="n" data-glyph="102,1" class="i property">ThreadOptions</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#ad77b3bb5cf50c4d" class="i field">_createThreadOptions</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>lock</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#491abdf8e72c9d24" class="i property">SyncRoot</a>)
+                {
+                    <b>if</b> (<b>value</b> == <a href="#ad77b3bb5cf50c4d" class="i field">_createThreadOptions</a>)
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <b>if</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#c834af2e09f636e6" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a> != <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#4e82723df10b13f6" class="i field">BeforeOpen</a>)
+                    {
+                        <b>if</b> (!<a href="#3882cd9bb84ecf22" class="i method">IsValidThreadOptionsConfiguration</a>(<b>value</b>))
+                        {
+                            <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<a href="../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RunspaceStrings</span>.<span class="i">InvalidThreadOptionsChange</span>));
+                        }
+                    }
+ 
+                    <a href="#ad77b3bb5cf50c4d" class="i field">_createThreadOptions</a> = <b>value</b>;
+                }
+            }
+        }
+ 
+        <b>private bool</b> <a id="3882cd9bb84ecf22" href="../../R/3882cd9bb84ecf22.html" target="n" data-glyph="76,1" class="i method">IsValidThreadOptionsConfiguration</a>(<a href="Connection.cs.html#e3e452d2492397a5" class="t t">PSThreadOptions</a> <span id="r7 rd" class="r7 r">options</span>)
+        {
+            <span class="c">// If the runspace is already opened, we only allow changing options when:</span>
+            <span class="c">//  - The new value is ReuseThread, and</span>
+            <span class="c">//  - The apartment state is not STA</span>
+            <b>return</b> <span class="r7 r">options</span> == <a href="Connection.cs.html#e3e452d2492397a5" class="t t">PSThreadOptions</a>.<a href="Connection.cs.html#d11fc99ab087227d" class="i field">ReuseThread</a> &amp;&amp; <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#7483ec8556438ee9" class="i property">ApartmentState</a> != <a href="Connection.cs.html#7483ec8556438ee9" class="i property">ApartmentState</a>.<span class="i">STA</span>;
+        }
+ 
+        <b>private</b> <a href="Connection.cs.html#e3e452d2492397a5" class="t t">PSThreadOptions</a> <a id="ad77b3bb5cf50c4d" href="../../R/ad77b3bb5cf50c4d.html" target="n" data-glyph="46,1" class="i field">_createThreadOptions</a> = <a href="Connection.cs.html#e3e452d2492397a5" class="t t">PSThreadOptions</a>.<a href="Connection.cs.html#84e3ebfc04cbd4e5" class="i field">Default</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Resets the runspace state to allow for fast reuse. Not all of the runspace</span>
+        <span class="c">///</span><span class="c"> elements are reset. The goal is to minimize the chance of the user taking</span>
+        <span class="c">///</span><span class="c"> accidental dependencies on prior runspace state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="33b71c7edb156892" href="../../R/33b71c7edb156892.html" target="n" data-glyph="72,1" class="i method">ResetRunspaceState</a>()
+        {
+            <a href="../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a> <span id="r8 rd" class="r8 r">invalidOperation</span> = <b>null</b>;
+ 
+            <b>if</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#2a0ffffea51b8a28" class="i property">InitialSessionState</a> == <b>null</b>)
+            {
+                <span class="r8 r">invalidOperation</span> = <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#4f3f8175dd33a015" class="i method">NewInvalidOperationException</a>();
+            }
+            <b>else</b> <b>if</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#9c5a4b0e5adfa9af" class="i property">RunspaceState</a> != <span class="i n">Runspaces</span>.<a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+            {
+                <span class="r8 r">invalidOperation</span> = <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                        <span class="i">RunspaceStrings</span>.<span class="i">RunspaceNotInOpenedState</span>, <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#9c5a4b0e5adfa9af" class="i property">RunspaceState</a>);
+            }
+            <b>else</b> <b>if</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#5fb1b63f82030563" class="i property">RunspaceAvailability</a> != <span class="i n">Runspaces</span>.<a href="Connection.cs.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="Connection.cs.html#64bc5c5290cfb16d" class="i field">Available</a>)
+            {
+                <span class="r8 r">invalidOperation</span> = <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(
+                        <span class="i">RunspaceStrings</span>.<span class="i">ConcurrentInvokeNotAllowed</span>);
+            }
+ 
+            <b>if</b> (<span class="r8 r">invalidOperation</span> != <b>null</b>)
+            {
+                <span class="r8 r">invalidOperation</span>.<span class="i">Source</span> = <span class="s">&quot;ResetRunspaceState&quot;</span>;
+                <b>throw</b> <span class="r8 r">invalidOperation</span>;
+            }
+ 
+            <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="ConnectionBase.cs.html#2a0ffffea51b8a28" class="i property">InitialSessionState</a>.<a href="../InitialSessionState.cs.html#b6f400e7fe271e69" class="i method">ResetRunspaceState</a>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a>);
+ 
+            <span class="c">// Finally, reset history for this runspace. This needs to be done</span>
+            <span class="c">// last to so that changes to the default MaximumHistorySize will be picked up.</span>
+            <a href="#90c4a6a546dc6472" class="i field">_history</a> = <b>new</b> <a href="History.cs.html#88f5f3393b999def" class="t constructor">History</a>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> protected_methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a pipeline from a command string.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">A valid command string. Can be null.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">addToHistory</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true command is added to history.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">isNested</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">True for nested pipeline.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A pipeline pre-filled with Commands specified in commandString.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected override</b> <a href="Pipeline.cs.html#c607964c20793ea5" class="t t">Pipeline</a> <a id="b8a3cca5439be726" href="../../R/b8a3cca5439be726.html" target="n" data-glyph="75,1" class="i method">CoreCreatePipeline</a>(<b>string</b> <span id="r9 rd" class="r9 r">command</span>, <b>bool</b> <span id="r10 rd" class="r10 r">addToHistory</span>, <b>bool</b> <span id="r11 rd" class="r11 r">isNested</span>)
+        {
+            <span class="c">// NTRAID#Windows Out Of Band Releases-915851-2005/09/13</span>
+            <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+            }
+ 
+            <b>return</b> (<a href="Pipeline.cs.html#c607964c20793ea5" class="t t">Pipeline</a>)<b>new</b> <a href="LocalPipeline.cs.html#5f99d00bd6442833" class="t constructor">LocalPipeline</a>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>, <span class="r9 r">command</span>, <span class="r10 r">addToHistory</span>, <span class="r11 r">isNested</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> protected_methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> protected_properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the execution context.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <a id="21e0e78b9e536812" href="../../R/21e0e78b9e536812.html" target="n" data-glyph="104,1" class="i property">GetExecutionContext</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#7d17347e52524fa7" class="i field">_engine</a> == <b>null</b>)
+                    <b>return</b> <b>null</b>;
+                <b>else</b>
+                    <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns true if the internal host is in a nested prompt.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override bool</b> <a id="c9c58047836932c8" href="../../R/c9c58047836932c8.html" target="n" data-glyph="104,1" class="i property">InNestedPrompt</a>
+        {
+            <b>get</b>
+            {
+                <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r12 rd" class="r12 r">context</span> = <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="#21e0e78b9e536812" class="i property">GetExecutionContext</a>;
+ 
+                <b>if</b> (<span class="r12 r">context</span> == <b>null</b>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>return</b> <span class="r12 r">context</span>.<a href="../ExecutionContext.cs.html#ad328d08127401c1" class="i property">InternalHost</a>.<a href="InternalHost.cs.html#2f1bcbdb45eeb8f1" class="i method">HostInNestedPrompt</a>() || <a href="#9b139b376a86595a" class="i property">InInternalNestedPrompt</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Allows internal nested commands to be run as &quot;HostInNestedPrompt&quot; so that CreatePipelineProcessor() does</span>
+        <span class="c">///</span><span class="c"> not set CommandOrigin to Internal as it normally does by default.  This then allows cmdlets like Invoke-History</span>
+        <span class="c">///</span><span class="c"> to replay history command lines in the current runspace with the same language mode context as the host.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="9b139b376a86595a" href="../../R/9b139b376a86595a.html" target="n" data-glyph="104,1" class="i property">InInternalNestedPrompt</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> protected_properties
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> internal_properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets history manager for this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="History.cs.html#388c8ac2f3fdde97" class="t t">History</a> <a id="a15c869586f2f866" href="../../R/a15c869586f2f866.html" target="n" data-glyph="104,1" class="i property">History</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#90c4a6a546dc6472" class="i field">_history</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets transcription data for this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="MshHostUserInterface.cs.html#173198ea0a1b5a14" class="t t">TranscriptionData</a> <a id="45c5866746b6cfad" href="../../R/45c5866746b6cfad.html" target="n" data-glyph="104,1" class="i property">TranscriptionData</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#074cc530391f59f1" class="i field">_transcriptionData</a>;
+            }
+        }
+ 
+        <b>private</b> <a href="MshHostUserInterface.cs.html#173198ea0a1b5a14" class="t t">TranscriptionData</a> <a id="074cc530391f59f1" href="../../R/074cc530391f59f1.html" target="n" data-glyph="46,1" class="i field">_transcriptionData</a> = <b>null</b>;
+ 
+        <b>private</b> <a href="../remoting/commands/JobRepository.cs.html#9e5cfbf2cf1e98f1" class="t t">JobRepository</a> <a id="b1be69c3e434fc90" href="../../R/b1be69c3e434fc90.html" target="n" data-glyph="46,1" class="i field">_jobRepository</a>;
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> List of jobs in this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../remoting/commands/JobRepository.cs.html#9e5cfbf2cf1e98f1" class="t t">JobRepository</a> <a id="a651816082848dc6" href="../../R/a651816082848dc6.html" target="n" data-glyph="104,1" class="i property">JobRepository</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#b1be69c3e434fc90" class="i field">_jobRepository</a>;
+            }
+        }
+ 
+        <b>private</b> <a href="../remoting/client/JobManager.cs.html#d9cecc2436bd3c7d" class="t t">JobManager</a> <a id="c9418144b66603df" href="../../R/c9418144b66603df.html" target="n" data-glyph="46,1" class="i field">_jobManager</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Manager for JobSourceAdapters registered in this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../remoting/client/JobManager.cs.html#d9cecc2436bd3c7d" class="t t">JobManager</a> <a id="25f6bbbfae2df009" href="../../R/25f6bbbfae2df009.html" target="n" data-glyph="102,1" class="i property">JobManager</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#c9418144b66603df" class="i field">_jobManager</a>;
+            }
+        }
+ 
+        <b>private</b> <a href="../remoting/commands/runspacerepository.cs.html#28c9d25c1832bb0f" class="t t">RunspaceRepository</a> <a id="0f7e6a6369e09052" href="../../R/0f7e6a6369e09052.html" target="n" data-glyph="46,1" class="i field">_runspaceRepository</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> List of remote runspaces in this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../remoting/commands/runspacerepository.cs.html#28c9d25c1832bb0f" class="t t">RunspaceRepository</a> <a id="1c65c1d4284ac179" href="../../R/1c65c1d4284ac179.html" target="n" data-glyph="104,1" class="i property">RunspaceRepository</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#0f7e6a6369e09052" class="i field">_runspaceRepository</a>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> internal_properties
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Debugger
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Debugger.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../debugger/debugger.cs.html#9e8f0b396592e65c" class="t t">Debugger</a> <a id="b15ff15957c945c3" href="../../R/b15ff15957c945c3.html" target="n" data-glyph="102,1" class="i property">Debugger</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="Connection.cs.html#6a2e76958c3789aa" class="i property">InternalDebugger</a> ?? <a href="ConnectionBase.cs.html#b5efaa6cd9653c05" class="k">base</a>.<a href="Connection.cs.html#d6610640d00b19f5" class="i property">Debugger</a>;
+            }
+        }
+ 
+        <b>private static readonly string</b> <a id="c00051ed4ce1ae4d" href="../../R/c00051ed4ce1ae4d.html" target="n" data-glyph="46,1" class="i field">s_debugPreferenceCachePath</a> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<a href="../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<span class="i">GetFolderPath</span>(<span class="i">Environment</span>.<span class="i">SpecialFolder</span>.<span class="i">ProgramFiles</span>), <span class="s">&quot;WindowsPowerShell&quot;</span>), <span class="s">&quot;DebugPreference.clixml&quot;</span>);
+        <b>private static readonly object</b> <a id="95c2318b9b8bf4fc" href="../../R/95c2318b9b8bf4fc.html" target="n" data-glyph="46,1" class="i field">s_debugPreferenceLockObject</a> = <b>new</b> <b>object</b>();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> DebugPreference serves as a property bag to keep</span>
+        <span class="c">///</span><span class="c"> track of all process specific debug preferences.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public class</b> <a id="3473da69c893faad" href="../../R/3473da69c893faad.html" target="n" data-glyph="0,1" class="t t"><span id="894ac5741f77aaf2">DebugPreference</span></a>
+        {
+            <b>public string</b>[] <a id="83b32e72819df61a" href="../../R/83b32e72819df61a.html" target="n" data-glyph="42,2" class="i field">AppDomainNames</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> CreateDebugPerfStruct is a helper method to populate DebugPreference.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">AppDomainNames</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">App Domain Names.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">DebugPreference.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="#3473da69c893faad" class="t t">DebugPreference</a> <a id="59e8c7cfbd9d770a" href="../../R/59e8c7cfbd9d770a.html" target="n" data-glyph="76,1" class="i method">CreateDebugPreference</a>(<b>string</b>[] <span id="r13 rd" class="r13 r">AppDomainNames</span>)
+        {
+            <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r14 rd" class="r14 r">DebugPreference</span> = <b>new</b> <span class="t">DebugPreference</span>();
+            <span class="r14 r">DebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a> = <span class="r13 r">AppDomainNames</span>;
+            <b>return</b> <span class="r14 r">DebugPreference</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> SetDebugPreference is a helper method used to enable and disable debug preference.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">processName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Process Name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">App Domain Name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">enable</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Indicates if the debug preference has to be enabled or disabled.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="fdb41d601b4e98bd" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">SetDebugPreference</a>(<b>string</b> <span id="r15 rd" class="r15 r">processName</span>, <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r16 rd" class="r16 r">appDomainName</span>, <b>bool</b> <span id="r17 rd" class="r17 r">enable</span>)
+        {
+            <b>lock</b> (<a href="#95c2318b9b8bf4fc" class="i field">s_debugPreferenceLockObject</a>)
+            {
+                <b>bool</b> <span id="r18 rd" class="r18 r">iscacheUpdated</span> = <b>false</b>;
+                <span class="i">Hashtable</span> <span id="r19 rd" class="r19 r">debugPreferenceCache</span> = <b>null</b>;
+ 
+                <b>string</b>[] <span id="r20 rd" class="r20 r">appDomainNames</span> = <b>null</b>;
+                <b>if</b> (<span class="r16 r">appDomainName</span> != <b>null</b>)
+                {
+                    <span class="r20 r">appDomainNames</span> = <span class="r16 r">appDomainName</span>.<span class="i">ToArray</span>();
+                }
+ 
+                <b>if</b> (!<span class="i">File</span>.<span class="i">Exists</span>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="t t">LocalRunspace</a>.<a href="#c00051ed4ce1ae4d" class="i field">s_debugPreferenceCachePath</a>))
+                {
+                    <b>if</b> (<span class="r17 r">enable</span>)
+                    {
+                        <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r21 rd" class="r21 r">DebugPreference</span> = <a href="#59e8c7cfbd9d770a" class="i method">CreateDebugPreference</a>(<span class="r20 r">appDomainNames</span>);
+                        <span class="r19 r">debugPreferenceCache</span> = <b>new</b> <span class="i">Hashtable</span>();
+                        <span class="r19 r">debugPreferenceCache</span>.<span class="i">Add</span>(<span class="r15 r">processName</span>, <span class="r21 r">DebugPreference</span>);
+                        <span class="r18 r">iscacheUpdated</span> = <b>true</b>;
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="r19 r">debugPreferenceCache</span> = <a href="#aaf47fa9364c1f93" class="i method">GetDebugPreferenceCache</a>(<b>null</b>);
+                    <b>if</b> (<span class="r19 r">debugPreferenceCache</span> != <b>null</b>)
+                    {
+                        <b>if</b> (<span class="r17 r">enable</span>)
+                        {
+                            <span class="c">// Debug preference is set to enable.</span>
+                            <span class="c">// If the cache does not contain the process name, then we just update the cache.</span>
+                            <b>if</b> (!<span class="r19 r">debugPreferenceCache</span>.<span class="i">ContainsKey</span>(<span class="r15 r">processName</span>))
+                            {
+                                <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r22 rd" class="r22 r">DebugPreference</span> = <a href="#59e8c7cfbd9d770a" class="i method">CreateDebugPreference</a>(<span class="r20 r">appDomainNames</span>);
+                                <span class="r19 r">debugPreferenceCache</span>.<span class="i">Add</span>(<span class="r15 r">processName</span>, <span class="r22 r">DebugPreference</span>);
+                                <span class="r18 r">iscacheUpdated</span> = <b>true</b>;
+                            }
+                            <b>else</b>
+                            {
+                                <span class="c">// In this case, the cache contains the process name, hence we check the list of</span>
+                                <span class="c">// app domains for which the debug preference is set to enable.</span>
+                                <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r23 rd" class="r23 r">processDebugPreference</span> = <span class="i">GetProcessSpecificDebugPreference</span>(<span class="r19 r">debugPreferenceCache</span>[<span class="r15 r">processName</span>]);
+ 
+                                <span class="c">// processDebugPreference would point to null if debug preference is enabled for all app domains.</span>
+                                <span class="c">// If processDebugPreference is not null then it means that user has selected specific</span>
+                                <span class="c">// appdomins for which the debug preference has to be enabled.</span>
+                                <b>if</b> (<span class="r23 r">processDebugPreference</span> != <b>null</b>)
+                                {
+                                    <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r24 rd" class="r24 r">cachedAppDomainNames</span> = <b>null</b>;
+                                    <b>if</b> (<span class="r23 r">processDebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a> != <b>null</b> &amp;&amp; <span class="r23 r">processDebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a>.<span class="i">Length</span> &gt; 0)
+                                    {
+                                        <span class="r24 r">cachedAppDomainNames</span> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;(<span class="r23 r">processDebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a>);
+ 
+                                        <b>foreach</b> (<b>string</b> <span id="r25 rd" class="r25 r">currentAppDomainName</span> <b>in</b> <span class="r16 r">appDomainName</span>)
+                                        {
+                                            <b>if</b> (!<span class="r24 r">cachedAppDomainNames</span>.<span class="i">Contains</span>(<span class="r25 r">currentAppDomainName</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>))
+                                            {
+                                                <span class="r24 r">cachedAppDomainNames</span>.<span class="i">Add</span>(<span class="r25 r">currentAppDomainName</span>);
+                                                <span class="r18 r">iscacheUpdated</span> = <b>true</b>;
+                                            }
+                                        }
+                                    }
+ 
+                                    <b>if</b> (<span class="r18 r">iscacheUpdated</span>)
+                                    {
+                                        <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r26 rd" class="r26 r">DebugPreference</span> = <span class="i">CreateDebugPreference</span>(<span class="r24 r">cachedAppDomainNames</span>.<span class="i">ToArray</span>());
+                                        <span class="r19 r">debugPreferenceCache</span>[<span class="r15 r">processName</span>] = <span class="r26 r">DebugPreference</span>;
+                                    }
+                                }
+                            }
+                        }
+                        <b>else</b>
+                        {
+                            <span class="c">// Debug preference is set to disable.</span>
+                            <b>if</b> (<span class="r19 r">debugPreferenceCache</span>.<span class="i">ContainsKey</span>(<span class="r15 r">processName</span>))
+                            {
+                                <b>if</b> (<span class="r16 r">appDomainName</span> == <b>null</b>)
+                                {
+                                    <span class="r19 r">debugPreferenceCache</span>.<span class="i">Remove</span>(<span class="r15 r">processName</span>);
+                                    <span class="r18 r">iscacheUpdated</span> = <b>true</b>;
+                                }
+                                <b>else</b>
+                                {
+                                    <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r27 rd" class="r27 r">processDebugPreference</span> = <span class="i">GetProcessSpecificDebugPreference</span>(<span class="r19 r">debugPreferenceCache</span>[<span class="r15 r">processName</span>]);
+ 
+                                    <span class="c">// processDebugPreference would point to null if debug preference is enabled for all app domains.</span>
+                                    <span class="c">// If processDebugPreference is not null then it means that user has selected specific</span>
+                                    <span class="c">// appdomins for which the debug preference has to be enabled.</span>
+                                    <b>if</b> (<span class="r27 r">processDebugPreference</span> != <b>null</b>)
+                                    {
+                                        <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r28 rd" class="r28 r">cachedAppDomainNames</span> = <b>null</b>;
+                                        <b>if</b> (<span class="r27 r">processDebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a> != <b>null</b> &amp;&amp; <span class="r27 r">processDebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a>.<span class="i">Length</span> &gt; 0)
+                                        {
+                                            <span class="r28 r">cachedAppDomainNames</span> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;(<span class="r27 r">processDebugPreference</span>.<a href="#83b32e72819df61a" class="i field">AppDomainNames</a>);
+ 
+                                            <b>foreach</b> (<b>string</b> <span id="r29 rd" class="r29 r">currentAppDomainName</span> <b>in</b> <span class="r16 r">appDomainName</span>)
+                                            {
+                                                <b>if</b> (<span class="r28 r">cachedAppDomainNames</span>.<span class="i">Contains</span>(<span class="r29 r">currentAppDomainName</span>, <span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>))
+                                                {
+                                                    <span class="c">// remove requested appdomains debug preference details.</span>
+                                                    <span class="r28 r">cachedAppDomainNames</span>.<span class="i">Remove</span>(<span class="r29 r">currentAppDomainName</span>);
+                                                    <span class="r18 r">iscacheUpdated</span> = <b>true</b>;
+                                                }
+                                            }
+                                        }
+ 
+                                        <b>if</b> (<span class="r18 r">iscacheUpdated</span>)
+                                        {
+                                            <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r30 rd" class="r30 r">DebugPreference</span> = <span class="i">CreateDebugPreference</span>(<span class="r28 r">cachedAppDomainNames</span>.<span class="i">ToArray</span>());
+                                            <span class="r19 r">debugPreferenceCache</span>[<span class="r15 r">processName</span>] = <span class="r30 r">DebugPreference</span>;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// For whatever reason, cache is corrupted. Hence override the cache content.</span>
+                        <b>if</b> (<span class="r17 r">enable</span>)
+                        {
+                            <span class="r19 r">debugPreferenceCache</span> = <b>new</b> <span class="i">Hashtable</span>();
+                            <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r31 rd" class="r31 r">DebugPreference</span> = <a href="#59e8c7cfbd9d770a" class="i method">CreateDebugPreference</a>(<span class="r20 r">appDomainNames</span>);
+                            <span class="r19 r">debugPreferenceCache</span>.<span class="i">Add</span>(<span class="r15 r">processName</span>, <span class="r31 r">DebugPreference</span>);
+                            <span class="r18 r">iscacheUpdated</span> = <b>true</b>;
+                        }
+                    }
+                }
+ 
+                <b>if</b> (<span class="r18 r">iscacheUpdated</span>)
+                {
+                    <b>using</b> (<a href="PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r32 rd" class="r32 r">ps</span> = <a href="PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="PowerShell.cs.html#40345bc4625ff918" class="i method">Create</a>())
+                    {
+                        <span class="r32 r">ps</span>.<a href="PowerShell.cs.html#9cc79c297f6cced9" class="i method">AddCommand</a>(<span class="s">&quot;Export-Clixml&quot;</span>).<a href="PowerShell.cs.html#40674f99a3618f4b" class="i method">AddParameter</a>(<span class="s">&quot;Path&quot;</span>, <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="t t">LocalRunspace</a>.<a href="#c00051ed4ce1ae4d" class="i field">s_debugPreferenceCachePath</a>).<span class="i">AddParameter</span>(<span class="s">&quot;InputObject&quot;</span>, <span class="r19 r">debugPreferenceCache</span>);
+                        <span class="r32 r">ps</span>.<a href="PowerShell.cs.html#184e23c46120523e" class="i method">Invoke</a>();
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> GetDebugPreferenceCache is a helper method used to fetch</span>
+        <span class="c">///</span><span class="c"> the debug preference cache contents as a Hashtable.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">runspace</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Runspace.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">If the Debug preference is persisted then a hashtable containing</span>
+        <span class="c">///</span><span class="c"> the debug preference is returned or else Null is returned.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">Hashtable</span> <a id="aaf47fa9364c1f93" href="../../R/aaf47fa9364c1f93.html" target="n" data-glyph="76,1" class="i method">GetDebugPreferenceCache</a>(<a href="Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r33 rd" class="r33 r">runspace</span>)
+        {
+            <span class="i">Hashtable</span> <span id="r34 rd" class="r34 r">debugPreferenceCache</span> = <b>null</b>;
+            <b>using</b> (<a href="PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a> <span id="r35 rd" class="r35 r">ps</span> = <a href="PowerShell.cs.html#3d1b346df3be574c" class="t t">PowerShell</a>.<a href="PowerShell.cs.html#40345bc4625ff918" class="i method">Create</a>())
+            {
+                <b>if</b> (<span class="r33 r">runspace</span> != <b>null</b>)
+                {
+                    <span class="r35 r">ps</span>.<a href="PowerShell.cs.html#ccf57242c9d46642" class="i property">Runspace</a> = <span class="r33 r">runspace</span>;
+                }
+ 
+                <span class="r35 r">ps</span>.<a href="PowerShell.cs.html#9cc79c297f6cced9" class="i method">AddCommand</a>(<span class="s">&quot;Import-Clixml&quot;</span>).<a href="PowerShell.cs.html#40674f99a3618f4b" class="i method">AddParameter</a>(<span class="s">&quot;Path&quot;</span>, <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="t t">LocalRunspace</a>.<a href="#c00051ed4ce1ae4d" class="i field">s_debugPreferenceCachePath</a>);
+                <span class="i">Collection</span>&lt;<a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r36 rd" class="r36 r">psObjects</span> = <span class="r35 r">ps</span>.<a href="PowerShell.cs.html#184e23c46120523e" class="i method">Invoke</a>();
+ 
+                <b>if</b> (<span class="r36 r">psObjects</span> != <b>null</b> &amp;&amp; <span class="r36 r">psObjects</span>.<span class="i">Count</span> == 1)
+                {
+                    <span class="r34 r">debugPreferenceCache</span> = <span class="r36 r">psObjects</span>[0].<span class="i">BaseObject</span> <b>as</b> <span class="i">Hashtable</span>;
+                }
+            }
+ 
+            <b>return</b> <span class="r34 r">debugPreferenceCache</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> GetProcessSpecificDebugPreference is a helper method used to fetch persisted process specific debug preference.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">debugPreference</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="#3473da69c893faad" class="t t">DebugPreference</a> <a id="fb3a1c2823f5369b" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">GetProcessSpecificDebugPreference</a>(<b>object</b> <span id="r37 rd" class="r37 r">debugPreference</span>)
+        {
+            <a href="#3473da69c893faad" class="t t">DebugPreference</a> <span id="r38 rd" class="r38 r">processDebugPreference</span> = <b>null</b>;
+            <b>if</b> (<span class="r37 r">debugPreference</span> != <b>null</b>)
+            {
+                <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r39 rd" class="r39 r">debugPreferencePsObject</span> = <span class="r37 r">debugPreference</span> <b>as</b> <a href="../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>;
+                <b>if</b> (<span class="r39 r">debugPreferencePsObject</span> != <b>null</b>)
+                {
+                    <span class="r38 r">processDebugPreference</span> = <a href="../LanguagePrimitives.cs.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<a href="../LanguagePrimitives.cs.html#8b9327b10b12742d" class="i method">ConvertTo</a>&lt;<a href="#3473da69c893faad" class="t t">DebugPreference</a>&gt;(<span class="r39 r">debugPreferencePsObject</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r38 r">processDebugPreference</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Open the runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">syncCall</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> parameter which control if Open is done synchronously or asynchronously</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="f79be0bd3a186843" href="../../R/f79be0bd3a186843.html" target="n" data-glyph="75,1" class="i method">OpenHelper</a>(<b>bool</b> <span id="r40 rd" class="r40 r">syncCall</span>)
+        {
+            <b>if</b> (<span class="r40 r">syncCall</span>)
+            {
+                <span class="c">// Open runspace synchronously</span>
+                <a href="#991a6568f058e6e7" class="i method">DoOpenHelper</a>();
+            }
+            <b>else</b>
+            {
+                <span class="c">// Open runspace in another thread</span>
+                <span class="i">Thread</span> <span id="r41 rd" class="r41 r">asyncThread</span> = <b>new</b> <span class="i">Thread</span>(<b>new</b> <span class="i">ThreadStart</span>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<span class="i">OpenThreadProc</span>));
+ 
+                <span class="r41 r">asyncThread</span>.<span class="i">Start</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Start method for asynchronous open.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="eb9a81b3a096b65c" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OpenThreadProc</a>()
+        {
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56500
+            <b>try</b>
+            {
+                <a href="#991a6568f058e6e7" class="i method">DoOpenHelper</a>();
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <span class="c">// This exception is reported by raising RunspaceState</span>
+                <span class="c">// change event.</span>
+            }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56500
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper function used for opening a runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="991a6568f058e6e7" href="../../R/991a6568f058e6e7.html" target="n" data-glyph="76,1" class="i method">DoOpenHelper</a>()
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="ConnectionBase.cs.html#2a0ffffea51b8a28" class="i property">InitialSessionState</a> != <b>null</b>, <span class="s">&quot;InitialSessionState should not be null&quot;</span>);
+            <span class="c">// NTRAID#Windows Out Of Band Releases-915851-2005/09/13</span>
+            <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+            }
+ 
+            <b>bool</b> <span id="r42 rd" class="r42 r">startLifeCycleEventWritten</span> = <b>false</b>;
+            <a href="#6ed09fe203e736a2" class="i field">s_runspaceInitTracer</a>.<a href="../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;begin open runspace&quot;</span>);
+            <b>try</b>
+            {
+                <a href="#074cc530391f59f1" class="i field">_transcriptionData</a> = <b>new</b> <a href="MshHostUserInterface.cs.html#a1534410fbc69ff6" class="t constructor">TranscriptionData</a>();
+ 
+                <span class="c">// All ISS-based configuration of the engine itself is done by AutomationEngine,</span>
+                <span class="c">// which calls InitialSessionState.Bind(). Anything that doesn&#39;t</span>
+                <span class="c">// require an active and open runspace should be done in ISS.Bind()</span>
+                <a href="#7d17347e52524fa7" class="i field">_engine</a> = <b>new</b> <a href="../AutomationEngine.cs.html#2b3e436f365c45f2" class="t constructor">AutomationEngine</a>(<a href="ConnectionBase.cs.html#1a671b0dab484cdd" class="i property">Host</a>, <a href="ConnectionBase.cs.html#2a0ffffea51b8a28" class="i property">InitialSessionState</a>);
+                <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#98ee84b98c4d109b" class="i property">CurrentRunspace</a> = <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>;
+ 
+                <span class="c">// Log engine for start of engine life</span>
+                <a href="../../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../../logging/MshLog.cs.html#453469cf11b39ac9" class="i method">LogEngineLifecycleEvent</a>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>, <a href="../ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a>.<a href="../ExecutionContext.cs.html#0cc650217ea48fc0" class="i field">Available</a>);
+                <span class="r42 r">startLifeCycleEventWritten</span> = <b>true</b>;
+ 
+                <a href="#90c4a6a546dc6472" class="i field">_history</a> = <b>new</b> <a href="History.cs.html#88f5f3393b999def" class="t constructor">History</a>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>);
+                <a href="#b1be69c3e434fc90" class="i field">_jobRepository</a> = <b>new</b> <a href="../remoting/commands/JobRepository.cs.html#8b0a38ca6e6bfb58" class="t constructor">JobRepository</a>();
+                <a href="#c9418144b66603df" class="i field">_jobManager</a> = <b>new</b> <a href="../remoting/client/JobManager.cs.html#7aa5cb6f6ba1b30c" class="t constructor">JobManager</a>();
+                <a href="#0f7e6a6369e09052" class="i field">_runspaceRepository</a> = <b>new</b> <a href="../remoting/commands/runspacerepository.cs.html#07c30e070d6b7ea5" class="t constructor">RunspaceRepository</a>();
+ 
+                <a href="#6ed09fe203e736a2" class="i field">s_runspaceInitTracer</a>.<a href="../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;initializing built-in aliases and variable information&quot;</span>);
+                <a href="RunspaceInit.cs.html#da2802c836a97f0e" class="i method">InitializeDefaults</a>();
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r43 rd" class="r43 r">exception</span>)
+            {
+                <a href="#6ed09fe203e736a2" class="i field">s_runspaceInitTracer</a>.<a href="../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;Runspace open failed&quot;</span>);
+ 
+                <span class="c">// Log engine health event</span>
+                <a href="#7edb7fe8047980fa" class="i method">LogEngineHealthEvent</a>(<span class="r43 r">exception</span>);
+ 
+                <span class="c">// Log engine for end of engine life</span>
+                <b>if</b> (<span class="r42 r">startLifeCycleEventWritten</span>)
+                {
+                    <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a> != <b>null</b>, <span class="s">&quot;if startLifeCycleEventWritten is true, ExecutionContext must be present&quot;</span>);
+                    <a href="../../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../../logging/MshLog.cs.html#453469cf11b39ac9" class="i method">LogEngineLifecycleEvent</a>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>, <a href="../ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a>.<a href="../ExecutionContext.cs.html#4ddc499326dc771a" class="i field">Stopped</a>);
+                }
+ 
+                <span class="c">// Open failed. Set the RunspaceState to Broken.</span>
+                <a href="ConnectionBase.cs.html#6d5ca0399cfba6cf" class="i method">SetRunspaceState</a>(<a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#e4c76740d99e58bd" class="i field">Broken</a>, <span class="r43 r">exception</span>);
+ 
+                <span class="c">// Raise the event</span>
+                <a href="ConnectionBase.cs.html#9452499818eb542a" class="i method">RaiseRunspaceStateEvents</a>();
+ 
+                <span class="c">// Rethrow the exception. For asynchronous execution,</span>
+                <span class="c">// OpenThreadProc will catch it. For synchronous execution</span>
+                <span class="c">// caller of open will catch it.</span>
+                <b>throw</b>;
+            }
+ 
+            <a href="ConnectionBase.cs.html#1969aad254a8771d" class="i method">SetRunspaceState</a>(<a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>);
+            <a href="ConnectionBase.cs.html#4089f070bdd11cf3" class="i field">RunspaceOpening</a>.<span class="i">Set</span>();
+ 
+            <span class="c">// Raise the event</span>
+            <a href="ConnectionBase.cs.html#9452499818eb542a" class="i method">RaiseRunspaceStateEvents</a>();
+            <a href="#6ed09fe203e736a2" class="i field">s_runspaceInitTracer</a>.<a href="../../utils/StructuredTraceSource.cs.html#96aaf3813a5962a0" class="i method">WriteLine</a>(<span class="s">&quot;runspace opened successfully&quot;</span>);
+ 
+            <span class="c">// Now do initial state configuration that requires an active runspace</span>
+            <span class="i">Exception</span> <span id="r44 rd" class="r44 r">initError</span> = <a href="ConnectionBase.cs.html#2a0ffffea51b8a28" class="i property">InitialSessionState</a>.<a href="../InitialSessionState.cs.html#ba61cb4c92c13fe7" class="i method">BindRunspace</a>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>, <a href="#6ed09fe203e736a2" class="i field">s_runspaceInitTracer</a>);
+            <b>if</b> (<span class="r44 r">initError</span> != <b>null</b>)
+            {
+                <span class="c">// Log engine health event</span>
+                <a href="#7edb7fe8047980fa" class="i method">LogEngineHealthEvent</a>(<span class="r44 r">initError</span>);
+ 
+                <span class="c">// Log engine for end of engine life</span>
+                <span class="i">Debug</span>.<span class="i">Assert</span>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a> != <b>null</b>,
+                            <span class="s">&quot;if startLifeCycleEventWritten is true, ExecutionContext must be present&quot;</span>);
+                <a href="../../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../../logging/MshLog.cs.html#453469cf11b39ac9" class="i method">LogEngineLifecycleEvent</a>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>, <a href="../ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a>.<a href="../ExecutionContext.cs.html#4ddc499326dc771a" class="i field">Stopped</a>);
+ 
+                <span class="c">// Open failed. Set the RunspaceState to Broken.</span>
+                <a href="ConnectionBase.cs.html#6d5ca0399cfba6cf" class="i method">SetRunspaceState</a>(<a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#e4c76740d99e58bd" class="i field">Broken</a>, <span class="r44 r">initError</span>);
+ 
+                <span class="c">// Raise the event</span>
+                <a href="ConnectionBase.cs.html#9452499818eb542a" class="i method">RaiseRunspaceStateEvents</a>();
+ 
+                <span class="c">// Throw the exception. For asynchronous execution,</span>
+                <span class="c">// OpenThreadProc will catch it. For synchronous execution</span>
+                <span class="c">// caller of open will catch it.</span>
+                <b>throw</b> <span class="r44 r">initError</span>;
+            }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">LEGACYTELEMETRY</span>
+<span class="e">            TelemetryAPI.ReportLocalSessionCreated(InitialSessionState, TranscriptionData);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Logs engine health event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="7edb7fe8047980fa" href="../../R/7edb7fe8047980fa.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<span class="i">Exception</span> <span id="r45 rd" class="r45 r">exception</span>)
+        {
+            <a href="#bfd8e84691dd3c61" class="i method">LogEngineHealthEvent</a>(
+                <span class="r45 r">exception</span>,
+                <a href="../../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a>.<a href="../../logging/MshLog.cs.html#12c708c17f37c7eb" class="i field">Error</a>,
+                <a href="../../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../../logging/MshLog.cs.html#584342f4380a5ed3" class="i field">EVENT_ID_CONFIGURATION_FAILURE</a>,
+                <b>null</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Logs engine health event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="bfd8e84691dd3c61" href="../../R/bfd8e84691dd3c61.html" target="n" data-glyph="74,1" class="i method">LogEngineHealthEvent</a>(<span class="i">Exception</span> <span id="r46 rd" class="r46 r">exception</span>,
+                             <a href="../../logging/MshLog.cs.html#2b721dd17d857439" class="t t">Severity</a> <span id="r47 rd" class="r47 r">severity</span>,
+                             <b>int</b> <span id="r48 rd" class="r48 r">id</span>,
+                             <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <span id="r49 rd" class="r49 r">additionalInfo</span>)
+        {
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r46 r">exception</span> != <b>null</b>, <span class="s">&quot;Caller should validate the parameter&quot;</span>);
+ 
+            <a href="../../logging/LogContext.cs.html#97ecb2ea061a85b1" class="t t">LogContext</a> <span id="r50 rd" class="r50 r">logContext</span> = <b>new</b> <span class="t">LogContext</span>();
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#f5ca1bf21529eaa4" class="i property">EngineVersion</a> = <a href="ConnectionBase.cs.html#ae9f82911c8d8629" class="i property">Version</a>.<span class="i">ToString</span>();
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#c4dee1569d48dd83" class="i property">HostId</a> = <a href="ConnectionBase.cs.html#1a671b0dab484cdd" class="i property">Host</a>.<a href="MshHost.cs.html#0ef3ebc6fae0f13d" class="i property">InstanceId</a>.<span class="i">ToString</span>();
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#a0b26881fab992c8" class="i property">HostName</a> = <a href="ConnectionBase.cs.html#1a671b0dab484cdd" class="i property">Host</a>.<a href="MshHost.cs.html#be091ea30a661c13" class="i property">Name</a>;
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#faea148d187de067" class="i property">HostVersion</a> = <a href="ConnectionBase.cs.html#1a671b0dab484cdd" class="i property">Host</a>.<a href="MshHost.cs.html#0cc2fd05fb98c219" class="i property">Version</a>.<span class="i">ToString</span>();
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#caa7190ab228e749" class="i property">RunspaceId</a> = <a href="Connection.cs.html#af7b715fe8b1bee2" class="i property">InstanceId</a>.<span class="i">ToString</span>();
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#e18f98e55631e066" class="i property">Severity</a> = <span class="r47 r">severity</span>.<span class="i">ToString</span>();
+            <span class="r50 r">logContext</span>.<a href="../../logging/LogContext.cs.html#0f65985a72cd1d99" class="i property">ShellId</a> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#afe3ed92dba2b2b0" class="i field">DefaultPowerShellShellID</a>;
+            <a href="../../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../../logging/MshLog.cs.html#bc345590f2f039d5" class="i method">LogEngineHealthEvent</a>(
+                <span class="r50 r">logContext</span>,
+                <span class="r48 r">id</span>,
+                <span class="r46 r">exception</span>,
+                <span class="r49 r">additionalInfo</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the thread that must be used to execute pipelines when CreateThreadOptions is ReuseThread.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline calls this function after ensuring there is a single thread in the pipeline, so no locking is necessary</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="LocalPipeline.cs.html#0823a7fc19c23a40" class="t t">PipelineThread</a> <a id="a0919a1662bab2f9" href="../../R/a0919a1662bab2f9.html" target="n" data-glyph="74,1" class="i method">GetPipelineThread</a>()
+        {
+            <b>if</b> (<a href="#570cca08671e8d03" class="i field">_pipelineThread</a> == <b>null</b>)
+            {
+                <a href="#570cca08671e8d03" class="i field">_pipelineThread</a> = <b>new</b> <a href="LocalPipeline.cs.html#4aca11c1802ec72b" class="t constructor">PipelineThread</a>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#7483ec8556438ee9" class="i property">ApartmentState</a>);
+            }
+ 
+            <b>return</b> <a href="#570cca08671e8d03" class="i field">_pipelineThread</a>;
+        }
+ 
+        <b>private</b> <a href="LocalPipeline.cs.html#0823a7fc19c23a40" class="t t">PipelineThread</a> <a id="570cca08671e8d03" href="../../R/570cca08671e8d03.html" target="n" data-glyph="46,1" class="i field">_pipelineThread</a> = <b>null</b>;
+ 
+        <b>protected override void</b> <a id="d4acf26b53f32830" href="../../R/d4acf26b53f32830.html" target="n" data-glyph="75,1" class="i method">CloseHelper</a>(<b>bool</b> <span id="r51 rd" class="r51 r">syncCall</span>)
+        {
+            <b>if</b> (<span class="r51 r">syncCall</span>)
+            {
+                <span class="c">// Do close synchronously</span>
+                <a href="#76cda1f28553c6ed" class="i method">DoCloseHelper</a>();
+            }
+            <b>else</b>
+            {
+                <span class="c">// Do close asynchronously</span>
+                <span class="i">Thread</span> <span id="r52 rd" class="r52 r">asyncThread</span> = <b>new</b> <span class="i">Thread</span>(<b>new</b> <span class="i">ThreadStart</span>(<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<span class="i">CloseThreadProc</span>));
+ 
+                <span class="r52 r">asyncThread</span>.<span class="i">Start</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Start method for asynchronous close.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="f3416f36665c1fa4" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CloseThreadProc</a>()
+        {
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56500
+            <b>try</b>
+            {
+                <a href="#76cda1f28553c6ed" class="i method">DoCloseHelper</a>();
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+            }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56500
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Close the runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Attempts to create/execute pipelines after a call to</span>
+        <span class="c">///</span><span class="c"> close will fail.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="76cda1f28553c6ed" href="../../R/76cda1f28553c6ed.html" target="n" data-glyph="76,1" class="i method">DoCloseHelper</a>()
+        {
+            <b>var</b> <span id="r53 rd" class="r53 r">isPrimaryRunspace</span> = (<a href="Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>.<a href="Connection.cs.html#63bc8bc99b4ad382" class="i property">PrimaryRunspace</a> == <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>);
+            <b>var</b> <span id="r54 rd" class="r54 r">haveOpenRunspaces</span> = <b>false</b>;
+            <b>foreach</b> (<a href="Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r55 rd" class="r55 r">runspace</span> <b>in</b> <a href="Connection.cs.html#3fd829e0933069ea" class="i property">RunspaceList</a>)
+            {
+                <b>if</b> (<span class="r55 r">runspace</span>.<a href="Connection.cs.html#01b12fbdab6c561a" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+                {
+                    <span class="r54 r">haveOpenRunspaces</span> = <b>true</b>;
+                    <b>break</b>;
+                }
+            }
+ 
+            <span class="c">// When closing the primary runspace, ensure all other local runspaces are closed.</span>
+            <b>var</b> <span id="r56 rd" class="r56 r">closeAllOpenRunspaces</span> = <span class="r53 r">isPrimaryRunspace</span> &amp;&amp; <span class="r54 r">haveOpenRunspaces</span>;
+ 
+            <span class="c">// Stop all transcriptions and un-initialize AMSI if we&#39;re the last runspace to exit or we are exiting the primary runspace.</span>
+            <b>if</b> (!<span class="r54 r">haveOpenRunspaces</span>)
+            {
+                <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r57 rd" class="r57 r">executionContext</span> = <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="#21e0e78b9e536812" class="i property">GetExecutionContext</a>;
+                <b>if</b> (<span class="r57 r">executionContext</span> != <b>null</b>)
+                {
+                    <a href="MshHostUserInterface.cs.html#3fd0cd9d58631820" class="t t">PSHostUserInterface</a> <span id="r58 rd" class="r58 r">hostUI</span> = <span class="r57 r">executionContext</span>.<a href="../ExecutionContext.cs.html#24a4a46de18d1004" class="i property">EngineHostInterface</a>.<a href="InternalHost.cs.html#d35ea6d8b175fa76" class="i property">UI</a>;
+                    <b>if</b> (<span class="r58 r">hostUI</span> != <b>null</b>)
+                    {
+                        <span class="r58 r">hostUI</span>.<a href="MshHostUserInterface.cs.html#235e1c773fa51f01" class="i method">StopAllTranscribing</a>();
+                    }
+                }
+ 
+                <a href="../../security/SecuritySupport.cs.html#da6cbabe35a18e75" class="t t">AmsiUtils</a>.<a href="../../security/SecuritySupport.cs.html#c6fd211cc6f38bf0" class="i method">Uninitialize</a>();
+            }
+ 
+            <span class="c">// Generate the shutdown event</span>
+            <b>if</b> (<a href="#aaee99b71dc7e9a9" class="i property">Events</a> != <b>null</b>)
+                <a href="#aaee99b71dc7e9a9" class="i property">Events</a>.<span class="i">GenerateEvent</span>(<a href="../EventManager.cs.html#db3a5a65f2783a2f" class="t t">PSEngineEvent</a>.<a href="../EventManager.cs.html#554cb1de90b6a291" class="i field">Exiting</a>, <b>null</b>, <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>object</b>&gt;(), <b>null</b>, <b>true</b>, <b>false</b>);
+ 
+            <span class="c">// Stop all running pipelines</span>
+            <span class="c">// Note:Do not perform the Cancel in lock. Reason is</span>
+            <span class="c">// Pipeline executes in separate thread, say threadP.</span>
+            <span class="c">// When pipeline is canceled/failed/completed in</span>
+            <span class="c">// Pipeline.ExecuteThreadProc it removes the pipeline</span>
+            <span class="c">// from the list of running pipelines. threadP will need</span>
+            <span class="c">// lock to remove the pipelines from the list of running pipelines</span>
+            <span class="c">// And we will deadlock.</span>
+            <span class="c">// Note:It is possible that one or more pipelines in the list</span>
+            <span class="c">// of active pipelines have completed before we call cancel.</span>
+            <span class="c">// That is fine since Pipeline.Cancel handles that( It ignores</span>
+            <span class="c">// the cancel request if pipeline execution has already</span>
+            <span class="c">// completed/failed/canceled.</span>
+            <a href="ConnectionBase.cs.html#7a721f04d8d2361e" class="i method">StopPipelines</a>();
+ 
+            <span class="c">// Disconnect all disconnectable jobs in the job repository.</span>
+            <a href="#bd2eb2908fd6d6c8" class="i method">StopOrDisconnectAllJobs</a>();
+ 
+            <span class="c">// Close or disconnect all the remote runspaces available in the</span>
+            <span class="c">// runspace repository.</span>
+            <span class="i">CloseOrDisconnectAllRemoteRunspaces</span>(() =&gt;
+                {
+                    <span class="i">List</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt; <span id="r59 rd" class="r59 r">runspaces</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt;();
+                    <b>foreach</b> (<a href="../remoting/client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r60 rd" class="r60 r">psSession</span> <b>in</b> <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="#1c65c1d4284ac179" class="i property">RunspaceRepository</a>.<a href="../remoting/commands/runspacerepository.cs.html#63a7ff9561dc2e86" class="i property">Runspaces</a>)
+                    {
+                        <span class="r59 r">runspaces</span>.<span class="i">Add</span>(<span class="r60 r">psSession</span>.<a href="../remoting/client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a> <b>as</b> <a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>);
+                    }
+ 
+                    <b>return</b> <span class="r59 r">runspaces</span>;
+                });
+ 
+            <span class="c">// Notify Engine components that that runspace is closing.</span>
+            <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#e094046a82e7bd9e" class="i method">RunspaceClosingNotification</a>();
+ 
+            <span class="c">// Log engine lifecycle event.</span>
+            <a href="../../logging/MshLog.cs.html#c21af6f8f06e5873" class="t t">MshLog</a>.<a href="../../logging/MshLog.cs.html#453469cf11b39ac9" class="i method">LogEngineLifecycleEvent</a>(<a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>, <a href="../ExecutionContext.cs.html#4bbbd017613e38e6" class="t t">EngineState</a>.<a href="../ExecutionContext.cs.html#4ddc499326dc771a" class="i field">Stopped</a>);
+ 
+            <span class="c">// All pipelines have been canceled. Close the runspace.</span>
+            <a href="#7d17347e52524fa7" class="i field">_engine</a> = <b>null</b>;
+ 
+            <a href="ConnectionBase.cs.html#1969aad254a8771d" class="i method">SetRunspaceState</a>(<a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#45de84b67ba18f3f" class="i field">Closed</a>);
+ 
+            <span class="c">// Raise Event</span>
+            <a href="ConnectionBase.cs.html#9452499818eb542a" class="i method">RaiseRunspaceStateEvents</a>();
+ 
+            <b>if</b> (<span class="r56 r">closeAllOpenRunspaces</span>)
+            {
+                <b>foreach</b> (<a href="Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r61 rd" class="r61 r">runspace</span> <b>in</b> <a href="Connection.cs.html#3fd829e0933069ea" class="i property">RunspaceList</a>)
+                {
+                    <b>if</b> (<span class="r61 r">runspace</span>.<a href="Connection.cs.html#01b12fbdab6c561a" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+                    {
+                        <span class="r61 r">runspace</span>.<a href="Connection.cs.html#47cd985e55a9f99c" class="i method">Dispose</a>();
+                    }
+                }
+            }
+ 
+            <span class="c">// Report telemetry if we have no more open runspaces.</span>
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">LEGACYTELEMETRY</span>
+<span class="e">            bool allRunspacesClosed = true;
+            bool hostProvidesExitTelemetry = false;
+            foreach (var r in Runspace.RunspaceList)
+            {
+                if (r.RunspaceStateInfo.State != RunspaceState.Closed)
+                {
+                    allRunspacesClosed = false;
+                    break;
+                }
+ 
+                var localRunspace = r as LocalRunspace;
+                if (localRunspace != null &amp;&amp; localRunspace.Host is IHostProvidesTelemetryData)
+                {
+                    hostProvidesExitTelemetry = true;
+                    break;
+                }
+            }
+ 
+            if (allRunspacesClosed &amp;&amp; !hostProvidesExitTelemetry)
+            {
+                TelemetryAPI.ReportExitTelemetry(null);
+            }
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Closes or disconnects all the remote runspaces passed in by the getRunspace</span>
+        <span class="c">///</span><span class="c"> function.  If a remote runspace supports disconnect then it will be disconnected</span>
+        <span class="c">///</span><span class="c"> rather than closed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="c0aa59ef46b6cf23" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">CloseOrDisconnectAllRemoteRunspaces</a>(<span class="i">Func</span>&lt;<span class="i">List</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt;&gt; <span id="r62 rd" class="r62 r">getRunspaces</span>)
+        {
+            <span class="i">List</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt; <span id="r63 rd" class="r63 r">runspaces</span> = <span class="r62 r">getRunspaces</span>();
+            <b>if</b> (<span class="r63 r">runspaces</span>.<span class="i">Count</span> == 0) { <b>return</b>; }
+ 
+            <span class="c">// whether the close of all remoterunspaces completed</span>
+            <b>using</b> (<span class="i">ManualResetEvent</span> <span id="r64 rd" class="r64 r">remoteRunspaceCloseCompleted</span> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>false</b>))
+            {
+                <a href="../remoting/common/throttlemanager.cs.html#4aa32d51dd591ac8" class="t t">ThrottleManager</a> <span id="r65 rd" class="r65 r">throttleManager</span> = <b>new</b> <a href="../remoting/common/throttlemanager.cs.html#21c77408b36939a4" class="t constructor">ThrottleManager</a>();
+                <span class="r65 r">throttleManager</span>.<a href="../remoting/common/throttlemanager.cs.html#dd885eab312c9a19" class="i">ThrottleComplete</a> += (<b>object</b> <span id="r66 rd" class="r66 r">sender</span>, <span class="i">EventArgs</span> <span id="r67 rd" class="r67 r">e</span>) =&gt; <span class="r64 r">remoteRunspaceCloseCompleted</span>.<span class="i">Set</span>();
+ 
+                <b>foreach</b> (<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r68 rd" class="r68 r">remoteRunspace</span> <b>in</b> <span class="r63 r">runspaces</span>)
+                {
+                    <a href="../remoting/common/throttlemanager.cs.html#1164666ea3964901" class="t t">IThrottleOperation</a> <span id="r69 rd" class="r69 r">operation</span> = <b>new</b> <a href="#e44bbc88e11ad6b8" class="t constructor">CloseOrDisconnectRunspaceOperationHelper</a>(<span class="r68 r">remoteRunspace</span>);
+                    <span class="r65 r">throttleManager</span>.<a href="../remoting/common/throttlemanager.cs.html#ad36926f4e2b6584" class="i method">AddOperation</a>(<span class="r69 r">operation</span>);
+                }
+ 
+                <span class="r65 r">throttleManager</span>.<a href="../remoting/common/throttlemanager.cs.html#75a1eec170a5d6bc" class="i method">EndSubmitOperations</a>();
+ 
+                <span class="r64 r">remoteRunspaceCloseCompleted</span>.<span class="i">WaitOne</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Disconnects all disconnectable jobs listed in the JobRepository.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="bd2eb2908fd6d6c8" href="../../R/bd2eb2908fd6d6c8.html" target="n" data-glyph="76,1" class="i method">StopOrDisconnectAllJobs</a>()
+        {
+            <b>if</b> (<a href="#a651816082848dc6" class="i property">JobRepository</a>.<a href="../remoting/commands/JobRepository.cs.html#2d8e4e2819a2e8c8" class="i property">Jobs</a>.<span class="i">Count</span> == 0) { <b>return</b>; }
+ 
+            <span class="i">List</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt; <span id="r70 rd" class="r70 r">disconnectRunspaces</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt;();
+ 
+            <b>using</b> (<span class="i">ManualResetEvent</span> <span id="r71 rd" class="r71 r">jobsStopCompleted</span> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>false</b>))
+            {
+                <a href="../remoting/common/throttlemanager.cs.html#4aa32d51dd591ac8" class="t t">ThrottleManager</a> <span id="r72 rd" class="r72 r">throttleManager</span> = <b>new</b> <a href="../remoting/common/throttlemanager.cs.html#21c77408b36939a4" class="t constructor">ThrottleManager</a>();
+                <span class="r72 r">throttleManager</span>.<a href="../remoting/common/throttlemanager.cs.html#dd885eab312c9a19" class="i">ThrottleComplete</a> += (<b>object</b> <span id="r73 rd" class="r73 r">sender</span>, <span class="i">EventArgs</span> <span id="r74 rd" class="r74 r">e</span>) =&gt; <span class="r71 r">jobsStopCompleted</span>.<span class="i">Set</span>();
+ 
+                <b>foreach</b> (<a href="../remoting/client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r75 rd" class="r75 r">job</span> <b>in</b> <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="#a651816082848dc6" class="i property">JobRepository</a>.<a href="../remoting/commands/JobRepository.cs.html#2d8e4e2819a2e8c8" class="i property">Jobs</a>)
+                {
+                    <span class="c">// Only stop or disconnect PowerShell jobs.</span>
+                    <b>if</b> (<span class="r75 r">job</span> <b>is not</b> <a href="../remoting/client/Job.cs.html#3e3a8a0a8fbfcb51" class="t t">PSRemotingJob</a>)
+                    {
+                        <b>continue</b>;
+                    }
+ 
+                    <b>if</b> (!<span class="r75 r">job</span>.<a href="../remoting/client/Job.cs.html#ec3e93fac14c410e" class="i property">CanDisconnect</a>)
+                    {
+                        <span class="c">// If the job cannot be disconnected then add it to</span>
+                        <span class="c">// the stop list.</span>
+                        <span class="r72 r">throttleManager</span>.<a href="../remoting/common/throttlemanager.cs.html#ad36926f4e2b6584" class="i method">AddOperation</a>(<b>new</b> <a href="#2bc81c3d6c7b9424" class="t constructor">StopJobOperationHelper</a>(<span class="r75 r">job</span>));
+                    }
+                    <b>else</b> <b>if</b> (<span class="r75 r">job</span>.<a href="../remoting/client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../remoting/client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../remoting/client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../remoting/client/Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a>)
+                    {
+                        <span class="c">// Otherwise add disconnectable runspaces to list so that</span>
+                        <span class="c">// they can be disconnected.</span>
+                        <span class="i">IEnumerable</span>&lt;<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a>&gt; <span id="r76 rd" class="r76 r">jobRunspaces</span> = <span class="r75 r">job</span>.<a href="../remoting/client/Job.cs.html#b918365500b66fe3" class="i method">GetRunspaces</a>();
+                        <b>if</b> (<span class="r76 r">jobRunspaces</span> != <b>null</b>)
+                        {
+                            <span class="r70 r">disconnectRunspaces</span>.<span class="i">AddRange</span>(<span class="r76 r">jobRunspaces</span>);
+                        }
+                    }
+                }
+ 
+                <span class="c">// Stop jobs.</span>
+                <span class="r72 r">throttleManager</span>.<a href="../remoting/common/throttlemanager.cs.html#75a1eec170a5d6bc" class="i method">EndSubmitOperations</a>();
+                <span class="r71 r">jobsStopCompleted</span>.<span class="i">WaitOne</span>();
+            }
+ 
+            <span class="c">// Disconnect all disconnectable job runspaces found.</span>
+            <span class="i">CloseOrDisconnectAllRemoteRunspaces</span>(() =&gt; <span class="r70 r">disconnectRunspaces</span>);
+        }
+ 
+        <b>internal void</b> <a id="f8ffc628c76d0f2b" href="../../R/f8ffc628c76d0f2b.html" target="n" data-glyph="74,1" class="i method">ReleaseDebugger</a>()
+        {
+            <a href="../debugger/debugger.cs.html#9e8f0b396592e65c" class="t t">Debugger</a> <span id="r77 rd" class="r77 r">debugger</span> = <a href="#b15ff15957c945c3" class="i property">Debugger</a>;
+            <b>if</b> (<span class="r77 r">debugger</span> != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <b>if</b> (<span class="r77 r">debugger</span>.<a href="../debugger/debugger.cs.html#dbd829c531cef2cb" class="i property">UnhandledBreakpointMode</a> == <a href="../debugger/debugger.cs.html#b3fa2b471807788d" class="t t">UnhandledBreakpointProcessingMode</a>.<a href="../debugger/debugger.cs.html#acf1bcf988b9a342" class="i field">Wait</a>)
+                    {
+                        <span class="c">// Sets the mode and also releases a held debug stop.</span>
+                        <span class="r77 r">debugger</span>.<a href="../debugger/debugger.cs.html#dbd829c531cef2cb" class="i property">UnhandledBreakpointMode</a> = <a href="../debugger/debugger.cs.html#b3fa2b471807788d" class="t t">UnhandledBreakpointProcessingMode</a>.<a href="../debugger/debugger.cs.html#e18be175ebce8c0f" class="i field">Ignore</a>;
+                    }
+                }
+                <b>catch</b> (<a href="../../utils/MshNotImplementedException.cs.html#ddab2b46a60907f3" class="t t">PSNotImplementedException</a>) { }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> SessionStateProxy
+ 
+        <b>protected override void</b> <a id="7c3dd075084c78c6" href="../../R/7c3dd075084c78c6.html" target="n" data-glyph="75,1" class="i method">DoSetVariable</a>(<b>string</b> <span id="r78 rd" class="r78 r">name</span>, <b>object</b> <span id="r79 rd" class="r79 r">value</span>)
+        {
+            <span class="c">// NTRAID#Windows Out Of Band Releases-915851-2005/09/13</span>
+            <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+            }
+ 
+            <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateVariableAPIs.cs.html#e511deec83b98b4b" class="i method">SetVariableValue</a>(<span class="r78 r">name</span>, <span class="r79 r">value</span>, <a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a>.<a href="../SecurityManagerBase.cs.html#946d8e7ca02acec6" class="i field">Internal</a>);
+        }
+ 
+        <b>protected override object</b> <a id="c1beac8e0fa726a8" href="../../R/c1beac8e0fa726a8.html" target="n" data-glyph="75,1" class="i method">DoGetVariable</a>(<b>string</b> <span id="r80 rd" class="r80 r">name</span>)
+        {
+            <span class="c">// NTRAID#Windows Out Of Band Releases-915851-2005/09/13</span>
+            <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+            {
+                <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+            }
+ 
+            <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionStateVariableAPIs.cs.html#f92539e2d515bd9b" class="i method">GetVariableValue</a>(<span class="r80 r">name</span>);
+        }
+ 
+        <b>protected override</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="c42ed96d18b4e7e8" href="../../R/c42ed96d18b4e7e8.html" target="n" data-glyph="105,1" class="i property">DoApplications</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionState.cs.html#27ddff158f6adc5b" class="i property">Applications</a>;
+            }
+        }
+ 
+        <b>protected override</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="b768fb54cc075fad" href="../../R/b768fb54cc075fad.html" target="n" data-glyph="105,1" class="i property">DoScripts</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionState.cs.html#36447cb8e57fac9f" class="i property">Scripts</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../DriveInterfaces.cs.html#af7db3a0f716ab5e" class="t t">DriveManagementIntrinsics</a> <a id="0244644bacfca63a" href="../../R/0244644bacfca63a.html" target="n" data-glyph="105,1" class="i property">DoDrive</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#49ff6e2d0769f2e2" class="i property">Drive</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a> <a id="d88ca029987873ac" href="../../R/d88ca029987873ac.html" target="n" data-glyph="105,1" class="i property">DoLanguageMode</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#f2800307140e1fec" class="i property">LanguageMode</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#f2800307140e1fec" class="i property">LanguageMode</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../Modules/PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <a id="9dfcaa0465d91ee7" href="../../R/9dfcaa0465d91ee7.html" target="n" data-glyph="105,1" class="i property">DoModule</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#07982205e4a6a726" class="i property">EngineSessionState</a>.<a href="../SessionState.cs.html#1900efdc2f293d5a" class="i property">Module</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../PathInterfaces.cs.html#2a45e8d71562122c" class="t t">PathIntrinsics</a> <a id="5eb89fc90ad0941b" href="../../R/5eb89fc90ad0941b.html" target="n" data-glyph="105,1" class="i property">DoPath</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#3390cfbbdcffb036" class="i property">Path</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../ProviderInterfaces.cs.html#5df802574bbd2fbe" class="t t">CmdletProviderManagementIntrinsics</a> <a id="566c5e5a1c004667" href="../../R/566c5e5a1c004667.html" target="n" data-glyph="105,1" class="i property">DoProvider</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#e315bf3657b55810" class="i property">Provider</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../VariableInterfaces.cs.html#a66e215a6e6c92d5" class="t t">PSVariableIntrinsics</a> <a id="6aea7967db05a504" href="../../R/6aea7967db05a504.html" target="n" data-glyph="105,1" class="i property">DoPSVariable</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#0198da5eba13cb75" class="i property">PSVariable</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../MshCmdlet.cs.html#444c098e64ffcf20" class="t t">CommandInvocationIntrinsics</a> <a id="38af92f412f0168c" href="../../R/38af92f412f0168c.html" target="n" data-glyph="105,1" class="i property">DoInvokeCommand</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#27c4e82ba7216ff8" class="i property">EngineIntrinsics</a>.<a href="../EngineIntrinsics.cs.html#9e6ba5466d2a8889" class="i property">InvokeCommand</a>;
+            }
+        }
+ 
+        <b>protected override</b> <a href="../CmdletFamilyProviderInterfaces.cs.html#7e7c55aa110a0320" class="t t">ProviderIntrinsics</a> <a id="1a1cf34b51e633e7" href="../../R/1a1cf34b51e633e7.html" target="n" data-glyph="105,1" class="i property">DoInvokeProvider</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>throw</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#02739f4db42486af" class="i method">NewObjectDisposedException</a>(<span class="s">&quot;runspace&quot;</span>);
+                }
+ 
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>.<a href="../AutomationEngine.cs.html#985843f55ae6567f" class="i property">Context</a>.<a href="../ExecutionContext.cs.html#27c4e82ba7216ff8" class="i property">EngineIntrinsics</a>.<a href="../EngineIntrinsics.cs.html#3011271d19be28c2" class="i property">InvokeProvider</a>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> SessionStateProxy
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable Members
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set to true when object is disposed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="25d9edb2a68d2904" href="../../R/25d9edb2a68d2904.html" target="n" data-glyph="46,1" class="i field">_disposed</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Protected dispose which can be overridden by derived classes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r81 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Usage&quot;</span>, <span class="s">&quot;CA2213:DisposableFieldsShouldBeDisposed&quot;</span>, <span class="i">MessageId</span> = <span class="s">&quot;pipelineThread&quot;</span>, <span class="i">Justification</span> = <span class="s">&quot;pipelineThread is disposed in Close()&quot;</span>)]
+        <b>protected override void</b> <a id="3fe89537f8cd8d3f" href="../../R/3fe89537f8cd8d3f.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r81 rd" class="r81 r">disposing</span>)
+        {
+            <b>try</b>
+            {
+                <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>lock</b> (<a href="ConnectionBase.cs.html#491abdf8e72c9d24" class="i property">SyncRoot</a>)
+                {
+                    <b>if</b> (<a href="#25d9edb2a68d2904" class="i field">_disposed</a>)
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <a href="#25d9edb2a68d2904" class="i field">_disposed</a> = <b>true</b>;
+                }
+ 
+                <b>if</b> (<span class="r81 r">disposing</span>)
+                {
+                    <a href="#12c56bfa212ab67c" class="i method">Close</a>();
+                    <a href="#7d17347e52524fa7" class="i field">_engine</a> = <b>null</b>;
+                    <a href="#90c4a6a546dc6472" class="i field">_history</a> = <b>null</b>;
+                    <a href="#074cc530391f59f1" class="i field">_transcriptionData</a> = <b>null</b>;
+                    <a href="#c9418144b66603df" class="i field">_jobManager</a> = <b>null</b>;
+                    <a href="#b1be69c3e434fc90" class="i field">_jobRepository</a> = <b>null</b>;
+                    <a href="#0f7e6a6369e09052" class="i field">_runspaceRepository</a> = <b>null</b>;
+                    <b>if</b> (<a href="ConnectionBase.cs.html#4089f070bdd11cf3" class="i field">RunspaceOpening</a> != <b>null</b>)
+                    {
+                        <a href="ConnectionBase.cs.html#4089f070bdd11cf3" class="i field">RunspaceOpening</a>.<span class="i">Dispose</span>();
+                        <a href="ConnectionBase.cs.html#4089f070bdd11cf3" class="i field">RunspaceOpening</a> = <b>null</b>;
+                    }
+ 
+                    <a href="../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../CoreCLR/CorePsPlatform.cs.html#40d85659e3743982" class="i method">RemoveTemporaryDirectory</a>();
+ 
+                    <span class="c">// Dispose the event manager</span>
+                    <b>if</b> (<a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a> != <b>null</b> &amp;&amp; <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a>.<a href="../ExecutionContext.cs.html#67642aa960214ec5" class="i property">Events</a> != <b>null</b>)
+                    {
+                        <b>try</b>
+                        {
+                            <a href="../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="k">this</a>.<a href="Connection.cs.html#3a36e24a88649363" class="i property">ExecutionContext</a>.<a href="../ExecutionContext.cs.html#67642aa960214ec5" class="i property">Events</a>.<a href="../EventManager.cs.html#a60d9ba6a29ad13b" class="i method">Dispose</a>();
+                        }
+                        <b>catch</b> (<span class="i">ObjectDisposedException</span>)
+                        {
+                        }
+                    }
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="ConnectionBase.cs.html#b5efaa6cd9653c05" class="k">base</a>.<a href="Connection.cs.html#86b34aeb9ee1837f" class="i method">Dispose</a>(<span class="r81 r">disposing</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Close the runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="12c56bfa212ab67c" href="../../R/12c56bfa212ab67c.html" target="n" data-glyph="72,1" class="i method">Close</a>()
+        {
+            <span class="c">// Do not put cleanup activities in here, as they aren&#39;t</span>
+            <span class="c">// captured in CloseAsync() case. Instead, put them in</span>
+            <span class="c">// DoCloseHelper()</span>
+ 
+            <a href="ConnectionBase.cs.html#b5efaa6cd9653c05" class="k">base</a>.<a href="ConnectionBase.cs.html#97d9164987267191" class="i method">Close</a>(); <span class="c">// call base.Close() first to make it stop the pipeline</span>
+ 
+            <b>if</b> (<a href="#570cca08671e8d03" class="i field">_pipelineThread</a> != <b>null</b>)
+            {
+                <a href="#570cca08671e8d03" class="i field">_pipelineThread</a>.<a href="LocalPipeline.cs.html#57fa2bbc5b21ece3" class="i method">Close</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDisposable Members
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> private fields
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> AutomationEngine instance for this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="../AutomationEngine.cs.html#0c7ddddd2aba0cae" class="t t">AutomationEngine</a> <a id="7d17347e52524fa7" href="../../R/7d17347e52524fa7.html" target="n" data-glyph="46,1" class="i field">_engine</a>;
+ 
+        <b>internal</b> <a href="../AutomationEngine.cs.html#0c7ddddd2aba0cae" class="t t">AutomationEngine</a> <a id="740bf35bb01c31a4" href="../../R/../../0000000000.html" target="n" data-glyph="104,1" class="i property">Engine</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#7d17347e52524fa7" class="i field">_engine</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Manages history for this runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <a href="History.cs.html#388c8ac2f3fdde97" class="t t">History</a> <a id="90c4a6a546dc6472" href="../../R/90c4a6a546dc6472.html" target="n" data-glyph="46,1" class="i field">_history</a>;
+ 
+        [<span class="i">TraceSource</span>(<span class="s">&quot;RunspaceInit&quot;</span>, <span class="s">&quot;Initialization code for Runspace&quot;</span>)]
+        <b>private static readonly</b> <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="6ed09fe203e736a2" href="../../R/6ed09fe203e736a2.html" target="n" data-glyph="46,1" class="i field">s_runspaceInitTracer</a> =
+            <a href="../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../utils/MshTraceSource.cs.html#24b0f68d5add3eb3" class="i method">GetTracer</a>(<span class="s">&quot;RunspaceInit&quot;</span>, <span class="s">&quot;Initialization code for Runspace&quot;</span>, <b>false</b>);
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This ensures all processes have a server/listener.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static readonly</b> <a href="../remoting/common/RemoteSessionNamedPipe.cs.html#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <a id="8e5373e83b99eb75" href="../../R/../../0000000000.html" target="n" data-glyph="46,1" class="i field">s_IPCNamedPipeServer</a> = <a href="../remoting/common/RemoteSessionNamedPipe.cs.html#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a>.<a href="../remoting/common/RemoteSessionNamedPipe.cs.html#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> private fields
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> Helper Class
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Helper class to stop a running job.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="86005f9005b459fe" href="../../R/86005f9005b459fe.html" target="n" data-glyph="2,0" class="t t">StopJobOperationHelper</a> : <a href="../remoting/common/throttlemanager.cs.html#1164666ea3964901" class="t t">IThrottleOperation</a>
+    {
+        <b>private readonly</b> <a href="../remoting/client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="429d9f6f875a8833" href="../../R/429d9f6f875a8833.html" target="n" data-glyph="46,1" class="i field">_job</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Internal constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r82 r">job</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Job object to stop.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="2bc81c3d6c7b9424" href="../../R/2bc81c3d6c7b9424.html" target="n" data-glyph="74,1" class="t constructor">StopJobOperationHelper</a>(<a href="../remoting/client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r82 rd" class="r82 r">job</span>)
+        {
+            <a href="#429d9f6f875a8833" class="i field">_job</a> = <span class="r82 r">job</span>;
+            <a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> += <span class="i">HandleJobStateChanged</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles the Job state change event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r83 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Originator of event, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r84 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Event arguments containing Job state.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="eb567a60993da9b2" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleJobStateChanged</a>(<b>object</b> <span id="r83 rd" class="r83 r">sender</span>, <a href="../remoting/client/Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r84 rd" class="r84 r">eventArgs</span>)
+        {
+            <b>if</b> (<a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../remoting/client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+            {
+                <span class="c">// We are done when the job is in the finished state.</span>
+                <a href="#8e8e291ce6814e26" class="i method">RaiseOperationCompleteEvent</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Override method to start the operation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="a5e671fc0cd8049b" href="../../R/a5e671fc0cd8049b.html" target="n" data-glyph="74,1" class="i method">StartOperation</a>()
+        {
+            <b>if</b> (<a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../remoting/client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+            {
+                <span class="c">// The job is already in the finished state and so cannot be stopped.</span>
+                <a href="#8e8e291ce6814e26" class="i method">RaiseOperationCompleteEvent</a>();
+            }
+            <b>else</b>
+            {
+                <span class="c">// Otherwise stop the job.</span>
+                <a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#5e60404c217f5d42" class="i method">StopJob</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Override method to stop the operation.  Not used, stop operation must</span>
+        <span class="c">///</span><span class="c"> run to completion.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="684bc074a23b92e9" href="../../R/684bc074a23b92e9.html" target="n" data-glyph="74,1" class="i method">StopOperation</a>()
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event to signal ThrottleManager when the operation is complete.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override event</b> <span class="i">EventHandler</span>&lt;<a href="../remoting/common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a>&gt; <a id="ec4f1d3c199510a9" href="../../R/ec4f1d3c199510a9.html" target="n" data-glyph="32,1" class="i">OperationComplete</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Raise the OperationComplete event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="8e8e291ce6814e26" href="../../R/8e8e291ce6814e26.html" target="n" data-glyph="76,1" class="i method">RaiseOperationCompleteEvent</a>()
+        {
+            <a href="#429d9f6f875a8833" class="i field">_job</a>.<a href="../remoting/client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <span class="i">HandleJobStateChanged</span>;
+ 
+            <a href="../remoting/common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a> <span id="r85 rd" class="r85 r">operationStateArgs</span> = <b>new</b> <span class="t">OperationStateEventArgs</span>();
+            <span class="r85 r">operationStateArgs</span>.<a href="../remoting/common/throttlemanager.cs.html#8648129d937c33ce" class="i property">OperationState</a> = <a href="../remoting/common/throttlemanager.cs.html#6cf95059c5d2ad6e" class="t t">OperationState</a>.<a href="../remoting/common/throttlemanager.cs.html#bad569808247de6a" class="i field">StartComplete</a>;
+            <span class="r85 r">operationStateArgs</span>.<a href="../remoting/common/throttlemanager.cs.html#c68f18b126779ae0" class="i property">BaseEvent</a> = <span class="i">EventArgs</span>.<span class="i">Empty</span>;
+ 
+            <a href="#ec4f1d3c199510a9" class="i">OperationComplete</a>.<span class="i">SafeInvoke</span>(<a href="#86005f9005b459fe" class="k">this</a>, <span class="r85 r">operationStateArgs</span>);
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Helper class to disconnect a runspace if the runspace supports disconnect</span>
+    <span class="c">///</span><span class="c"> semantics or otherwise close the runspace.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="6321546e69739e16" href="../../R/6321546e69739e16.html" target="n" data-glyph="2,0" class="t t">CloseOrDisconnectRunspaceOperationHelper</a> : <a href="../remoting/common/throttlemanager.cs.html#1164666ea3964901" class="t t">IThrottleOperation</a>
+    {
+        <b>private readonly</b> <a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <a id="d2dcd88aef05a486" href="../../R/d2dcd88aef05a486.html" target="n" data-glyph="46,1" class="i field">_remoteRunspace</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Internal constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r86 r">remoteRunspace</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="e44bbc88e11ad6b8" href="../../R/e44bbc88e11ad6b8.html" target="n" data-glyph="74,1" class="t constructor">CloseOrDisconnectRunspaceOperationHelper</a>(<a href="../remoting/client/remoterunspace.cs.html#e2c1bde75e106663" class="t t">RemoteRunspace</a> <span id="r86 rd" class="r86 r">remoteRunspace</span>)
+        {
+            <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a> = <span class="r86 r">remoteRunspace</span>;
+            <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#a776d5953488773f" class="i">StateChanged</a> += <span class="i">HandleRunspaceStateChanged</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handle the runspace state changed event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r87 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender of this information, unused.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r88 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Runspace event args.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="289f4b13b22ab3b8" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleRunspaceStateChanged</a>(<b>object</b> <span id="r87 rd" class="r87 r">sender</span>, <a href="Connection.cs.html#24ce8f9c69bf1c4a" class="t t">RunspaceStateEventArgs</a> <span id="r88 rd" class="r88 r">eventArgs</span>)
+        {
+            <b>switch</b> (<span class="r88 r">eventArgs</span>.<a href="Connection.cs.html#efb5571439376cca" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a>)
+            {
+                <b>case</b> <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#4e82723df10b13f6" class="i field">BeforeOpen</a>:
+                <b>case</b> <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#fb276cb28f922b8e" class="i field">Closing</a>:
+                <b>case</b> <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>:
+                <b>case</b> <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#3990ad8b3e3feec7" class="i field">Opening</a>:
+                <b>case</b> <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#31c8fe83ad58dbdb" class="i field">Disconnecting</a>:
+                    <b>return</b>;
+            }
+ 
+            <span class="c">// remoteRunspace.Dispose();</span>
+            <span class="c">// remoteRunspace = null;</span>
+            <a href="#83ffe39d4761a895" class="i method">RaiseOperationCompleteEvent</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Start the operation of closing the runspace.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="5624ea23b766907d" href="../../R/5624ea23b766907d.html" target="n" data-glyph="74,1" class="i method">StartOperation</a>()
+        {
+            <b>if</b> (<a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#45de84b67ba18f3f" class="i field">Closed</a> ||
+                <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#e4c76740d99e58bd" class="i field">Broken</a> ||
+                <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#a76d07f84f3f8c60" class="i property">RunspaceStateInfo</a>.<a href="Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="Connection.cs.html#0a8fc62a22d129a1" class="i field">Disconnected</a>)
+            {
+                <span class="c">// If the runspace is currently in a disconnected state then leave it</span>
+                <span class="c">// as is.</span>
+ 
+                <span class="c">// in this case, calling a close won&#39;t raise any events. Simply raise</span>
+                <span class="c">// the OperationCompleted event. After the if check, but before we</span>
+                <span class="c">// get to this point if the state was changed, then the StateChanged</span>
+                <span class="c">// event handler will anyway raise the event and so we are fine</span>
+                <a href="#83ffe39d4761a895" class="i method">RaiseOperationCompleteEvent</a>();
+            }
+            <b>else</b>
+            {
+                <span class="c">// If the runspace supports disconnect semantics and is running a command,</span>
+                <span class="c">// then disconnect it rather than closing it.</span>
+                <b>if</b> (<a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#0dd004643a4ef610" class="i property">CanDisconnect</a> &amp;&amp;
+                    <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#9ab3dedcf11ea947" class="i method">GetCurrentlyRunningPipeline</a>() != <b>null</b>)
+                {
+                    <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#69452270facf0a86" class="i method">DisconnectAsync</a>();
+                }
+                <b>else</b>
+                {
+                    <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#0bab9589a46f6bec" class="i method">CloseAsync</a>();
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> There is no scenario where we are going to cancel this close</span>
+        <span class="c">///</span><span class="c"> Hence this method is intentionally empty.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override void</b> <a id="553e4691b9967769" href="../../R/553e4691b9967769.html" target="n" data-glyph="74,1" class="i method">StopOperation</a>()
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event raised when the required operation is complete.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal override event</b> <span class="i">EventHandler</span>&lt;<a href="../remoting/common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a>&gt; <a id="86926a475d206a2d" href="../../R/86926a475d206a2d.html" target="n" data-glyph="32,1" class="i">OperationComplete</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Raise the operation completed event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="83ffe39d4761a895" href="../../R/83ffe39d4761a895.html" target="n" data-glyph="76,1" class="i method">RaiseOperationCompleteEvent</a>()
+        {
+            <a href="#d2dcd88aef05a486" class="i field">_remoteRunspace</a>.<a href="../remoting/client/remoterunspace.cs.html#a776d5953488773f" class="i">StateChanged</a> -= <span class="i">HandleRunspaceStateChanged</span>;
+ 
+            <a href="../remoting/common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a> <span id="r89 rd" class="r89 r">operationStateEventArgs</span> =
+                    <b>new</b> <span class="t">OperationStateEventArgs</span>();
+            <span class="r89 r">operationStateEventArgs</span>.<a href="../remoting/common/throttlemanager.cs.html#8648129d937c33ce" class="i property">OperationState</a> =
+                    <a href="../remoting/common/throttlemanager.cs.html#6cf95059c5d2ad6e" class="t t">OperationState</a>.<a href="../remoting/common/throttlemanager.cs.html#bad569808247de6a" class="i field">StartComplete</a>;
+            <span class="r89 r">operationStateEventArgs</span>.<a href="../remoting/common/throttlemanager.cs.html#c68f18b126779ae0" class="i property">BaseEvent</a> = <span class="i">EventArgs</span>.<span class="i">Empty</span>;
+ 
+            <a href="#86926a475d206a2d" class="i">OperationComplete</a>.<span class="i">SafeInvoke</span>(<a href="#6321546e69739e16" class="k">this</a>, <span class="r89 r">operationStateEventArgs</span>);
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Defines the exception thrown an error loading modules occurs while opening the runspace. It</span>
+    <span class="c">///</span><span class="c"> contains a list of all of the module errors that have occurred.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Serializable</span>]
+    <b>public class</b> <a id="133b866dbfdce22e" href="../../R/133b866dbfdce22e.html" target="n" data-glyph="0,0" class="t t">RunspaceOpenModuleLoadException</a> : <a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="t t">RuntimeException</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException</span>
+        <span class="c">///</span><span class="c"> with the message set to typeof(ScriptBlockToPowerShellNotSupportedException).FullName.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a id="a6ca67d1160b7d36" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">RunspaceOpenModuleLoadException</a>()
+            : <b>base</b>(<b>typeof</b>(<a href="../lang/scriptblock.cs.html#e3ec0b5ce28753ed" class="t t">ScriptBlockToPowerShellNotSupportedException</a>).<span class="i">FullName</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException setting the message.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exception&#39;s message.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="585243cd63f8d78c" href="../../R/585243cd63f8d78c.html" target="n" data-glyph="72,1" class="t constructor">RunspaceOpenModuleLoadException</a>(<b>string</b> <span id="r90 rd" class="r90 r">message</span>)
+            : <a href="../../utils/RuntimeException.cs.html#e4538a388d78c143" class="k">base</a>(<span class="r90 r">message</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of ScriptBlockToPowerShellNotSupportedException setting the message and innerException.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r91 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exception&#39;s message.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r92 r">innerException</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The exceptions&#39;s inner exception.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="5c114a23e30c2ad0" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">RunspaceOpenModuleLoadException</a>(<b>string</b> <span id="r91 rd" class="r91 r">message</span>, <span class="i">Exception</span> <span id="r92 rd" class="r92 r">innerException</span>)
+            : <a href="../../utils/RuntimeException.cs.html#e550883d468d8c30" class="k">base</a>(<span class="r91 r">message</span>, <span class="r92 r">innerException</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Recommended constructor for the class.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r93 r">moduleName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name of the module that cause the error.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r94 r">errors</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The collection of errors that occurred during module processing.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="313d9cae77838ee0" href="../../R/313d9cae77838ee0.html" target="n" data-glyph="74,1" class="t constructor">RunspaceOpenModuleLoadException</a>(
+            <b>string</b> <span id="r93 rd" class="r93 r">moduleName</span>,
+            <a href="PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt; <span id="r94 rd" class="r94 r">errors</span>)
+            : <a href="../../utils/RuntimeException.cs.html#e550883d468d8c30" class="k">base</a>(<a href="../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RunspaceStrings</span>.<span class="i">ErrorLoadingModulesOnRunspaceOpen</span>, <span class="r93 r">moduleName</span>,
+                (<span class="r94 r">errors</span> != <b>null</b> &amp;&amp; <span class="r94 r">errors</span>.<a href="PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a> &gt; 0 &amp;&amp; <span class="r94 r">errors</span>[0] != <b>null</b>) ? <span class="r94 r">errors</span>[0].<a href="../ErrorPackage.cs.html#cab659be098926dd" class="i method">ToString</a>() : <b>string</b>.<span class="i">Empty</span>), <b>null</b>)
+        {
+            <a href="#790427c6950dd98a" class="i field">_errors</a> = <span class="r94 r">errors</span>;
+            <a href="#133b866dbfdce22e" class="k">this</a>.<a href="../../utils/RuntimeException.cs.html#f25affe9a215ccc0" class="i method">SetErrorId</a>(<span class="s">&quot;ErrorLoadingModulesOnRunspaceOpen&quot;</span>);
+            <a href="#133b866dbfdce22e" class="k">this</a>.<a href="../../utils/RuntimeException.cs.html#fca86db33780c155" class="i method">SetErrorCategory</a>(<a href="../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../ErrorPackage.cs.html#7650567b7604bddc" class="i field">OpenError</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> ctor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The collection of error records generated while loading the modules.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <a href="PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt; <a id="ed3d2348439b4499" href="../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">ErrorRecords</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#790427c6950dd98a" class="i field">_errors</a>; }
+        }
+ 
+        <b>private readonly</b> <a href="PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt; <a id="790427c6950dd98a" href="../../R/790427c6950dd98a.html" target="n" data-glyph="46,1" class="i field">_errors</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Serialization
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initializes a new instance of RunspaceOpenModuleLoadException with serialization parameters.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r95 r">info</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Serialization information.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r96 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Streaming context.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected</b> <a id="9fbf1681bdd08dd5" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="t constructor">RunspaceOpenModuleLoadException</a>(<span class="i">SerializationInfo</span> <span id="r95 rd" class="r95 r">info</span>, <span class="i">StreamingContext</span> <span id="r96 rd" class="r96 r">context</span>)
+            : <a href="../../utils/RuntimeException.cs.html#42acad626a5cf24e" class="k">base</a>(<span class="r95 r">info</span>, <span class="r96 r">context</span>)
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Populates a </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">SerializationInfo</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> with the</span>
+        <span class="c">///</span><span class="c"> data needed to serialize the RunspaceOpenModuleLoadException object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r97 r">info</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The </span><span class="c">&lt;</span><span class="c">see</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">SerializationInfo</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> to populate with data.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r98 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The destination for this serialization.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="86cdca37523dc38c" href="../../R/86cdca37523dc38c.html" target="n" data-glyph="72,1" class="i method">GetObjectData</a>(<span class="i">SerializationInfo</span> <span id="r97 rd" class="r97 r">info</span>, <span class="i">StreamingContext</span> <span id="r98 rd" class="r98 r">context</span>)
+        {
+            <b>if</b> (<span class="r97 r">info</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r97 r">info</span>));
+            }
+ 
+            <a href="../../utils/RuntimeException.cs.html#bd88f263eb295545" class="k">base</a>.<a href="../../utils/RuntimeException.cs.html#8377876b053cffbc" class="i method">GetObjectData</a>(<span class="r97 r">info</span>, <span class="r98 r">context</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Serialization
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Helper Class
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,1015 @@
+﻿<!DOCTYPE html>
+<html><head><title>PendingProgress.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(1006);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost/host/msh/PendingProgress.cs" target="_top">host\msh\PendingProgress.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost" target="_top">src\Microsoft.PowerShell.ConsoleHost\Microsoft.PowerShell.ConsoleHost.csproj</a> (Microsoft.PowerShell.ConsoleHost)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i">Diagnostics</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Represents all of the outstanding progress activities received by the host, and includes methods to update that state</span>
+    <span class="c">///</span><span class="c"> upon receipt of new ProgressRecords, and to render that state into an array of strings such that ProgressPane can</span>
+    <span class="c">///</span><span class="c"> display it.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> The set of activities that we&#39;re tracking is logically a binary tree, with siblings in one branch and children in</span>
+    <span class="c">///</span><span class="c"> another.  For ease of implementation, this tree is represented as lists of lists.  We use ArrayList as out list type,</span>
+    <span class="c">///</span><span class="c"> although List1 (generic List) would also have worked. I suspect that ArrayList is faster because there are fewer links</span>
+    <span class="c">///</span><span class="c"> to twiddle, though I have not measured that.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> This class uses lots of nearly identical helper functions to recursively traverse the tree. If I weren&#39;t so pressed</span>
+    <span class="c">///</span><span class="c"> for time, I would see if generic methods could be used to collapse the number of traversers.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal
+    class</b> <a id="2992a33bbb5effa6" href="../../R/2992a33bbb5effa6.html" target="n" data-glyph="2,0" class="t t"><span id="3c2c22f73dbb9f78">PendingProgress</span></a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Updating Code
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Update the data structures that represent the outstanding progress records reported so far.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">sourceId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Identifier of the source of the event.  This is used as part of the &quot;key&quot; for matching newly received records with</span>
+        <span class="c">///</span><span class="c"> records that have already been received. For a record to match (meaning that they refer to the same activity), both</span>
+        <span class="c">///</span><span class="c"> the source and activity identifiers need to match.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">record</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The ProgressRecord received that will either update the status of an activity which we are already tracking, or</span>
+        <span class="c">///</span><span class="c"> represent a new activity that we need to track.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal
+        void</b>
+        <a id="adc5d4b35308e718" href="../../R/adc5d4b35308e718.html" target="n" data-glyph="74,1" class="i method">Update</a>(<b>long</b> <span id="r0 rd" class="r0 r">sourceId</span>, <a href="/System.Management.Automation/A.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r1 rd" class="r1 r">record</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r1 r">record</span> != <b>null</b>, <span class="s">&quot;record should not be null&quot;</span>);
+ 
+            <b>do</b>
+            {
+                <b>if</b> (<span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a> == <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#035f9f51bcda9b17" class="i property">ActivityId</a>)
+                {
+                    <span class="c">// ignore malformed records.</span>
+                    <b>break</b>;
+                }
+ 
+                <span class="i">ArrayList</span> <span id="r2 rd" class="r2 r">listWhereFound</span> = <b>null</b>;
+                <b>int</b> <span id="r3 rd" class="r3 r">indexWhereFound</span> = -1;
+                <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r4 rd" class="r4 r">foundNode</span> =
+                    <a href="#5be6b62d5e730822" class="i method">FindNodeById</a>(<span class="r0 r">sourceId</span>, <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#035f9f51bcda9b17" class="i property">ActivityId</a>, <b>out</b> <span class="r2 r">listWhereFound</span>, <b>out</b> <span class="r3 r">indexWhereFound</span>);
+ 
+                <b>if</b> (<span class="r4 r">foundNode</span> != <b>null</b>)
+                {
+                    <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r2 r">listWhereFound</span> != <b>null</b>, <span class="s">&quot;node found, but list not identified&quot;</span>);
+                    <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r3 r">indexWhereFound</span> &gt;= 0, <span class="s">&quot;node found, but index not returned&quot;</span>);
+ 
+                    <b>if</b> (<span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#b83bd20609cddaf5" class="i property">RecordType</a> == <a href="/System.Management.Automation/A.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="/System.Management.Automation/A.html#be29e101fe03f5d0" class="i field">Completed</a>)
+                    {
+                        <a href="#284d52ca5180b19c" class="i method">RemoveNodeAndPromoteChildren</a>(<span class="r2 r">listWhereFound</span>, <span class="r3 r">indexWhereFound</span>);
+                        <b>break</b>;
+                    }
+ 
+                    <b>if</b> (<span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a> == <span class="r4 r">foundNode</span>.<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a>)
+                    {
+                        <span class="c">// record is an update to an existing activity. Copy the record data into the found node, and</span>
+                        <span class="c">// reset the age of the node.</span>
+ 
+                        <span class="r4 r">foundNode</span>.<a href="/System.Management.Automation/A.html#4b85501b44d8e997" class="i property">Activity</a> = <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#4b85501b44d8e997" class="i property">Activity</a>;
+                        <span class="r4 r">foundNode</span>.<a href="/System.Management.Automation/A.html#7b8dea277788f5cd" class="i property">StatusDescription</a> = <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#7b8dea277788f5cd" class="i property">StatusDescription</a>;
+                        <span class="r4 r">foundNode</span>.<a href="/System.Management.Automation/A.html#f7d64fec26cd635a" class="i property">CurrentOperation</a> = <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#f7d64fec26cd635a" class="i property">CurrentOperation</a>;
+                        <span class="r4 r">foundNode</span>.<a href="/System.Management.Automation/A.html#7c559492a0012510" class="i property">PercentComplete</a> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#7c559492a0012510" class="i property">PercentComplete</a>, 100);
+                        <span class="r4 r">foundNode</span>.<a href="/System.Management.Automation/A.html#b36a767584bc86ea" class="i property">SecondsRemaining</a> = <span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#b36a767584bc86ea" class="i property">SecondsRemaining</a>;
+                        <span class="r4 r">foundNode</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a> = 0;
+                        <b>break</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// The record&#39;s parent Id mismatches with that of the found node&#39;s.  We interpret</span>
+                        <span class="c">// this to mean that the activity represented by the record (and the found node) is</span>
+                        <span class="c">// being &quot;re-parented&quot; elsewhere. So we remove the found node and treat the record</span>
+                        <span class="c">// as a new activity.</span>
+ 
+                        <a href="#284d52ca5180b19c" class="i method">RemoveNodeAndPromoteChildren</a>(<span class="r2 r">listWhereFound</span>, <span class="r3 r">indexWhereFound</span>);
+                    }
+                }
+ 
+                <span class="c">// At this point, the record&#39;s activity is not in the tree. So we need to add it.</span>
+ 
+                <b>if</b> (<span class="r1 r">record</span>.<a href="/System.Management.Automation/A.html#b83bd20609cddaf5" class="i property">RecordType</a> == <a href="/System.Management.Automation/A.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="/System.Management.Automation/A.html#be29e101fe03f5d0" class="i field">Completed</a>)
+                {
+                    <span class="c">// We don&#39;t track completion records that don&#39;t correspond to activities we&#39;re not</span>
+                    <span class="c">// already tracking.</span>
+ 
+                    <b>break</b>;
+                }
+ 
+                <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r5 rd" class="r5 r">newNode</span> = <b>new</b> <a href="ProgressNode.cs.html#bd9293d6aec9d661" class="t constructor">ProgressNode</a>(<span class="r0 r">sourceId</span>, <span class="r1 r">record</span>);
+ 
+                <span class="c">// If we&#39;re adding a node, and we have no more space, then we need to pick a node to evict.</span>
+ 
+                <b>while</b> (<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a> &gt;= <a href="#2b1d15f4ccf43eee" class="i field">maxNodeCount</a>)
+                {
+                    <a href="#b6c8305391e56c14" class="i method">EvictNode</a>();
+                }
+ 
+                <b>if</b> (<span class="r5 r">newNode</span>.<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a> &gt;= 0)
+                {
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r6 rd" class="r6 r">parentNode</span> = <a href="#29e3498543bb4d8c" class="i method">FindNodeById</a>(<span class="r5 r">newNode</span>.<a href="ProgressNode.cs.html#d59c7d8669eac769" class="i field">SourceId</a>, <span class="r5 r">newNode</span>.<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a>);
+                    <b>if</b> (<span class="r6 r">parentNode</span> != <b>null</b>)
+                    {
+                        <b>if</b> (<span class="r6 r">parentNode</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> == <b>null</b>)
+                        {
+                            <span class="r6 r">parentNode</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> = <b>new</b> <span class="i">ArrayList</span>();
+                        }
+ 
+                        <a href="#8b9215be6df1a584" class="i method">AddNode</a>(<span class="r6 r">parentNode</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>, <span class="r5 r">newNode</span>);
+                        <b>break</b>;
+                    }
+ 
+                    <span class="c">// The parent node is not in the tree. Make the new node&#39;s parent the root,</span>
+                    <span class="c">// and add it to the tree.  If the parent ever shows up, then the next time</span>
+                    <span class="c">// we receive a record for this activity, the parent id&#39;s won&#39;t match, and the</span>
+                    <span class="c">// activity will be properly re-parented.</span>
+ 
+                    <span class="r5 r">newNode</span>.<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a> = -1;
+                }
+ 
+                <a href="#8b9215be6df1a584" class="i method">AddNode</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r5 r">newNode</span>);
+            } <b>while</b> (<b>false</b>);
+ 
+            <span class="c">// At this point the tree is up-to-date.  Make a pass to age all of the nodes</span>
+ 
+            <a href="#e343667a62a6fa1f" class="i method">AgeNodesAndResetStyle</a>();
+        }
+ 
+        <b>private
+        void</b>
+        <a id="b6c8305391e56c14" href="../../R/b6c8305391e56c14.html" target="n" data-glyph="76,1" class="i method">EvictNode</a>()
+        {
+            <span class="i">ArrayList</span> <span id="r7 rd" class="r7 r">listWhereFound</span> = <b>null</b>;
+            <b>int</b> <span id="r8 rd" class="r8 r">indexWhereFound</span> = -1;
+ 
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r9 rd" class="r9 r">oldestNode</span> = <a href="#28bdacefbbaf8779" class="i method">FindOldestLeafmostNode</a>(<b>out</b> <span class="r7 r">listWhereFound</span>, <b>out</b> <span class="r8 r">indexWhereFound</span>);
+            <b>if</b> (<span class="r9 r">oldestNode</span> == <b>null</b>)
+            {
+                <span class="c">// Well that&#39;s a surprise.  There&#39;s got to be at least one node there that&#39;s older than 0.</span>
+ 
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<b>false</b>, <span class="s">&quot;Must be an old node in the tree somewhere&quot;</span>);
+ 
+                <span class="c">// We&#39;ll just pick the root node, then.</span>
+ 
+                <a href="#d39417aa5cfbe6f8" class="i method">RemoveNode</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, 0);
+            }
+            <b>else</b>
+            {
+                <a href="#d39417aa5cfbe6f8" class="i method">RemoveNode</a>(<span class="r7 r">listWhereFound</span>, <span class="r8 r">indexWhereFound</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Removes a node from the tree.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">nodes</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> List in the tree from which the node is to be removed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">indexToRemove</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Index into the list of the node to be removed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private
+        void</b>
+        <a id="d39417aa5cfbe6f8" href="../../R/d39417aa5cfbe6f8.html" target="n" data-glyph="76,1" class="i method">RemoveNode</a>(<span class="i">ArrayList</span> <span id="r10 rd" class="r10 r">nodes</span>, <b>int</b> <span id="r11 rd" class="r11 r">indexToRemove</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r12 rd" class="r12 r">nodeToRemove</span> = (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>)<span class="r10 r">nodes</span>[<span class="r11 r">indexToRemove</span>];
+ 
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r10 r">nodes</span> != <b>null</b>, <span class="s">&quot;can&#39;t remove nodes from a null list&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r11 r">indexToRemove</span> &lt; <span class="r10 r">nodes</span>.<span class="i">Count</span>, <span class="s">&quot;index is not in list&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r10 r">nodes</span>[<span class="r11 r">indexToRemove</span>] != <b>null</b>, <span class="s">&quot;no node at specified index&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r12 r">nodeToRemove</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> == <b>null</b> || <span class="r12 r">nodeToRemove</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>.<span class="i">Count</span> == 0, <span class="s">&quot;can&#39;t remove a node with children&quot;</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <span class="r10 r">nodes</span>.<span class="i">RemoveAt</span>(<span class="r11 r">indexToRemove</span>);
+            --<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_ON</span>
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a> == <a href="#2992a33bbb5effa6" class="k">this</a>.<a href="#efa58c6f24dd8dff" class="i method">CountNodes</a>(), <span class="s">&quot;We&#39;ve lost track of the number of nodes in the tree&quot;</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <b>private
+        void</b>
+        <a id="284d52ca5180b19c" href="../../R/284d52ca5180b19c.html" target="n" data-glyph="76,1" class="i method">RemoveNodeAndPromoteChildren</a>(<span class="i">ArrayList</span> <span id="r13 rd" class="r13 r">nodes</span>, <b>int</b> <span id="r14 rd" class="r14 r">indexToRemove</span>)
+        {
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r15 rd" class="r15 r">nodeToRemove</span> = (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>)<span class="r13 r">nodes</span>[<span class="r14 r">indexToRemove</span>];
+ 
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r13 r">nodes</span> != <b>null</b>, <span class="s">&quot;can&#39;t remove nodes from a null list&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r14 r">indexToRemove</span> &lt; <span class="r13 r">nodes</span>.<span class="i">Count</span>, <span class="s">&quot;index is not in list&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r15 r">nodeToRemove</span> != <b>null</b>, <span class="s">&quot;no node at specified index&quot;</span>);
+ 
+            <b>if</b> (<span class="r15 r">nodeToRemove</span> == <b>null</b>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<span class="r15 r">nodeToRemove</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> != <b>null</b>)
+            {
+                <span class="c">// promote the children.</span>
+ 
+                <b>for</b> (<b>int</b> <span id="r16 rd" class="r16 r">i</span> = 0; <span class="r16 r">i</span> &lt; <span class="r15 r">nodeToRemove</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>.<span class="i">Count</span>; ++<span class="r16 r">i</span>)
+                {
+                    <span class="c">// unparent the children. If the children are ever updated again, they will be reparented.</span>
+ 
+                    ((<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>)<span class="r15 r">nodeToRemove</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>[<span class="r16 r">i</span>]).<a href="/System.Management.Automation/A.html#730521203ee4eba0" class="i property">ParentActivityId</a> = -1;
+                }
+ 
+                <span class="c">// add the children as siblings</span>
+ 
+                <span class="r13 r">nodes</span>.<span class="i">RemoveAt</span>(<span class="r14 r">indexToRemove</span>);
+                --<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a>;
+                <span class="r13 r">nodes</span>.<span class="i">InsertRange</span>(<span class="r14 r">indexToRemove</span>, <span class="r15 r">nodeToRemove</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>);
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a> == <a href="#2992a33bbb5effa6" class="k">this</a>.<a href="#efa58c6f24dd8dff" class="i method">CountNodes</a>(), <span class="s">&quot;We&#39;ve lost track of the number of nodes in the tree&quot;</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+            }
+            <b>else</b>
+            {
+                <span class="c">// nothing to promote</span>
+ 
+                <a href="#d39417aa5cfbe6f8" class="i method">RemoveNode</a>(<span class="r13 r">nodes</span>, <span class="r14 r">indexToRemove</span>);
+                <b>return</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Adds a node to the tree, first removing the oldest node if the tree is too large.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">nodes</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> List in the tree where the node is to be added.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">nodeToAdd</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Node to be added.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private
+        void</b>
+        <a id="8b9215be6df1a584" href="../../R/8b9215be6df1a584.html" target="n" data-glyph="76,1" class="i method">AddNode</a>(<span class="i">ArrayList</span> <span id="r17 rd" class="r17 r">nodes</span>, <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r18 rd" class="r18 r">nodeToAdd</span>)
+        {
+            <span class="r17 r">nodes</span>.<span class="i">Add</span>(<span class="r18 r">nodeToAdd</span>);
+            ++<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a> == <a href="#2992a33bbb5effa6" class="k">this</a>.<a href="#efa58c6f24dd8dff" class="i method">CountNodes</a>(), <span class="s">&quot;We&#39;ve lost track of the number of nodes in the tree&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a> &lt;= <a href="#2b1d15f4ccf43eee" class="i field">maxNodeCount</a>, <span class="s">&quot;Too many nodes in tree!&quot;</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <b>private sealed class</b> <a id="ec51fa457eaad595" href="../../R/ec51fa457eaad595.html" target="n" data-glyph="4,1" class="t t"><span id="434930015be1143e">FindOldestNodeVisitor</span></a> : <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>
+        {
+            <b>internal override
+            bool</b>
+            <a id="86afde1875248fed" href="../../R/86afde1875248fed.html" target="n" data-glyph="74,2" class="i method">Visit</a>(<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r19 rd" class="r19 r">node</span>, <span class="i">ArrayList</span> <span id="r20 rd" class="r20 r">listWhereFound</span>, <b>int</b> <span id="r21 rd" class="r21 r">indexWhereFound</span>)
+            {
+                <b>if</b> (<span class="r19 r">node</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a> &gt;= <a href="#fb97a409ace47673" class="i field">_oldestSoFar</a>)
+                {
+                    <a href="#fb97a409ace47673" class="i field">_oldestSoFar</a> = <span class="r19 r">node</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a>;
+                    <a href="#f69c7c2c80a0a767" class="i field">FoundNode</a> = <span class="r19 r">node</span>;
+                    <a href="#ec51fa457eaad595" class="k">this</a>.<a href="#0e241e5917ebdd51" class="i field">ListWhereFound</a> = <span class="r20 r">listWhereFound</span>;
+                    <a href="#ec51fa457eaad595" class="k">this</a>.<a href="#1312c39a5e0504f1" class="i field">IndexWhereFound</a> = <span class="r21 r">indexWhereFound</span>;
+                }
+ 
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>internal</b>
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+            <a id="f69c7c2c80a0a767" href="../../R/f69c7c2c80a0a767.html" target="n" data-glyph="44,2" class="i field">FoundNode</a>;
+ 
+            <b>internal</b>
+            <span class="i">ArrayList</span>
+            <a id="0e241e5917ebdd51" href="../../R/0e241e5917ebdd51.html" target="n" data-glyph="44,2" class="i field">ListWhereFound</a>;
+ 
+            <b>internal
+            int</b>
+            <a id="1312c39a5e0504f1" href="../../R/1312c39a5e0504f1.html" target="n" data-glyph="44,2" class="i field">IndexWhereFound</a> = -1;
+ 
+            <b>private int</b> <a id="fb97a409ace47673" href="../../R/fb97a409ace47673.html" target="n" data-glyph="46,2" class="i field">_oldestSoFar</a>;
+        }
+ 
+        [<span class="i n">System</span>.<span class="i">Diagnostics</span>.<span class="i">CodeAnalysis</span>.<span class="i">SuppressMessage</span>(
+            <span class="s">&quot;Performance&quot;</span>,
+            <span class="s">&quot;CA1822:Mark members as static&quot;</span>,
+            <span class="i">Justification</span> = <span class="s">&quot;Accesses instance members in preprocessor branch.&quot;</span>)]
+        <b>private</b>
+        <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+        <a id="7924236388af6c48" href="../../R/7924236388af6c48.html" target="n" data-glyph="76,1" class="i method">FindOldestLeafmostNodeHelper</a>(<span class="i">ArrayList</span> <span id="r22 rd" class="r22 r">treeToSearch</span>, <b>out</b> <span class="i">ArrayList</span> <span id="r23 rd" class="r23 r">listWhereFound</span>, <b>out int</b> <span id="r24 rd" class="r24 r">indexWhereFound</span>)
+        {
+            <span class="r23 r">listWhereFound</span> = <b>null</b>;
+            <span class="r24 r">indexWhereFound</span> = -1;
+ 
+            <a href="#ec51fa457eaad595" class="t t">FindOldestNodeVisitor</a> <span id="r25 rd" class="r25 r">v</span> = <b>new</b> <span class="t">FindOldestNodeVisitor</span>();
+            <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>.<a href="#93139fd49565f4ee" class="i method">VisitNodes</a>(<span class="r22 r">treeToSearch</span>, <span class="r25 r">v</span>);
+ 
+            <span class="r23 r">listWhereFound</span> = <span class="r25 r">v</span>.<a href="#0e241e5917ebdd51" class="i field">ListWhereFound</a>;
+            <span class="r24 r">indexWhereFound</span> = <span class="r25 r">v</span>.<a href="#1312c39a5e0504f1" class="i field">IndexWhereFound</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+            <b>if</b> (<span class="r25 r">v</span>.<a href="#f69c7c2c80a0a767" class="i field">FoundNode</a> == <b>null</b>)
+            {
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r23 r">listWhereFound</span> == <b>null</b>, <span class="s">&quot;list should be null when no node found&quot;</span>);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r24 r">indexWhereFound</span> == -1, <span class="s">&quot;index should indicate no node found&quot;</span>);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>.<span class="i">Count</span> == 0, <span class="s">&quot;if there is no oldest node, then the tree must be empty&quot;</span>);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#7a62f0b8fdc1042d" class="i field">_nodeCount</a> == 0, <span class="s">&quot;if there is no oldest node, then the tree must be empty&quot;</span>);
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+            <b>return</b> <span class="r25 r">v</span>.<a href="#f69c7c2c80a0a767" class="i field">FoundNode</a>;
+        }
+ 
+        <b>private</b>
+        <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+        <a id="28bdacefbbaf8779" href="../../R/28bdacefbbaf8779.html" target="n" data-glyph="76,1" class="i method">FindOldestLeafmostNode</a>(<b>out</b> <span class="i">ArrayList</span> <span id="r26 rd" class="r26 r">listWhereFound</span>, <b>out int</b> <span id="r27 rd" class="r27 r">indexWhereFound</span>)
+        {
+            <span class="r26 r">listWhereFound</span> = <b>null</b>;
+            <span class="r27 r">indexWhereFound</span> = -1;
+ 
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r28 rd" class="r28 r">result</span> = <b>null</b>;
+            <span class="i">ArrayList</span> <span id="r29 rd" class="r29 r">treeToSearch</span> = <a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>;
+ 
+            <b>while</b> (<b>true</b>)
+            {
+                <span class="r28 r">result</span> = <a href="#7924236388af6c48" class="i method">FindOldestLeafmostNodeHelper</a>(<span class="r29 r">treeToSearch</span>, <b>out</b> <span class="r26 r">listWhereFound</span>, <b>out</b> <span class="r27 r">indexWhereFound</span>);
+                <b>if</b> (<span class="r28 r">result</span> == <b>null</b> || <span class="r28 r">result</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> == <b>null</b> || <span class="r28 r">result</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>.<span class="i">Count</span> == 0)
+                {
+                    <b>break</b>;
+                }
+ 
+                <span class="c">// search the subtree for the oldest child</span>
+ 
+                <span class="r29 r">treeToSearch</span> = <span class="r28 r">result</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>;
+            }
+ 
+            <b>return</b> <span class="r28 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Convenience overload.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b>
+        <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+        <a id="29e3498543bb4d8c" href="../../R/29e3498543bb4d8c.html" target="n" data-glyph="76,1" class="i method">FindNodeById</a>(<b>long</b> <span id="r30 rd" class="r30 r">sourceId</span>, <b>int</b> <span id="r31 rd" class="r31 r">activityId</span>)
+        {
+            <span class="i">ArrayList</span> <span id="r32 rd" class="r32 r">listWhereFound</span> = <b>null</b>;
+            <b>int</b> <span id="r33 rd" class="r33 r">indexWhereFound</span> = -1;
+            <b>return</b>
+                <a href="#5be6b62d5e730822" class="i method">FindNodeById</a>(<span class="r30 r">sourceId</span>, <span class="r31 r">activityId</span>, <b>out</b> <span class="r32 r">listWhereFound</span>, <b>out</b> <span class="r33 r">indexWhereFound</span>);
+        }
+ 
+        <b>private sealed class</b> <a id="afbc5db5a4a3221f" href="../../R/afbc5db5a4a3221f.html" target="n" data-glyph="4,1" class="t t">FindByIdNodeVisitor</a> : <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>
+        {
+            <b>internal</b>
+            <a id="a9674f9f61828744" href="../../R/a9674f9f61828744.html" target="n" data-glyph="74,2" class="t constructor">FindByIdNodeVisitor</a>(<b>long</b> <span id="r34 rd" class="r34 r">sourceIdToFind</span>, <b>int</b> <span id="r35 rd" class="r35 r">activityIdToFind</span>)
+            {
+                <a href="#551396ae51323bd1" class="i field">_sourceIdToFind</a> = <span class="r34 r">sourceIdToFind</span>;
+                <a href="#ef4b1685479c9d69" class="i field">_idToFind</a> = <span class="r35 r">activityIdToFind</span>;
+            }
+ 
+            <b>internal override
+            bool</b>
+            <a id="fe0670a0debcfb7b" href="../../R/fe0670a0debcfb7b.html" target="n" data-glyph="74,2" class="i method">Visit</a>(<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r36 rd" class="r36 r">node</span>, <span class="i">ArrayList</span> <span id="r37 rd" class="r37 r">listWhereFound</span>, <b>int</b> <span id="r38 rd" class="r38 r">indexWhereFound</span>)
+            {
+                <b>if</b> (<span class="r36 r">node</span>.<a href="/System.Management.Automation/A.html#035f9f51bcda9b17" class="i property">ActivityId</a> == <a href="#ef4b1685479c9d69" class="i field">_idToFind</a> &amp;&amp; <span class="r36 r">node</span>.<a href="ProgressNode.cs.html#d59c7d8669eac769" class="i field">SourceId</a> == <a href="#551396ae51323bd1" class="i field">_sourceIdToFind</a>)
+                {
+                    <a href="#afbc5db5a4a3221f" class="k">this</a>.<a href="#01e19030168f0665" class="i field">FoundNode</a> = <span class="r36 r">node</span>;
+                    <a href="#afbc5db5a4a3221f" class="k">this</a>.<a href="#56bfff6167201ecf" class="i field">ListWhereFound</a> = <span class="r37 r">listWhereFound</span>;
+                    <a href="#afbc5db5a4a3221f" class="k">this</a>.<a href="#e0a6bf3b98868bde" class="i field">IndexWhereFound</a> = <span class="r38 r">indexWhereFound</span>;
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>internal</b>
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+            <a id="01e19030168f0665" href="../../R/01e19030168f0665.html" target="n" data-glyph="44,2" class="i field">FoundNode</a>;
+ 
+            <b>internal</b>
+            <span class="i">ArrayList</span>
+            <a id="56bfff6167201ecf" href="../../R/56bfff6167201ecf.html" target="n" data-glyph="44,2" class="i field">ListWhereFound</a>;
+ 
+            <b>internal
+            int</b>
+            <a id="e0a6bf3b98868bde" href="../../R/e0a6bf3b98868bde.html" target="n" data-glyph="44,2" class="i field">IndexWhereFound</a> = -1;
+ 
+            <b>private readonly int</b> <a id="ef4b1685479c9d69" href="../../R/ef4b1685479c9d69.html" target="n" data-glyph="46,2" class="i field">_idToFind</a> = -1;
+            <b>private readonly long</b> <a id="551396ae51323bd1" href="../../R/551396ae51323bd1.html" target="n" data-glyph="46,2" class="i field">_sourceIdToFind</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Finds a node with a given ActivityId in provided set of nodes. Recursively walks the set of nodes and their children.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">sourceId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Identifier of the source of the record.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">activityId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ActivityId to search for.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">listWhereFound</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Receives reference to the List where the found node was located, or null if no suitable node was found.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">indexWhereFound</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Receives the index into listWhereFound that indicating where in the list the node was located, or -1 if</span>
+        <span class="c">///</span><span class="c"> no suitable node was found.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The found node, or null if no suitable node was located.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private</b>
+        <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+        <a id="5be6b62d5e730822" href="../../R/5be6b62d5e730822.html" target="n" data-glyph="76,1" class="i method">FindNodeById</a>(<b>long</b> <span id="r39 rd" class="r39 r">sourceId</span>, <b>int</b> <span id="r40 rd" class="r40 r">activityId</span>, <b>out</b> <span class="i">ArrayList</span> <span id="r41 rd" class="r41 r">listWhereFound</span>, <b>out int</b> <span id="r42 rd" class="r42 r">indexWhereFound</span>)
+        {
+            <span class="r41 r">listWhereFound</span> = <b>null</b>;
+            <span class="r42 r">indexWhereFound</span> = -1;
+ 
+            <a href="#afbc5db5a4a3221f" class="t t">FindByIdNodeVisitor</a> <span id="r43 rd" class="r43 r">v</span> = <b>new</b> <a href="#a9674f9f61828744" class="t constructor">FindByIdNodeVisitor</a>(<span class="r39 r">sourceId</span>, <span class="r40 r">activityId</span>);
+            <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>.<a href="#93139fd49565f4ee" class="i method">VisitNodes</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r43 r">v</span>);
+ 
+            <span class="r41 r">listWhereFound</span> = <span class="r43 r">v</span>.<a href="#56bfff6167201ecf" class="i field">ListWhereFound</a>;
+            <span class="r42 r">indexWhereFound</span> = <span class="r43 r">v</span>.<a href="#e0a6bf3b98868bde" class="i field">IndexWhereFound</a>;
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+            <b>if</b> (<span class="r43 r">v</span>.<a href="#01e19030168f0665" class="i field">FoundNode</a> == <b>null</b>)
+            {
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r41 r">listWhereFound</span> == <b>null</b>, <span class="s">&quot;list should be null when no node found&quot;</span>);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r42 r">indexWhereFound</span> == -1, <span class="s">&quot;index should indicate no node found&quot;</span>);
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+            <b>return</b> <span class="r43 r">v</span>.<a href="#01e19030168f0665" class="i field">FoundNode</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Finds the oldest node with a given rendering style that is at least as old as a given age.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">nodes</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> List of nodes to search. Child lists of each node in this list will also be searched.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">oldestSoFar</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The minimum age of the node to be located.  To find the oldest node, pass 0.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">style</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The rendering style of the node to be located.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The found node, or null if no suitable node was located.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private</b>
+        <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>
+        <a id="a056acd39c39561b" href="../../R/a056acd39c39561b.html" target="n" data-glyph="76,1" class="i method">FindOldestNodeOfGivenStyle</a>(<span class="i">ArrayList</span> <span id="r44 rd" class="r44 r">nodes</span>, <b>int</b> <span id="r45 rd" class="r45 r">oldestSoFar</span>, <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a> <span id="r46 rd" class="r46 r">style</span>)
+        {
+            <b>if</b> (<span class="r44 r">nodes</span> == <b>null</b>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r47 rd" class="r47 r">found</span> = <b>null</b>;
+            <b>for</b> (<b>int</b> <span id="r48 rd" class="r48 r">i</span> = 0; <span class="r48 r">i</span> &lt; <span class="r44 r">nodes</span>.<span class="i">Count</span>; ++<span class="r48 r">i</span>)
+            {
+                <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r49 rd" class="r49 r">node</span> = (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>)<span class="r44 r">nodes</span>[<span class="r48 r">i</span>];
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r49 r">node</span> != <b>null</b>, <span class="s">&quot;nodes should not contain null elements&quot;</span>);
+ 
+                <b>if</b> (<span class="r49 r">node</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a> &gt;= <span class="r45 r">oldestSoFar</span> &amp;&amp; <span class="r49 r">node</span>.<a href="ProgressNode.cs.html#e0a8cd20c1ddf4d4" class="i field">Style</a> == <span class="r46 r">style</span>)
+                {
+                    <span class="r47 r">found</span> = <span class="r49 r">node</span>;
+                    <span class="r45 r">oldestSoFar</span> = <span class="r47 r">found</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a>;
+                }
+ 
+                <b>if</b> (<span class="r49 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> != <b>null</b>)
+                {
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r50 rd" class="r50 r">child</span> = <a href="#a056acd39c39561b" class="i method">FindOldestNodeOfGivenStyle</a>(<span class="r49 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>, <span class="r45 r">oldestSoFar</span>, <span class="r46 r">style</span>);
+ 
+                    <b>if</b> (<span class="r50 r">child</span> != <b>null</b>)
+                    {
+                        <span class="c">// In this universe, parents can be younger than their children. We found a child older than us.</span>
+ 
+                        <span class="r47 r">found</span> = <span class="r50 r">child</span>;
+                        <span class="r45 r">oldestSoFar</span> = <span class="r47 r">found</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a>;
+                    }
+                }
+            }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+            <b>if</b> (<span class="r47 r">found</span> != <b>null</b>)
+            {
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r47 r">found</span>.<a href="ProgressNode.cs.html#e0a8cd20c1ddf4d4" class="i field">Style</a> == <span class="r46 r">style</span>, <span class="s">&quot;unexpected style&quot;</span>);
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r47 r">found</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a> &gt;= <span class="r45 r">oldestSoFar</span>, <span class="s">&quot;unexpected age&quot;</span>);
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+            <b>return</b> <span class="r47 r">found</span>;
+        }
+ 
+        <b>private sealed class</b> <a id="023744d5ae5c35cc" href="../../R/023744d5ae5c35cc.html" target="n" data-glyph="4,1" class="t t"><span id="1ec31ff2d4c83094">AgeAndResetStyleVisitor</span></a> : <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>
+        {
+            <b>internal override
+            bool</b>
+            <a id="451c6f76ae5219ea" href="../../R/451c6f76ae5219ea.html" target="n" data-glyph="74,2" class="i method">Visit</a>(<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r51 rd" class="r51 r">node</span>, <span class="i">ArrayList</span> <span id="r52 rd" class="r52 r">unused</span>, <b>int</b> <span id="r53 rd" class="r53 r">unusedToo</span>)
+            {
+                <span class="r51 r">node</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a> = <span class="i">Math</span>.<span class="i">Min</span>(<span class="r51 r">node</span>.<a href="ProgressNode.cs.html#49ddd719949c9e90" class="i field">Age</a> + 1, <span class="i">Int32</span>.<span class="i">MaxValue</span> - 1);
+ 
+                <span class="r51 r">node</span>.<a href="ProgressNode.cs.html#e0a8cd20c1ddf4d4" class="i field">Style</a> = <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#9d177bf2fa6cf9ce" class="i method">IsMinimalProgressRenderingEnabled</a>()
+                    ? <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#3be01dd5283725b1" class="i field">Ansi</a>
+                    : <span class="r51 r">node</span>.<a href="ProgressNode.cs.html#e0a8cd20c1ddf4d4" class="i field">Style</a> = <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#2d0d71f2562b1743" class="i field">FullPlus</a>;
+ 
+                <b>return</b> <b>true</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Increments the age of each of the nodes in the given list, and all their children.  Also sets the rendering</span>
+        <span class="c">///</span><span class="c"> style of each node to &quot;full.&quot;</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> All nodes are aged every time a new ProgressRecord is received.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private
+        void</b>
+        <a id="e343667a62a6fa1f" href="../../R/e343667a62a6fa1f.html" target="n" data-glyph="76,1" class="i method">AgeNodesAndResetStyle</a>()
+        {
+            <a href="#023744d5ae5c35cc" class="t t">AgeAndResetStyleVisitor</a> <span id="r54 rd" class="r54 r">arsv</span> = <b>new</b> <span class="t">AgeAndResetStyleVisitor</span>();
+            <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>.<a href="#93139fd49565f4ee" class="i method">VisitNodes</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r54 r">arsv</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> <span class="c">// Updating Code</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Rendering Code
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Generates an array of strings representing as much of the outstanding progress activities as possible within the given</span>
+        <span class="c">///</span><span class="c"> space.  As more outstanding activities are collected, nodes are &quot;compressed&quot; (i.e. rendered in an increasing terse</span>
+        <span class="c">///</span><span class="c"> fashion) in order to display as many as possible.  Ultimately, some nodes may be compressed to the point of</span>
+        <span class="c">///</span><span class="c"> invisibility. The oldest nodes are compressed first.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r55 r">maxWidth</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum width (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r56 r">maxHeight</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum height (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r57 r">rawUI</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSHostRawUserInterface used to gauge string widths in the rendering.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An array of strings containing the textual representation of the outstanding progress activities.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal
+        string</b>[]
+        <a id="6db53e8b291d9140" href="../../R/6db53e8b291d9140.html" target="n" data-glyph="74,1" class="i method">Render</a>(<b>int</b> <span id="r55 rd" class="r55 r">maxWidth</span>, <b>int</b> <span id="r56 rd" class="r56 r">maxHeight</span>, <a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <span id="r57 rd" class="r57 r">rawUI</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a> != <b>null</b>, <span class="s">&quot;Shouldn&#39;t need to render progress if no data exists&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r55 r">maxWidth</span> &gt; 0, <span class="s">&quot;maxWidth is too small&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r56 r">maxHeight</span> &gt;= 3, <span class="s">&quot;maxHeight is too small&quot;</span>);
+ 
+            <b>if</b> (<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a> == <b>null</b> || <a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>.<span class="i">Count</span> &lt;= 0)
+            {
+                <span class="c">// we have nothing to render.</span>
+ 
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>int</b> <span id="r58 rd" class="r58 r">invisible</span> = 0;
+            <b>if</b> (<a href="#3f5be0de6d227869" class="i method">TallyHeight</a>(<span class="r57 r">rawUI</span>, <span class="r56 r">maxHeight</span>, <span class="r55 r">maxWidth</span>) &gt; <span class="r56 r">maxHeight</span>)
+            {
+                <span class="c">// This will smash down nodes until the tree will fit into the alloted number of lines.  If in the</span>
+                <span class="c">// process some nodes were made invisible, we will add a line to the display to say so.</span>
+ 
+                <span class="r58 r">invisible</span> = <a href="#8ae8f9c06000a539" class="i method">CompressToFit</a>(<span class="r57 r">rawUI</span>, <span class="r56 r">maxHeight</span>, <span class="r55 r">maxWidth</span>);
+            }
+ 
+            <span class="i">ArrayList</span> <span id="r59 rd" class="r59 r">result</span> = <b>new</b> <span class="i">ArrayList</span>();
+ 
+            <b>if</b> (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#9d177bf2fa6cf9ce" class="i method">IsMinimalProgressRenderingEnabled</a>())
+            {
+                <a href="#602468e3424a8ecc" class="i method">RenderHelper</a>(<span class="r59 r">result</span>, <a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r60 r">indentation</span>: 0, <span class="r55 r">maxWidth</span>, <span class="r57 r">rawUI</span>);
+                <b>return</b> (<b>string</b>[])<span class="r59 r">result</span>.<span class="i">ToArray</span>(<b>typeof</b>(<b>string</b>));
+            }
+ 
+            <b>string</b> <span id="r61 rd" class="r61 r">border</span> = <span class="i">StringUtil</span>.<span class="i">Padding</span>(<span class="r55 r">maxWidth</span>);
+ 
+            <span class="r59 r">result</span>.<span class="i">Add</span>(<span class="r61 r">border</span>);
+            <a href="#602468e3424a8ecc" class="i method">RenderHelper</a>(<span class="r59 r">result</span>, <a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, 0, <span class="r55 r">maxWidth</span>, <span class="r57 r">rawUI</span>);
+            <b>if</b> (<span class="r58 r">invisible</span> == 1)
+            {
+                <span class="r59 r">result</span>.<span class="i">Add</span>(
+                    <span class="s">&quot; &quot;</span>
+                    + <span class="i">StringUtil</span>.<span class="i">Format</span>(
+                        <span class="i">ProgressNodeStrings</span>.<span class="i">InvisibleNodesMessageSingular</span>,
+                        <span class="r58 r">invisible</span>));
+            }
+            <b>else</b> <b>if</b> (<span class="r58 r">invisible</span> &gt; 1)
+            {
+                <span class="r59 r">result</span>.<span class="i">Add</span>(
+                    <span class="s">&quot; &quot;</span>
+                    + <span class="i">StringUtil</span>.<span class="i">Format</span>(
+                        <span class="i">ProgressNodeStrings</span>.<span class="i">InvisibleNodesMessagePlural</span>,
+                        <span class="r58 r">invisible</span>));
+            }
+ 
+            <span class="r59 r">result</span>.<span class="i">Add</span>(<span class="r61 r">border</span>);
+ 
+            <b>return</b> (<b>string</b>[])<span class="r59 r">result</span>.<span class="i">ToArray</span>(<b>typeof</b>(<b>string</b>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper function for Render().  Recursively renders nodes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">strings</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The rendered strings so far.  Additional rendering will be appended.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r63 r">nodes</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The nodes to be rendered.  All child nodes will also be rendered.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">indentation</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The current indentation level (in BufferCells).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r64 r">maxWidth</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum number of BufferCells that the rendering can consume, horizontally.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">rawUI</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSHostRawUserInterface used to gauge string widths in the rendering.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private
+        void</b>
+        <a id="602468e3424a8ecc" href="../../R/602468e3424a8ecc.html" target="n" data-glyph="76,1" class="i method">RenderHelper</a>(<span class="i">ArrayList</span> <span id="r62 rd" class="r62 r">strings</span>, <span class="i">ArrayList</span> <span id="r63 rd" class="r63 r">nodes</span>, <b>int</b> <span id="r60 rd" class="r60 r">indentation</span>, <b>int</b> <span id="r64 rd" class="r64 r">maxWidth</span>, <a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <span id="r65 rd" class="r65 r">rawUI</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r62 r">strings</span> != <b>null</b>, <span class="s">&quot;strings should not be null&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r63 r">nodes</span> != <b>null</b>, <span class="s">&quot;nodes should not be null&quot;</span>);
+ 
+            <b>if</b> (<span class="r63 r">nodes</span> == <b>null</b>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>foreach</b> (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r66 rd" class="r66 r">node</span> <b>in</b> <span class="r63 r">nodes</span>)
+            {
+                <b>int</b> <span id="r67 rd" class="r67 r">lines</span> = <span class="r62 r">strings</span>.<span class="i">Count</span>;
+ 
+                <span class="r66 r">node</span>.<a href="ProgressNode.cs.html#5c2b9b779e8507b1" class="i method">Render</a>(<span class="r62 r">strings</span>, <span class="r60 r">indentation</span>, <span class="r64 r">maxWidth</span>, <span class="r65 r">rawUI</span>);
+ 
+                <b>if</b> (<span class="r66 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> != <b>null</b>)
+                {
+                    <span class="c">// indent only if the rendering of node actually added lines to the strings.</span>
+ 
+                    <b>int</b> <span id="r68 rd" class="r68 r">indentationIncrement</span> = (<span class="r62 r">strings</span>.<span class="i">Count</span> &gt; <span class="r67 r">lines</span>) ? 2 : 0;
+ 
+                    <span class="i">RenderHelper</span>(<span class="r62 r">strings</span>, <span class="r66 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>, <span class="r60 r">indentation</span> + <span class="r68 r">indentationIncrement</span>, <span class="r64 r">maxWidth</span>, <span class="r65 r">rawUI</span>);
+                }
+            }
+        }
+ 
+        <b>private sealed class</b> <a id="060f464df72a73e6" href="../../R/060f464df72a73e6.html" target="n" data-glyph="4,1" class="t t">HeightTallyer</a> : <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>
+        {
+            <b>internal</b> <a id="fbc57ea0178222a3" href="../../R/fbc57ea0178222a3.html" target="n" data-glyph="74,2" class="t constructor">HeightTallyer</a>(<a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <span id="r69 rd" class="r69 r">rawUi</span>, <b>int</b> <span id="r70 rd" class="r70 r">maxHeight</span>, <b>int</b> <span id="r71 rd" class="r71 r">maxWidth</span>)
+            {
+                <a href="#759a80a2551ac2c9" class="i field">_rawUi</a> = <span class="r69 r">rawUi</span>;
+                <a href="#5d009c4edca05156" class="i field">_maxHeight</a> = <span class="r70 r">maxHeight</span>;
+                <a href="#e2fc8b9f72a4ca05" class="i field">_maxWidth</a> = <span class="r71 r">maxWidth</span>;
+            }
+ 
+            <b>internal override
+            bool</b>
+            <a id="dd90d7da1a1c539d" href="../../R/dd90d7da1a1c539d.html" target="n" data-glyph="74,2" class="i method">Visit</a>(<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r72 rd" class="r72 r">node</span>, <span class="i">ArrayList</span> <span id="r73 rd" class="r73 r">unused</span>, <b>int</b> <span id="r74 rd" class="r74 r">unusedToo</span>)
+            {
+                <a href="#a67610f8c0b1b6f9" class="i field">Tally</a> += <span class="r72 r">node</span>.<a href="ProgressNode.cs.html#e3e38c61af1f9a3e" class="i method">LinesRequiredMethod</a>(<a href="#759a80a2551ac2c9" class="i field">_rawUi</a>, <a href="#e2fc8b9f72a4ca05" class="i field">_maxWidth</a>);
+ 
+                <span class="c">// We don&#39;t need to walk all the nodes, once it&#39;s larger than the max height, we should stop</span>
+                <b>if</b> (<a href="#a67610f8c0b1b6f9" class="i field">Tally</a> &gt; <a href="#5d009c4edca05156" class="i field">_maxHeight</a>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>private readonly</b> <a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <a id="759a80a2551ac2c9" href="../../R/759a80a2551ac2c9.html" target="n" data-glyph="46,2" class="i field">_rawUi</a>;
+            <b>private readonly int</b> <a id="5d009c4edca05156" href="../../R/5d009c4edca05156.html" target="n" data-glyph="46,2" class="i field">_maxHeight</a>;
+            <b>private readonly int</b> <a id="e2fc8b9f72a4ca05" href="../../R/e2fc8b9f72a4ca05.html" target="n" data-glyph="46,2" class="i field">_maxWidth</a>;
+ 
+            <b>internal int</b> <a id="a67610f8c0b1b6f9" href="../../R/a67610f8c0b1b6f9.html" target="n" data-glyph="44,2" class="i field">Tally</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Tallies up the number of BufferCells vertically that will be required to show all the ProgressNodes in the given</span>
+        <span class="c">///</span><span class="c"> list, and all of their children.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r75 r">maxHeight</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum height (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r76 r">rawUi</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSHostRawUserInterface used to gauge string widths in the rendering.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The vertical height (in BufferCells) that will be required to show all of the nodes in the given list.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r77 r">maxWidth</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private int</b> <a id="3f5be0de6d227869" href="../../R/3f5be0de6d227869.html" target="n" data-glyph="76,1" class="i method">TallyHeight</a>(<a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <span id="r76 rd" class="r76 r">rawUi</span>, <b>int</b> <span id="r75 rd" class="r75 r">maxHeight</span>, <b>int</b> <span id="r77 rd" class="r77 r">maxWidth</span>)
+        {
+            <a href="#060f464df72a73e6" class="t t">HeightTallyer</a> <span id="r78 rd" class="r78 r">ht</span> = <b>new</b> <a href="#fbc57ea0178222a3" class="t constructor">HeightTallyer</a>(<span class="r76 r">rawUi</span>, <span class="r75 r">maxHeight</span>, <span class="r77 r">maxWidth</span>);
+            <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>.<a href="#93139fd49565f4ee" class="i method">VisitNodes</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r78 r">ht</span>);
+            <b>return</b> <span class="r78 r">ht</span>.<a href="#a67610f8c0b1b6f9" class="i field">Tally</a>;
+        }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">DEBUG</span> || <span class="i">ASSERTIONS_TRACE</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Debugging code.  Verifies that all of the nodes in the given list have the given style.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">nodes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">style</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private
+        bool</b>
+        <a id="faed9c28bc1d4bcf" href="../../R/faed9c28bc1d4bcf.html" target="n" data-glyph="76,1" class="i method">AllNodesHaveGivenStyle</a>(<span class="i">ArrayList</span> <span id="r79 rd" class="r79 r">nodes</span>, <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a> <span id="r80 rd" class="r80 r">style</span>)
+        {
+            <b>if</b> (<span class="r79 r">nodes</span> == <b>null</b>)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>for</b> (<b>int</b> <span id="r81 rd" class="r81 r">i</span> = 0; <span class="r81 r">i</span> &lt; <span class="r79 r">nodes</span>.<span class="i">Count</span>; ++<span class="r81 r">i</span>)
+            {
+                <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r82 rd" class="r82 r">node</span> = (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>)<span class="r79 r">nodes</span>[<span class="r81 r">i</span>];
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r82 r">node</span> != <b>null</b>, <span class="s">&quot;nodes should not contain null elements&quot;</span>);
+ 
+                <b>if</b> (<span class="r82 r">node</span>.<a href="ProgressNode.cs.html#e0a8cd20c1ddf4d4" class="i field">Style</a> != <span class="r80 r">style</span>)
+                {
+                    <b>return</b> <b>false</b>;
+                }
+ 
+                <b>if</b> (<span class="r82 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> != <b>null</b>)
+                {
+                    <b>if</b> (!<a href="#faed9c28bc1d4bcf" class="i method">AllNodesHaveGivenStyle</a>(<span class="r82 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>, <span class="r80 r">style</span>))
+                    {
+                        <b>return</b> <b>false</b>;
+                    }
+                }
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Debugging code. NodeVisitor that counts up the number of nodes in the tree.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private
+        class</b>
+        <a id="918910609cde9032" href="../../R/918910609cde9032.html" target="n" data-glyph="4,1" class="t t"><span id="e400c51bcdf6d171">CountingNodeVisitor</span></a> : <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>
+        {
+            <b>internal override
+            bool</b>
+            <a id="80ec198827e1e2d1" href="../../R/80ec198827e1e2d1.html" target="n" data-glyph="74,2" class="i method">Visit</a>(<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r83 rd" class="r83 r">unused</span>, <span class="i">ArrayList</span> <span id="r84 rd" class="r84 r">unusedToo</span>, <b>int</b> <span id="r85 rd" class="r85 r">unusedThree</span>)
+            {
+                ++<a href="#80c550a3adf9dc74" class="i field">Count</a>;
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>internal
+            int</b>
+            <a id="80c550a3adf9dc74" href="../../R/80c550a3adf9dc74.html" target="n" data-glyph="44,2" class="i field">Count</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Debugging code.  Counts the number of nodes in the tree of nodes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The number of nodes in the tree.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private
+        int</b>
+        <a id="efa58c6f24dd8dff" href="../../R/efa58c6f24dd8dff.html" target="n" data-glyph="76,1" class="i method">CountNodes</a>()
+        {
+            <a href="#918910609cde9032" class="t t">CountingNodeVisitor</a> <span id="r86 rd" class="r86 r">cnv</span> = <b>new</b> <span class="t">CountingNodeVisitor</span>();
+            <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a>.<a href="#93139fd49565f4ee" class="i method">VisitNodes</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r86 r">cnv</span>);
+            <b>return</b> <span class="r86 r">cnv</span>.<a href="#80c550a3adf9dc74" class="i field">Count</a>;
+        }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper function to CompressToFit.  Considers compressing nodes from one level to another.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r87 r">rawUi</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSHostRawUserInterface used to gauge string widths in the rendering.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r88 r">maxHeight</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum height (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r89 r">maxWidth</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum width (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">nodesCompressed</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Receives the number of nodes that were compressed. If the result of the method is false, then this will be the total</span>
+        <span class="c">///</span><span class="c"> number of nodes being tracked (i.e. all of them will have been compressed).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r91 r">priorStyle</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The rendering style (e.g. &quot;compression level&quot;) that the nodes are expected to currently have.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r92 r">newStyle</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The new rendering style that a node will have when it is compressed. If the result of the method is false, then all</span>
+        <span class="c">///</span><span class="c"> nodes will have this rendering style.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true to indicate that the nodes are compressed to the point that their rendering will fit within the constraint, or</span>
+        <span class="c">///</span><span class="c"> false to indicate that all of the nodes are compressed to a given level, but that the rendering still can&#39;t fit</span>
+        <span class="c">///</span><span class="c"> within the constraint.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private
+        bool</b>
+        <a id="224a655fe669c47f" href="../../R/224a655fe669c47f.html" target="n" data-glyph="76,1" class="i method">CompressToFitHelper</a>(
+            <a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <span id="r87 rd" class="r87 r">rawUi</span>,
+            <b>int</b> <span id="r88 rd" class="r88 r">maxHeight</span>,
+            <b>int</b> <span id="r89 rd" class="r89 r">maxWidth</span>,
+            <b>out int</b> <span id="r90 rd" class="r90 r">nodesCompressed</span>,
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a> <span id="r91 rd" class="r91 r">priorStyle</span>,
+            <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a> <span id="r92 rd" class="r92 r">newStyle</span>)
+        {
+            <span class="r90 r">nodesCompressed</span> = 0;
+ 
+            <b>while</b> (<b>true</b>)
+            {
+                <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r93 rd" class="r93 r">node</span> = <a href="#a056acd39c39561b" class="i method">FindOldestNodeOfGivenStyle</a>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a>, <span class="r45 r">oldestSoFar</span>: 0, <span class="r91 r">priorStyle</span>);
+                <b>if</b> (<span class="r93 r">node</span> == <b>null</b>)
+                {
+                    <span class="c">// We&#39;ve compressed every node of the prior style already.</span>
+ 
+                    <b>break</b>;
+                }
+ 
+                <span class="r93 r">node</span>.<a href="ProgressNode.cs.html#e0a8cd20c1ddf4d4" class="i field">Style</a> = <span class="r92 r">newStyle</span>;
+                ++<span class="r90 r">nodesCompressed</span>;
+                <b>if</b> (<a href="#3f5be0de6d227869" class="i method">TallyHeight</a>(<span class="r87 r">rawUi</span>, <span class="r88 r">maxHeight</span>, <span class="r89 r">maxWidth</span>) &lt;= <span class="r88 r">maxHeight</span>)
+                {
+                    <b>return</b> <b>true</b>;
+                }
+            }
+ 
+            <span class="c">// If we get all the way to here, then we&#39;ve compressed all the nodes and we still don&#39;t fit.</span>
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> &quot;Compresses&quot; the nodes representing the outstanding progress activities until their rendering will fit within a</span>
+        <span class="c">///</span><span class="c"> &quot;given height, or until they are compressed to a given level.  The oldest nodes are compressed first.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> This is a 4-stage process -- from least compressed to &quot;invisible&quot;.  At each stage we find the oldest nodes in the</span>
+        <span class="c">///</span><span class="c"> tree and change their rendering style to a more compact style.  As soon as the rendering of the nodes will fit within</span>
+        <span class="c">///</span><span class="c"> the maxHeight, we stop.  The result is that the most recent nodes will be the least compressed, the idea being that</span>
+        <span class="c">///</span><span class="c"> the rendering should show the most recently updated activities with the most complete rendering for them possible.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r94 r">rawUi</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSHostRawUserInterface used to gauge string widths in the rendering.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r95 r">maxHeight</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum height (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r96 r">maxWidth</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum width (in BufferCells) that the rendering may consume.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The number of nodes that were made invisible during the compression.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private
+        int</b>
+        <a id="8ae8f9c06000a539" href="../../R/8ae8f9c06000a539.html" target="n" data-glyph="76,1" class="i method">CompressToFit</a>(<a href="/System.Management.Automation/A.html#74913c6687237500" class="t t">PSHostRawUserInterface</a> <span id="r94 rd" class="r94 r">rawUi</span>, <b>int</b> <span id="r95 rd" class="r95 r">maxHeight</span>, <b>int</b> <span id="r96 rd" class="r96 r">maxWidth</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#176b2cf05ae81f4a" class="i field">_topLevelNodes</a> != <b>null</b>, <span class="s">&quot;Shouldn&#39;t need to compress if no data exists&quot;</span>);
+ 
+            <b>int</b> <span id="r97 rd" class="r97 r">nodesCompressed</span> = 0;
+ 
+            <span class="c">// This algorithm potentially makes many, many passes over the tree.  It might be possible to optimize</span>
+            <span class="c">// that some, but I&#39;m not trying to be too clever just yet.</span>
+ 
+            <b>if</b> (
+                <a href="#224a655fe669c47f" class="i method">CompressToFitHelper</a>(
+                    <span class="r94 r">rawUi</span>,
+                    <span class="r95 r">maxHeight</span>,
+                    <span class="r96 r">maxWidth</span>,
+                    <b>out</b> <span class="r97 r">nodesCompressed</span>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#2d0d71f2562b1743" class="i field">FullPlus</a>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#f01fea0f0a17adeb" class="i field">Full</a>))
+            {
+                <b>return</b> 0;
+            }
+ 
+            <b>if</b> (
+                <a href="#224a655fe669c47f" class="i method">CompressToFitHelper</a>(
+                    <span class="r94 r">rawUi</span>,
+                    <span class="r95 r">maxHeight</span>,
+                    <span class="r96 r">maxWidth</span>,
+                    <b>out</b> <span class="r97 r">nodesCompressed</span>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#f01fea0f0a17adeb" class="i field">Full</a>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#803abfda866db9ee" class="i field">Compact</a>))
+            {
+                <b>return</b> 0;
+            }
+ 
+            <b>if</b> (
+                <a href="#224a655fe669c47f" class="i method">CompressToFitHelper</a>(
+                    <span class="r94 r">rawUi</span>,
+                    <span class="r95 r">maxHeight</span>,
+                    <span class="r96 r">maxWidth</span>,
+                    <b>out</b> <span class="r97 r">nodesCompressed</span>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#803abfda866db9ee" class="i field">Compact</a>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#e1d2757f2d847fd2" class="i field">Minimal</a>))
+            {
+                <b>return</b> 0;
+            }
+ 
+            <b>if</b> (
+                <a href="#224a655fe669c47f" class="i method">CompressToFitHelper</a>(
+                    <span class="r94 r">rawUi</span>,
+                    <span class="r95 r">maxHeight</span>,
+                    <span class="r96 r">maxWidth</span>,
+                    <b>out</b> <span class="r97 r">nodesCompressed</span>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#e1d2757f2d847fd2" class="i field">Minimal</a>,
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>.<a href="ProgressNode.cs.html#f316e0b274d9a366" class="t t">RenderStyle</a>.<a href="ProgressNode.cs.html#2cbf587c96745de4" class="i field">Invisible</a>))
+            {
+                <span class="c">// The nodes that we compressed here are now invisible.</span>
+ 
+                <b>return</b> <span class="r97 r">nodesCompressed</span>;
+            }
+ 
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<b>false</b>, <span class="s">&quot;with all nodes invisible, we should never reach this point.&quot;</span>);
+ 
+            <b>return</b> 0;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> <span class="c">// Rendering Code</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Utility Code
+ 
+        <b>private abstract
+        class</b> <a id="560570e33ad1ff70" href="../../R/560570e33ad1ff70.html" target="n" data-glyph="4,1" class="t t"><span id="3889769cb6c10ae4">NodeVisitor</span></a>
+        {
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Called for each node in the tree.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r98 r">node</span><span class="c">&quot;</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> The node being visited.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r99 r">listWhereFound</span><span class="c">&quot;</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> The list in which the node resides.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r100 r">indexWhereFound</span><span class="c">&quot;</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> The index into listWhereFound of the node.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> true to continue visiting nodes, false if not.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+            <b>internal abstract
+            bool</b>
+            <a id="7a1a0cb58f9bc320" href="../../R/7a1a0cb58f9bc320.html" target="n" data-glyph="74,2" class="i method">Visit</a>(<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r98 rd" class="r98 r">node</span>, <span class="i">ArrayList</span> <span id="r99 rd" class="r99 r">listWhereFound</span>, <b>int</b> <span id="r100 rd" class="r100 r">indexWhereFound</span>);
+ 
+            <b>internal static
+            void</b>
+            <a id="93139fd49565f4ee" href="../../R/93139fd49565f4ee.html" target="n" data-glyph="74,2" class="i method">VisitNodes</a>(<span class="i">ArrayList</span> <span id="r101 rd" class="r101 r">nodes</span>, <a href="#560570e33ad1ff70" class="t t">NodeVisitor</a> <span id="r102 rd" class="r102 r">v</span>)
+            {
+                <b>if</b> (<span class="r101 r">nodes</span> == <b>null</b>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>for</b> (<b>int</b> <span id="r103 rd" class="r103 r">i</span> = 0; <span class="r103 r">i</span> &lt; <span class="r101 r">nodes</span>.<span class="i">Count</span>; ++<span class="r103 r">i</span>)
+                {
+                    <a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a> <span id="r104 rd" class="r104 r">node</span> = (<a href="ProgressNode.cs.html#6a20a1285e45ccc4" class="t t">ProgressNode</a>)<span class="r101 r">nodes</span>[<span class="r103 r">i</span>];
+                    <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r104 r">node</span> != <b>null</b>, <span class="s">&quot;nodes should not contain null elements&quot;</span>);
+ 
+                    <b>if</b> (!<span class="r102 r">v</span>.<a href="#7a1a0cb58f9bc320" class="i method">Visit</a>(<span class="r104 r">node</span>, <span class="r101 r">nodes</span>, <span class="r103 r">i</span>))
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <b>if</b> (<span class="r104 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a> != <b>null</b>)
+                    {
+                        <a href="#93139fd49565f4ee" class="i method">VisitNodes</a>(<span class="r104 r">node</span>.<a href="ProgressNode.cs.html#41bbda2b04dd427e" class="i field">Children</a>, <span class="r102 r">v</span>);
+                    }
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <b>private readonly</b> <span class="i">ArrayList</span> <a id="176b2cf05ae81f4a" href="../../R/176b2cf05ae81f4a.html" target="n" data-glyph="46,1" class="i field">_topLevelNodes</a> = <b>new</b> <span class="i">ArrayList</span>();
+        <b>private int</b> <a id="7a62f0b8fdc1042d" href="../../R/7a62f0b8fdc1042d.html" target="n" data-glyph="46,1" class="i field">_nodeCount</a>;
+ 
+        <b>private const int</b> <a id="2b1d15f4ccf43eee" href="../../R/2b1d15f4ccf43eee.html" target="n" data-glyph="10,1" class="i field">maxNodeCount</a> = 128;
+    }
+}   <span class="c">// namespace</span>
+</pre></td></tr></table></div></body></html>

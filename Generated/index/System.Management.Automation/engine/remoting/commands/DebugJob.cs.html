@@ -1,0 +1,490 @@
+﻿<!DOCTYPE html>
+<html><head><title>DebugJob.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(481);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/commands/DebugJob.cs" target="_top">engine\remoting\commands\DebugJob.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This cmdlet takes a Job object and checks to see if it is debuggable.  If it</span>
+    <span class="c">///</span><span class="c"> is debuggable then it breaks into the job debugger in step mode.  If it is not</span>
+    <span class="c">///</span><span class="c"> debuggable then it is treated as a parent job and each child job is checked if</span>
+    <span class="c">///</span><span class="c"> it is debuggable and if it is will break into its job debugger in step mode.</span>
+    <span class="c">///</span><span class="c"> For multiple debuggable child jobs, each job execution will be halted and the</span>
+    <span class="c">///</span><span class="c"> debugger will step to each job execution point sequentially.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> When a job is debugged its output data is written to host and the executing job</span>
+    <span class="c">///</span><span class="c"> script will break into the host debugger, in step mode, at the next stoppable</span>
+    <span class="c">///</span><span class="c"> execution point.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.PowerShell&quot;</span>, <span class="s">&quot;PS1012:CallShouldProcessOnlyIfDeclaringSupport&quot;</span>)]
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#98a099bbeb57da8d" class="t t">VerbsDiagnostic</a>.<a href="../../../utils/Verbs.cs.html#0a499bacf9897f91" class="i field">Debug</a>, <span class="s">&quot;Job&quot;</span>, <span class="i">SupportsShouldProcess</span> = <b>true</b>, <span class="i">DefaultParameterSetName</span> = <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#5a32e61c01db5c60" class="i field">JobParameterSet</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=330208&quot;</span>)]
+    <b>public sealed class</b> <a id="1b46d06937256c36" href="../../../R/1b46d06937256c36.html" target="n" data-glyph="0,0" class="t t"><span id="9db5ee487e2f0d89">DebugJobCommand</span></a> : <a href="../../../P/30543a6971fed1fc.html#30543a6971fed1fc" class="t t">PSCmdlet</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Strings
+ 
+        <b>private const string</b> <a id="5a32e61c01db5c60" href="../../../R/5a32e61c01db5c60.html" target="n" data-glyph="10,1" class="i field">JobParameterSet</a> = <span class="s">&quot;JobParameterSet&quot;</span>;
+        <b>private const string</b> <a id="1413784d2a88664b" href="../../../R/1413784d2a88664b.html" target="n" data-glyph="10,1" class="i field">JobNameParameterSet</a> = <span class="s">&quot;JobNameParameterSet&quot;</span>;
+        <b>private const string</b> <a id="9716cafe9942b201" href="../../../R/9716cafe9942b201.html" target="n" data-glyph="10,1" class="i field">JobIdParameterSet</a> = <span class="s">&quot;JobIdParameterSet&quot;</span>;
+        <b>private const string</b> <a id="1e1b35772551b909" href="../../../R/1e1b35772551b909.html" target="n" data-glyph="10,1" class="i field">JobInstanceIdParameterSet</a> = <span class="s">&quot;JobInstanceIdParameterSet&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private members
+ 
+        <b>private</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="1044d1eb89453dcd" href="../../../R/1044d1eb89453dcd.html" target="n" data-glyph="46,1" class="i field">_job</a>;
+        <b>private</b> <a href="../../debugger/debugger.cs.html#9e8f0b396592e65c" class="t t">Debugger</a> <a id="0e691169b63f1fcf" href="../../../R/0e691169b63f1fcf.html" target="n" data-glyph="46,1" class="i field">_debugger</a>;
+        <b>private</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <a id="36f5b2a0db958fc2" href="../../../R/36f5b2a0db958fc2.html" target="n" data-glyph="46,1" class="i field">_debugCollection</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Job object to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#5a32e61c01db5c60" class="i field">JobParameterSet</a>)]
+        <b>public</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="3b99dce805b35dc9" href="../../../R/3b99dce805b35dc9.html" target="n" data-glyph="102,1" class="i property">Job</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Job object name to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#1413784d2a88664b" class="i field">JobNameParameterSet</a>)]
+        <b>public string</b> <a id="af4f3417f0e96ced" href="../../../R/af4f3417f0e96ced.html" target="n" data-glyph="102,1" class="i property">Name</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Job object Id to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#9716cafe9942b201" class="i field">JobIdParameterSet</a>)]
+        <b>public int</b> <a id="6bd0c7d574bfd14c" href="../../../R/6bd0c7d574bfd14c.html" target="n" data-glyph="102,1" class="i property">Id</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Job object InstanceId to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#1e1b35772551b909" class="i field">JobInstanceIdParameterSet</a>)]
+        <b>public</b> <span class="i">Guid</span> <a id="ce5c5f958b4a44ae" href="../../../R/ce5c5f958b4a44ae.html" target="n" data-glyph="102,1" class="i property">InstanceId</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets a flag that tells PowerShell to automatically perform a BreakAll when the debugger is attached to the remote target.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="62ea624eac26ef1c" href="../../../R/62ea624eac26ef1c.html" target="n" data-glyph="102,1" class="i property">BreakAll</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> End processing.  Do work.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="3657d3dcb61ac7f3" href="../../../R/3657d3dcb61ac7f3.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+            {
+                <b>case</b> <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#5a32e61c01db5c60" class="i field">JobParameterSet</a>:
+                    <a href="#1044d1eb89453dcd" class="i field">_job</a> = <a href="#3b99dce805b35dc9" class="i property">Job</a>;
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#1413784d2a88664b" class="i field">JobNameParameterSet</a>:
+                    <a href="#1044d1eb89453dcd" class="i field">_job</a> = <a href="#ac4fd528682aa979" class="i method">GetJobByName</a>(<a href="#af4f3417f0e96ced" class="i property">Name</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#9716cafe9942b201" class="i field">JobIdParameterSet</a>:
+                    <a href="#1044d1eb89453dcd" class="i field">_job</a> = <a href="#3b6877802c49b9da" class="i method">GetJobById</a>(<a href="#6bd0c7d574bfd14c" class="i property">Id</a>);
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#1b46d06937256c36" class="t t">DebugJobCommand</a>.<a href="#1e1b35772551b909" class="i field">JobInstanceIdParameterSet</a>:
+                    <a href="#1044d1eb89453dcd" class="i field">_job</a> = <a href="#2e0906d60adea90b" class="i method">GetJobByInstanceId</a>(<a href="#ce5c5f958b4a44ae" class="i property">InstanceId</a>);
+                    <b>break</b>;
+            }
+ 
+            <b>if</b> (!<a href="../../cmdlet.cs.html#5f125d2ab6d0970d" class="i method">ShouldProcess</a>(<a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#6332c7ef857bb146" class="i property">Name</a>, <a href="../../../utils/Verbs.cs.html#98a099bbeb57da8d" class="t t">VerbsDiagnostic</a>.<a href="../../../utils/Verbs.cs.html#0a499bacf9897f91" class="i field">Debug</a>))
+            {
+                <b>return</b>;
+            }
+ 
+            <a href="../../hostifaces/Connection.cs.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r0 rd" class="r0 r">runspace</span> = <a href="../../../P/6fffd57173d247a6.html#6fffd57173d247a6" class="t t">LocalRunspace</a>.<a href="../../hostifaces/Connection.cs.html#efcd2ba43103de17" class="i property">DefaultRunspace</a>;
+            <b>if</b> (<span class="r0 r">runspace</span> == <b>null</b> || <span class="r0 r">runspace</span>.<a href="../../hostifaces/Connection.cs.html#d6610640d00b19f5" class="i property">Debugger</a> == <b>null</b>)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotDebugJobNoHostDebugger</span>),
+                        <span class="s">&quot;DebugJobNoHostDebugger&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+            }
+ 
+            <b>if</b> ((<span class="r0 r">runspace</span>.<a href="../../hostifaces/Connection.cs.html#d6610640d00b19f5" class="i property">Debugger</a>.<a href="../../debugger/debugger.cs.html#cb370f0b35bef91f" class="i property">DebugMode</a> == <a href="../../debugger/debugger.cs.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="../../debugger/debugger.cs.html#cb8333d199605cfe" class="i field">Default</a>) || (<span class="r0 r">runspace</span>.<a href="../../hostifaces/Connection.cs.html#d6610640d00b19f5" class="i property">Debugger</a>.<a href="../../debugger/debugger.cs.html#cb370f0b35bef91f" class="i property">DebugMode</a> == <a href="../../debugger/debugger.cs.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="../../debugger/debugger.cs.html#a52ed56edd63c7ff" class="i field">None</a>))
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotDebugJobInvalidDebuggerMode</span>),
+                        <span class="s">&quot;DebugJobWrongDebugMode&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+            }
+ 
+            <b>if</b> (<a href="#1b46d06937256c36" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a> == <b>null</b> || <a href="#1b46d06937256c36" class="k">this</a>.<a href="../../CommandBase.cs.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="../../hostifaces/MshHost.cs.html#f3c3c89a5e9dd42a" class="i property">UI</a> == <b>null</b>)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotDebugJobNoHostUI</span>),
+                        <span class="s">&quot;DebugJobNoHostAvailable&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+            }
+ 
+            <b>if</b> (!<a href="#95268a2ff9ce4b18" class="i method">CheckForDebuggableJob</a>())
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<span class="i">DebuggerStrings</span>.<span class="i">NoDebuggableJobsFound</span>),
+                        <span class="s">&quot;DebugJobNoDebuggableJobsFound&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+            }
+ 
+            <span class="c">// Set up host script debugger to debug the job.</span>
+            <a href="#0e691169b63f1fcf" class="i field">_debugger</a> = <span class="r0 r">runspace</span>.<a href="../../hostifaces/Connection.cs.html#d6610640d00b19f5" class="i property">Debugger</a>;
+            <a href="#0e691169b63f1fcf" class="i field">_debugger</a>.<a href="../../debugger/debugger.cs.html#8291d202d10ef146" class="i method">DebugJob</a>(<a href="#1044d1eb89453dcd" class="i field">_job</a>, <span class="r1 r">breakAll</span>: <a href="#62ea624eac26ef1c" class="i property">BreakAll</a>);
+ 
+            <span class="c">// Blocking call.  Send job output to host UI while debugging and wait for Job completion.</span>
+            <a href="#57022f6c27523bfb" class="i method">WaitAndReceiveJobOutput</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Stop processing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="a8bb8b15d0264bd5" href="../../../R/a8bb8b15d0264bd5.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <span class="c">// Cancel job debugging.</span>
+            <a href="../../debugger/debugger.cs.html#9e8f0b396592e65c" class="t t">Debugger</a> <span id="r2 rd" class="r2 r">debugger</span> = <a href="#0e691169b63f1fcf" class="i field">_debugger</a>;
+            <b>if</b> ((<span class="r2 r">debugger</span> != <b>null</b>) &amp;&amp; (<a href="#1044d1eb89453dcd" class="i field">_job</a> != <b>null</b>))
+            {
+                <span class="r2 r">debugger</span>.<a href="../../debugger/debugger.cs.html#b20cae9c467a1579" class="i method">StopDebugJob</a>(<a href="#1044d1eb89453dcd" class="i field">_job</a>);
+            }
+ 
+            <span class="c">// Unblock the data collection.</span>
+            <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <span id="r3 rd" class="r3 r">debugCollection</span> = <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a>;
+            <b>if</b> (<span class="r3 r">debugCollection</span> != <b>null</b>)
+            {
+                <span class="r3 r">debugCollection</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check for debuggable job.  Job must implement IJobDebugger and also</span>
+        <span class="c">///</span><span class="c"> must be running or in Debug stopped state.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="95268a2ff9ce4b18" href="../../../R/95268a2ff9ce4b18.html" target="n" data-glyph="76,1" class="i method">CheckForDebuggableJob</a>()
+        {
+            <span class="c">// Check passed in job object.</span>
+            <b>bool</b> <span id="r4 rd" class="r4 r">debuggableJobFound</span> = <a href="#8403f6d7f0d0af51" class="i method">GetJobDebuggable</a>(<a href="#1044d1eb89453dcd" class="i field">_job</a>);
+ 
+            <b>if</b> (!<span class="r4 r">debuggableJobFound</span>)
+            {
+                <span class="c">// Assume passed in job is a container job and check child jobs.</span>
+                <b>foreach</b> (<b>var</b> <span id="r5 rd" class="r5 r">cJob</span> <b>in</b> <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>)
+                {
+                    <span class="r4 r">debuggableJobFound</span> = <span class="i">GetJobDebuggable</span>(<span class="r5 r">cJob</span>);
+                    <b>if</b> (<span class="r4 r">debuggableJobFound</span>) { <b>break</b>; }
+                }
+            }
+ 
+            <b>return</b> <span class="r4 r">debuggableJobFound</span>;
+        }
+ 
+        <b>private static bool</b> <a id="8403f6d7f0d0af51" href="../../../R/8403f6d7f0d0af51.html" target="n" data-glyph="76,1" class="i method">GetJobDebuggable</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r6 rd" class="r6 r">job</span>)
+        {
+            <b>if</b> (<span class="r6 r">job</span> <b>is</b> <a href="../client/Job.cs.html#0a5020043aef4132" class="t t">IJobDebugger</a>)
+            {
+                <b>return</b> ((<span class="r6 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a>) ||
+                        (<span class="r6 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#3a538a4d2b74d6fc" class="i field">AtBreakpoint</a>));
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>private void</b> <a id="57022f6c27523bfb" href="../../../R/57022f6c27523bfb.html" target="n" data-glyph="76,1" class="i method">WaitAndReceiveJobOutput</a>()
+        {
+            <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a> = <b>new</b> <a href="../../hostifaces/PSDataCollection.cs.html#ee85ce3306fe4e5b" class="t constructor">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;();
+            <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#f0c555b53469e3b8" class="i property">BlockingEnumerator</a> = <b>true</b>;
+ 
+            <b>try</b>
+            {
+                <a href="#ce3701d39c8f0d8a" class="i method">AddEventHandlers</a>();
+ 
+                <span class="c">// This call blocks (blocking enumerator) until the job completes</span>
+                <span class="c">// or this command is cancelled.</span>
+                <b>foreach</b> (<b>var</b> <span id="r7 rd" class="r7 r">streamItem</span> <b>in</b> <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a>)
+                {
+                    <b>if</b> (<span class="r7 r">streamItem</span> != <b>null</b>)
+                    {
+                        <span class="r7 r">streamItem</span>.<span class="i">WriteStreamObject</span>(<a href="#1b46d06937256c36" class="k">this</a>);
+                    }
+                }
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <span class="c">// Terminate job on exception.</span>
+                <b>if</b> (!<a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+                {
+                    <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#5e60404c217f5d42" class="i method">StopJob</a>();
+                }
+ 
+                <b>throw</b>;
+            }
+            <b>finally</b>
+            {
+                <a href="#7838b7795453944f" class="i method">RemoveEventHandlers</a>();
+                <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a> = <b>null</b>;
+            }
+        }
+ 
+        <b>private void</b> <a id="cced1460666611c5" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleJobStateChangedEvent</a>(<b>object</b> <span id="r8 rd" class="r8 r">sender</span>, <a href="../client/Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r9 rd" class="r9 r">stateChangedArgs</span>)
+        {
+            <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r10 rd" class="r10 r">job</span> = <span class="r8 r">sender</span> <b>as</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>;
+            <b>if</b> (<span class="r10 r">job</span>.<a href="../client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r9 r">stateChangedArgs</span>.<a href="../client/Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+            {
+                <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+            }
+        }
+ 
+        <b>private void</b> <a id="92beeac53058e31a" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleResultsDataAdding</a>(<b>object</b> <span id="r11 rd" class="r11 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#3298844a15d33a53" class="t t">DataAddingEventArgs</a> <span id="r12 rd" class="r12 r">dataAddingArgs</span>)
+        {
+            <b>if</b> (<a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>)
+            {
+                <a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r13 rd" class="r13 r">streamObject</span> = <span class="r12 r">dataAddingArgs</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0f4cac2293a87d1a" class="i property">ItemAdded</a> <b>as</b> <a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>;
+                <b>if</b> (<span class="r13 r">streamObject</span> != <b>null</b>)
+                {
+                    <b>try</b>
+                    {
+                        <a href="#36f5b2a0db958fc2" class="i field">_debugCollection</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<span class="r13 r">streamObject</span>);
+                    }
+                    <b>catch</b> (<a href="../../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a>) { }
+                }
+            }
+        }
+ 
+        <b>private void</b> <a id="e8f9eba423e3d77d" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleDebuggerNestedDebuggingCancelledEvent</a>(<b>object</b> <span id="r14 rd" class="r14 r">sender</span>, <span class="i">EventArgs</span> <span id="r15 rd" class="r15 r">e</span>)
+        {
+            <a href="#a8bb8b15d0264bd5" class="i method">StopProcessing</a>();
+        }
+ 
+        <b>private void</b> <a id="ce3701d39c8f0d8a" href="../../../R/ce3701d39c8f0d8a.html" target="n" data-glyph="76,1" class="i method">AddEventHandlers</a>()
+        {
+            <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> += <span class="i">HandleJobStateChangedEvent</span>;
+            <a href="#0e691169b63f1fcf" class="i field">_debugger</a>.<a href="../../debugger/debugger.cs.html#7269ef04c257bd3a" class="i">NestedDebuggingCancelledEvent</a> += <span class="i">HandleDebuggerNestedDebuggingCancelledEvent</span>;
+ 
+            <b>if</b> (<a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>.<span class="i">Count</span> == 0)
+            {
+                <span class="c">// No child jobs, monitor this job&#39;s results collection.</span>
+                <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#43aaeadedbd395cd" class="i">DataAdding</a> += <span class="i">HandleResultsDataAdding</span>;
+            }
+            <b>else</b>
+            {
+                <span class="c">// Monitor each child job&#39;s results collections.</span>
+                <b>foreach</b> (<b>var</b> <span id="r16 rd" class="r16 r">childJob</span> <b>in</b> <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>)
+                {
+                    <span class="r16 r">childJob</span>.<span class="i">Results</span>.<span class="i">DataAdding</span> += <span class="i">HandleResultsDataAdding</span>;
+                }
+            }
+        }
+ 
+        <b>private void</b> <a id="7838b7795453944f" href="../../../R/7838b7795453944f.html" target="n" data-glyph="76,1" class="i method">RemoveEventHandlers</a>()
+        {
+            <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <span class="i">HandleJobStateChangedEvent</span>;
+            <a href="#0e691169b63f1fcf" class="i field">_debugger</a>.<a href="../../debugger/debugger.cs.html#7269ef04c257bd3a" class="i">NestedDebuggingCancelledEvent</a> -= <span class="i">HandleDebuggerNestedDebuggingCancelledEvent</span>;
+ 
+            <b>if</b> (<a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>.<span class="i">Count</span> == 0)
+            {
+                <span class="c">// Remove single job DataAdding event handler.</span>
+                <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#43aaeadedbd395cd" class="i">DataAdding</a> -= <span class="i">HandleResultsDataAdding</span>;
+            }
+            <b>else</b>
+            {
+                <span class="c">// Remove each child job&#39;s DataAdding event handler.</span>
+                <b>foreach</b> (<b>var</b> <span id="r17 rd" class="r17 r">childJob</span> <b>in</b> <a href="#1044d1eb89453dcd" class="i field">_job</a>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>)
+                {
+                    <span class="r17 r">childJob</span>.<span class="i">Results</span>.<span class="i">DataAdding</span> -= <span class="i">HandleResultsDataAdding</span>;
+                }
+            }
+        }
+ 
+        <b>private</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="ac4fd528682aa979" href="../../../R/ac4fd528682aa979.html" target="n" data-glyph="76,1" class="i method">GetJobByName</a>(<b>string</b> <span id="r18 rd" class="r18 r">name</span>)
+        {
+            <span class="c">// Search jobs in job repository.</span>
+            <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r19 rd" class="r19 r">jobs1</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;();
+            <a href="../../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a> <span id="r20 rd" class="r20 r">pattern</span> =
+                <a href="../../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a>.<a href="../../regex.cs.html#03cc3ceece086129" class="i method">Get</a>(<span class="r18 r">name</span>, <a href="../../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../../regex.cs.html#2d0521a6986208d3" class="i field">IgnoreCase</a> | <a href="../../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../../regex.cs.html#e7978967739ff542" class="i field">Compiled</a>);
+ 
+            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r21 rd" class="r21 r">job</span> <b>in</b> <a href="../../CommandBase.cs.html#025e5235224e3234" class="i property">JobRepository</a>.<a href="JobRepository.cs.html#2d8e4e2819a2e8c8" class="i property">Jobs</a>)
+            {
+                <b>if</b> (<span class="r20 r">pattern</span>.<a href="../../regex.cs.html#02e7d1c913f3c256" class="i method">IsMatch</a>(<span class="r21 r">job</span>.<a href="../client/Job.cs.html#6332c7ef857bb146" class="i property">Name</a>))
+                {
+                    <span class="r19 r">jobs1</span>.<span class="i">Add</span>(<span class="r21 r">job</span>);
+                }
+            }
+ 
+            <span class="c">// Search jobs in job manager.</span>
+            <span class="i">List</span>&lt;<a href="../client/Job2.cs.html#f76d5e2b49661689" class="t t">Job2</a>&gt; <span id="r22 rd" class="r22 r">jobs2</span> = <a href="../../CommandBase.cs.html#902d53f2bbe4f061" class="i property">JobManager</a>.<a href="../client/JobManager.cs.html#bdf47cd16272cc69" class="i method">GetJobsByName</a>(<span class="r18 r">name</span>, <a href="#1b46d06937256c36" class="k">this</a>, <b>false</b>, <b>false</b>, <b>false</b>, <b>null</b>);
+ 
+            <b>int</b> <span id="r23 rd" class="r23 r">jobCount</span> = <span class="r19 r">jobs1</span>.<span class="i">Count</span> + <span class="r22 r">jobs2</span>.<span class="i">Count</span>;
+            <b>if</b> (<span class="r23 r">jobCount</span> == 1)
+            {
+                <b>return</b> (<span class="r19 r">jobs1</span>.<span class="i">Count</span> &gt; 0) ? <span class="r19 r">jobs1</span>[0] : <span class="r22 r">jobs2</span>[0];
+            }
+ 
+            <b>if</b> (<span class="r23 r">jobCount</span> &gt; 1)
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">FoundMultipleJobsWithName</span>, <span class="r18 r">name</span>)),
+                        <span class="s">&quot;DebugJobFoundMultipleJobsWithName&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+ 
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                <b>new</b> <span class="t">ErrorRecord</span>(
+                    <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotFindJobWithName</span>, <span class="r18 r">name</span>)),
+                    <span class="s">&quot;DebugJobCannotFindJobWithName&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <a href="#1b46d06937256c36" class="k">this</a>)
+                );
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <b>private</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="3b6877802c49b9da" href="../../../R/3b6877802c49b9da.html" target="n" data-glyph="76,1" class="i method">GetJobById</a>(<b>int</b> <span id="r24 rd" class="r24 r">id</span>)
+        {
+            <span class="c">// Search jobs in job repository.</span>
+            <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r25 rd" class="r25 r">jobs1</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;();
+            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r26 rd" class="r26 r">job</span> <b>in</b> <a href="../../CommandBase.cs.html#025e5235224e3234" class="i property">JobRepository</a>.<a href="JobRepository.cs.html#2d8e4e2819a2e8c8" class="i property">Jobs</a>)
+            {
+                <b>if</b> (<span class="r26 r">job</span>.<a href="../client/Job.cs.html#aa91c39ac1b0bcec" class="i property">Id</a> == <span class="r24 r">id</span>)
+                {
+                    <span class="r25 r">jobs1</span>.<span class="i">Add</span>(<span class="r26 r">job</span>);
+                }
+            }
+ 
+            <span class="c">// Search jobs in job manager.</span>
+            <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r27 rd" class="r27 r">job2</span> = <a href="../../CommandBase.cs.html#902d53f2bbe4f061" class="i property">JobManager</a>.<a href="../client/JobManager.cs.html#b0cf5367ed4b0c54" class="i method">GetJobById</a>(<span class="r24 r">id</span>, <a href="#1b46d06937256c36" class="k">this</a>, <b>false</b>, <b>false</b>, <b>false</b>);
+ 
+            <b>if</b> ((<span class="r25 r">jobs1</span>.<span class="i">Count</span> == 0) &amp;&amp; (<span class="r27 r">job2</span> == <b>null</b>))
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotFindJobWithId</span>, <span class="r24 r">id</span>)),
+                        <span class="s">&quot;DebugJobCannotFindJobWithId&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+ 
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>if</b> ((<span class="r25 r">jobs1</span>.<span class="i">Count</span> &gt; 1) ||
+                (<span class="r25 r">jobs1</span>.<span class="i">Count</span> == 1) &amp;&amp; (<span class="r27 r">job2</span> != <b>null</b>))
+            {
+                <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">FoundMultipleJobsWithId</span>, <span class="r24 r">id</span>)),
+                        <span class="s">&quot;DebugJobFoundMultipleJobsWithId&quot;</span>,
+                        <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#1b46d06937256c36" class="k">this</a>)
+                    );
+ 
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>return</b> (<span class="r25 r">jobs1</span>.<span class="i">Count</span> &gt; 0) ? <span class="r25 r">jobs1</span>[0] : <span class="r27 r">job2</span>;
+        }
+ 
+        <b>private</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <a id="2e0906d60adea90b" href="../../../R/2e0906d60adea90b.html" target="n" data-glyph="76,1" class="i method">GetJobByInstanceId</a>(<span class="i">Guid</span> <span id="r28 rd" class="r28 r">instanceId</span>)
+        {
+            <span class="c">// Search jobs in job repository.</span>
+            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r29 rd" class="r29 r">job</span> <b>in</b> <a href="../../CommandBase.cs.html#025e5235224e3234" class="i property">JobRepository</a>.<a href="JobRepository.cs.html#2d8e4e2819a2e8c8" class="i property">Jobs</a>)
+            {
+                <b>if</b> (<span class="r29 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a> == <span class="r28 r">instanceId</span>)
+                {
+                    <b>return</b> <span class="r29 r">job</span>;
+                }
+            }
+ 
+            <span class="c">// Search jobs in job manager.</span>
+            <a href="../client/Job2.cs.html#f76d5e2b49661689" class="t t">Job2</a> <span id="r30 rd" class="r30 r">job2</span> = <a href="../../CommandBase.cs.html#902d53f2bbe4f061" class="i property">JobManager</a>.<a href="../client/JobManager.cs.html#1665cfdaa5d31251" class="i method">GetJobByInstanceId</a>(<span class="r28 r">instanceId</span>, <a href="#1b46d06937256c36" class="k">this</a>, <b>false</b>, <b>false</b>, <b>false</b>);
+            <b>if</b> (<span class="r30 r">job2</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r30 r">job2</span>;
+            }
+ 
+            <a href="../../cmdlet.cs.html#e3346d70990a1763" class="i method">ThrowTerminatingError</a>(
+                <b>new</b> <span class="t">ErrorRecord</span>(
+                    <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotFindJobWithInstanceId</span>, <span class="r28 r">instanceId</span>)),
+                    <span class="s">&quot;DebugJobCannotFindJobWithInstanceId&quot;</span>,
+                    <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                    <a href="#1b46d06937256c36" class="k">this</a>)
+                );
+ 
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

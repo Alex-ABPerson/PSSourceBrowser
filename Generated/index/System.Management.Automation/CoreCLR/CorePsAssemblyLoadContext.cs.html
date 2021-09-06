@@ -1,0 +1,631 @@
+﻿<!DOCTYPE html>
+<html><head><title>CorePsAssemblyLoadContext.cs</title><link rel="stylesheet" href="../../styles.css"><script src="../../scripts.js"></script></head>
+<body class="cB" onload="i(622);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/CoreCLR/CorePsAssemblyLoadContext.cs" target="_top">CoreCLR\CorePsAssemblyLoadContext.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">Loader</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> The powershell custom AssemblyLoadContext implementation.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed</b> <b>partial</b> <b>class</b> <a id="606826c84576695c" href="../R/606826c84576695c.html" target="n" data-glyph="2,0" class="t t">PowerShellAssemblyLoadContext</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Resource_Strings
+ 
+        <span class="c">// We cannot use a satellite resources.dll to store resource strings for Microsoft.PowerShell.CoreCLR.AssemblyLoadContext.dll. This is because when retrieving resource strings, ResourceManager</span>
+        <span class="c">// tries to load the satellite resources.dll using a probing approach, which will cause an infinite loop to PowerShellAssemblyLoadContext.Load(AssemblyName).</span>
+        <span class="c">// Take the &#39;en-US&#39; culture as an example. When retrieving resource string to construct an exception, ResourceManager calls Assembly.Load(..) in the following order to load the resource dll:</span>
+        <span class="c">//     1. Load assembly with culture &#39;en-US&#39; (Microsoft.PowerShell.CoreCLR.AssemblyLoadContext.resources, Version=3.0.0.0, Culture=en-US, PublicKeyToken=31bf3856ad364e35)</span>
+        <span class="c">//     2. Load assembly with culture &#39;en&#39;    (Microsoft.PowerShell.CoreCLR.AssemblyLoadContext.resources, Version=3.0.0.0, Culture=en, PublicKeyToken=31bf3856ad364e35)</span>
+        <span class="c">// When the first attempt fails, we again need to retrieve the resource string to construct another exception, which ends up with an infinite loop.</span>
+        <b>private const string</b> <a id="2d57f8a42d3dda75" href="../R/2d57f8a42d3dda75.html" target="n" data-glyph="10,1" class="i field">BaseFolderDoesNotExist</a> = <span class="s">&quot;The base directory &#39;{0}&#39; does not exist.&quot;</span>;
+        <b>private const string</b> <a id="25b778b847db46a0" href="../R/25b778b847db46a0.html" target="n" data-glyph="10,1" class="i field">ManifestDefinitionDoesNotMatch</a> = <span class="s">&quot;Could not load file or assembly &#39;{0}&#39; or one of its dependencies. The located assembly&#39;s manifest definition does not match the assembly reference.&quot;</span>;
+        <b>private const string</b> <a id="401a0bee71b07315" href="../R/401a0bee71b07315.html" target="n" data-glyph="10,1" class="i field">SingletonAlreadyInitialized</a> = <span class="s">&quot;The singleton of PowerShellAssemblyLoadContext has already been initialized.&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Resource_Strings
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Initialize a singleton of PowerShellAssemblyLoadContext.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="#606826c84576695c" class="t t">PowerShellAssemblyLoadContext</a> <a id="e9ad779e132ba23b" href="../R/e9ad779e132ba23b.html" target="n" data-glyph="74,1" class="i method">InitializeSingleton</a>(<b>string</b> <span id="r0 rd" class="r0 r">basePaths</span>)
+        {
+            <b>lock</b> (<a href="#76dea80ab2802e7b" class="i field">s_syncObj</a>)
+            {
+                <b>if</b> (<a href="#c616e674431e58cb" class="i property">Instance</a> != <b>null</b>)
+                {
+                    <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<a href="#401a0bee71b07315" class="i field">SingletonAlreadyInitialized</a>);
+                }
+ 
+                <a href="#c616e674431e58cb" class="i property">Instance</a> = <b>new</b> <a href="#370fc17684e27947" class="t constructor">PowerShellAssemblyLoadContext</a>(<span class="r0 r">basePaths</span>);
+                <b>return</b> <a href="#c616e674431e58cb" class="i property">Instance</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">basePaths</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Base directory paths that are separated by semicolon &#39;;&#39;. They will be the default paths to probe assemblies.</span>
+        <span class="c">///</span><span class="c"> The passed-in argument could be null or an empty string, in which case there is no default paths to probe assemblies.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private</b> <a id="370fc17684e27947" href="../R/370fc17684e27947.html" target="n" data-glyph="76,1" class="t constructor">PowerShellAssemblyLoadContext</a>(<b>string</b> <span id="r1 rd" class="r1 r">basePaths</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+            <span class="c">// Set GAC related member variables to null</span>
+            <a href="#81294e4d2019a08c" class="i field">_winDir</a> = <a href="#e311070d089e6950" class="i field">_gacPath32</a> = <a href="#98e7a6fe3e0cc240" class="i field">_gacPath64</a> = <a href="#7459d8793ea88fda" class="i field">_gacPathMSIL</a> = <b>null</b>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <span class="c">// FIRST: Validate and populate probing paths</span>
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r1 r">basePaths</span>))
+            {
+                <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a> = <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>string</b>&gt;();
+            }
+            <b>else</b>
+            {
+                <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a> = <span class="r1 r">basePaths</span>.<span class="i">Split</span>(<span class="s">&#39;;&#39;</span>, <span class="i">StringSplitOptions</span>.<span class="i">RemoveEmptyEntries</span>);
+                <b>for</b> (<b>int</b> <span id="r2 rd" class="r2 r">i</span> = 0; <span class="r2 r">i</span> &lt; <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a>.<span class="i">Length</span>; <span class="r2 r">i</span>++)
+                {
+                    <b>string</b> <span id="r3 rd" class="r3 r">basePath</span> = <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a>[<span class="r2 r">i</span>];
+                    <b>if</b> (!<span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r3 r">basePath</span>))
+                    {
+                        <b>string</b> <span id="r4 rd" class="r4 r">message</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <a href="#2d57f8a42d3dda75" class="i field">BaseFolderDoesNotExist</a>, <span class="r3 r">basePath</span>);
+                        <b>throw</b> <b>new</b> <span class="i">ArgumentException</span>(<span class="r4 r">message</span>, <b>nameof</b>(<span class="r1 r">basePaths</span>));
+                    }
+ 
+                    <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a>[<span class="r2 r">i</span>] = <span class="r3 r">basePath</span>.<span class="i">Trim</span>();
+                }
+            }
+ 
+            <span class="c">// NEXT: Initialize the CoreCLR type catalog dictionary [OrdinalIgnoreCase]</span>
+            <a href="#abc71683cd4f8b34" class="i field">_coreClrTypeCatalog</a> = <span class="i">InitializeTypeCatalog</span>();
+            <a href="#50cb8c94e3d9c037" class="i field">_availableDotNetAssemblyNames</a> = <b>new</b> <span class="i">Lazy</span>&lt;<span class="i">HashSet</span>&lt;<b>string</b>&gt;&gt;(
+                    () =&gt; <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<a href="#abc71683cd4f8b34" class="i field">_coreClrTypeCatalog</a>.<span class="i">Values</span>, <span class="i">StringComparer</span>.<span class="i">Ordinal</span>));
+ 
+            <span class="c">// LAST: Register the &#39;Resolving&#39; handler and &#39;ResolvingUnmanagedDll&#39; handler on the default load context.</span>
+            <span class="i">AssemblyLoadContext</span>.<span class="i">Default</span>.<span class="i">Resolving</span> += <span class="i">Resolve</span>;
+ 
+            <span class="c">// Add last resort native dll resolver.</span>
+            <span class="c">// Default order:</span>
+            <span class="c">//      1. System.Runtime.InteropServices.DllImportResolver callbacks</span>
+            <span class="c">//      2. AssemblyLoadContext.LoadUnmanagedDll()</span>
+            <span class="c">//      3. AssemblyLoadContext.Default.ResolvingUnmanagedDll handlers</span>
+            <span class="i">AssemblyLoadContext</span>.<span class="i">Default</span>.<span class="i">ResolvingUnmanagedDll</span> += <span class="i">NativeDllHandler</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Constructor
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Fields
+ 
+        <b>private static readonly object</b> <a id="76dea80ab2802e7b" href="../R/76dea80ab2802e7b.html" target="n" data-glyph="46,1" class="i field">s_syncObj</a> = <b>new</b>();
+        <b>private readonly string</b>[] <a id="18f3a90a0c88286a" href="../R/18f3a90a0c88286a.html" target="n" data-glyph="46,1" class="i field">_probingPaths</a>;
+        <b>private readonly string</b>[] <a id="02a14b7963088cef" href="../R/02a14b7963088cef.html" target="n" data-glyph="46,1" class="i field">_extensions</a> = <b>new</b> <b>string</b>[] { <span class="s">&quot;.ni.dll&quot;</span>, <span class="s">&quot;.dll&quot;</span> };
+        <span class="c">// CoreCLR type catalog dictionary</span>
+        <span class="c">//  - Key: namespace qualified type name (FullName)</span>
+        <span class="c">//  - Value: strong name of the TPA that contains the type represented by Key.</span>
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <b>string</b>&gt; <a id="abc71683cd4f8b34" href="../R/abc71683cd4f8b34.html" target="n" data-glyph="46,1" class="i field">_coreClrTypeCatalog</a>;
+        <b>private readonly</b> <span class="i">Lazy</span>&lt;<span class="i">HashSet</span>&lt;<b>string</b>&gt;&gt; <a id="50cb8c94e3d9c037" href="../R/50cb8c94e3d9c037.html" target="n" data-glyph="46,1" class="i field">_availableDotNetAssemblyNames</a>;
+ 
+        <b>private readonly</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt; <a id="e26c3d4873034cfe" href="../R/e26c3d4873034cfe.html" target="n" data-glyph="46,1" class="i field">_denyListedAssemblies</a> =
+            <b>new</b>(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>) { <span class="s">&quot;System.Windows.Forms&quot;</span> };
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+        <b>private string</b> <a id="81294e4d2019a08c" href="../R/81294e4d2019a08c.html" target="n" data-glyph="46,1" class="i field">_winDir</a>;
+        <b>private string</b> <a id="7459d8793ea88fda" href="../R/7459d8793ea88fda.html" target="n" data-glyph="46,1" class="i field">_gacPathMSIL</a>;
+        <b>private string</b> <a id="e311070d089e6950" href="../R/e311070d089e6950.html" target="n" data-glyph="46,1" class="i field">_gacPath32</a>;
+        <b>private string</b> <a id="98e7a6fe3e0cc240" href="../R/98e7a6fe3e0cc240.html" target="n" data-glyph="46,1" class="i field">_gacPath64</a>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Assembly cache across the AppDomain.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> We user the assembly short name (AssemblyName.Name) as the key.</span>
+        <span class="c">///</span><span class="c"> According to the Spec of AssemblyLoadContext, &quot;in the context of a given instance of AssemblyLoadContext, only one assembly with</span>
+        <span class="c">///</span><span class="c"> a given name can be loaded. Attempt to load a second assembly with the same name and different MVID will result in an exception.&quot;</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> MVID is Module Version Identifier, which is a guid. Its purpose is solely to be unique for each time the module is compiled, and</span>
+        <span class="c">///</span><span class="c"> it gets regenerated for every compilation. That means AssemblyLoadContext cannot handle loading two assemblies with the same name</span>
+        <span class="c">///</span><span class="c"> but different versions, not even two assemblies with the exactly same code and version but built by two separate compilations.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Therefore, there is no need to use the full assembly name as the key. Short assembly name is sufficient.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>private static readonly</b> <span class="i">ConcurrentDictionary</span>&lt;<b>string</b>, <span class="i">Assembly</span>&gt; <a id="896a51559ec61129" href="../R/896a51559ec61129.html" target="n" data-glyph="46,1" class="i field">s_assemblyCache</a> =
+            <b>new</b>(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Fields
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Singleton instance of PowerShellAssemblyLoadContext.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="#606826c84576695c" class="t t">PowerShellAssemblyLoadContext</a> <a id="c616e674431e58cb" href="../R/c616e674431e58cb.html" target="n" data-glyph="104,1" class="i property">Instance</a>
+        {
+            <b>get</b>; <b>private set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the namespace-qualified type names of all available .NET Core types shipped with PowerShell.</span>
+        <span class="c">///</span><span class="c"> This is used for type name auto-completion in PS engine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="21abf15dd9957631" href="../R/21abf15dd9957631.html" target="n" data-glyph="104,1" class="i property">AvailableDotNetTypeNames</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#abc71683cd4f8b34" class="i field">_coreClrTypeCatalog</a>.<span class="i">Keys</span>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the assembly names of all available .NET Core assemblies shipped with PowerShell.</span>
+        <span class="c">///</span><span class="c"> This is used for type name auto-completion in PS engine.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt; <a id="5557c0e0687d39b6" href="../R/5557c0e0687d39b6.html" target="n" data-glyph="104,1" class="i property">AvailableDotNetAssemblyNames</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#50cb8c94e3d9c037" class="i field">_availableDotNetAssemblyNames</a>.<span class="i">Value</span>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Properties
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal_Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the current loaded assemblies.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">IEnumerable</span>&lt;<span class="i">Assembly</span>&gt; <a id="5345a6b5d9ae579b" href="../R/5345a6b5d9ae579b.html" target="n" data-glyph="74,1" class="i method">GetAssembly</a>(<b>string</b> <span id="r5 rd" class="r5 r">namespaceQualifiedTypeName</span>)
+        {
+            <span class="c">// If &#39;namespaceQualifiedTypeName&#39; is specified and it&#39;s a CoreCLR framework type,</span>
+            <span class="c">// then we only return that specific TPA assembly.</span>
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r5 r">namespaceQualifiedTypeName</span>))
+            {
+                <b>if</b> (<a href="#abc71683cd4f8b34" class="i field">_coreClrTypeCatalog</a>.<span class="i">TryGetValue</span>(<span class="r5 r">namespaceQualifiedTypeName</span>, <b>out string</b> <span id="r6 rd" class="r6 r">tpaStrongName</span>))
+                {
+                    <b>try</b>
+                    {
+                        <b>return</b> <b>new</b> <span class="i">Assembly</span>[] { <a href="#36bc675d88f8bbed" class="i method">GetTrustedPlatformAssembly</a>(<span class="r6 r">tpaStrongName</span>) };
+                    }
+                    <b>catch</b> (<span class="i">FileNotFoundException</span>) { }
+                }
+            }
+ 
+            <span class="c">// Otherwise, we return null</span>
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If a managed dll has native dependencies the handler will try to find these native dlls.</span>
+        <span class="c">///</span><span class="c">     1. Gets the managed.dll location (folder)</span>
+        <span class="c">///</span><span class="c">     2. Based on OS name and architecture name builds subfolder name where it is expected the native dll resides:</span>
+        <span class="c">///</span><span class="c">     3. Loads the native dll</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c">     managed.dll folder</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;win-x64&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.dll</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;win-x86&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.dll</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;win-arm&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.dll</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;win-arm64&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.dll</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;linux-x64&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.so</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;linux-x86&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.so</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;linux-arm&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.so</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;linux-arm64&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.so</span>
+        <span class="c">///</span><span class="c">                     |</span>
+        <span class="c">///</span><span class="c">                     |--- &#39;osx-x64&#39; subfolder</span>
+        <span class="c">///</span><span class="c">                     |       |--- native.dylib</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">IntPtr</span> <a id="012a69f5b3872f7d" href="../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">NativeDllHandler</a>(<span class="i">Assembly</span> <span id="r7 rd" class="r7 r">assembly</span>, <b>string</b> <span id="r8 rd" class="r8 r">libraryName</span>)
+        {
+            <a href="#6863c59ff78acf44" class="i field">s_nativeDllSubFolder</a> ??= <a href="#40e7ae0cfae5f506" class="i method">GetNativeDllSubFolderName</a>(<b>out</b> <a href="#f52c14299720cd6e" class="i field">s_nativeDllExtension</a>);
+            <b>string</b> <span id="r9 rd" class="r9 r">folder</span> = <span class="i">Path</span>.<span class="i">GetDirectoryName</span>(<span class="r7 r">assembly</span>.<span class="i">Location</span>);
+            <b>string</b> <span id="r10 rd" class="r10 r">fullName</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r9 r">folder</span>, <a href="#6863c59ff78acf44" class="i field">s_nativeDllSubFolder</a>, <span class="r8 r">libraryName</span>) + <a href="#f52c14299720cd6e" class="i field">s_nativeDllExtension</a>;
+ 
+            <b>return</b> <span class="i">NativeLibrary</span>.<span class="i">TryLoad</span>(<span class="r10 r">fullName</span>, <b>out</b> <span class="i">IntPtr</span> <span id="r11 rd" class="r11 r">pointer</span>) ? <span class="r11 r">pointer</span> : <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Internal_Methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private_Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The handler for the Resolving event.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">Assembly</span> <a id="7a5a2ae883b23e6e" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Resolve</a>(<span class="i">AssemblyLoadContext</span> <span id="r12 rd" class="r12 r">loadContext</span>, <span class="i">AssemblyName</span> <span id="r13 rd" class="r13 r">assemblyName</span>)
+        {
+            <span class="c">// Probe the assembly cache</span>
+            <span class="i">Assembly</span> <span id="r14 rd" class="r14 r">asmLoaded</span>;
+            <b>if</b> (<a href="#c28d4a9e65903de7" class="i method">TryGetAssemblyFromCache</a>(<span class="r13 r">assemblyName</span>, <b>out</b> <span class="r14 r">asmLoaded</span>))
+                <b>return</b> <span class="r14 r">asmLoaded</span>;
+ 
+            <span class="c">// Prepare to load the assembly</span>
+            <b>lock</b> (<a href="#76dea80ab2802e7b" class="i field">s_syncObj</a>)
+            {
+                <span class="c">// Probe the cache again in case it&#39;s already loaded</span>
+                <b>if</b> (<a href="#c28d4a9e65903de7" class="i method">TryGetAssemblyFromCache</a>(<span class="r13 r">assemblyName</span>, <b>out</b> <span class="r14 r">asmLoaded</span>))
+                    <b>return</b> <span class="r14 r">asmLoaded</span>;
+ 
+                <span class="c">// Search the specified assembly in probing paths, and load it through &#39;LoadFromAssemblyPath&#39; if the file exists and matches the requested AssemblyName.</span>
+                <span class="c">// If the CultureName of the requested assembly is not NullOrEmpty, then it&#39;s a resources.dll and we need to search corresponding culture sub-folder.</span>
+                <b>bool</b> <span id="r15 rd" class="r15 r">isAssemblyFileFound</span> = <b>false</b>, <span id="r16 rd" class="r16 r">isAssemblyFileMatching</span> = <b>false</b>;
+                <b>string</b> <span id="r17 rd" class="r17 r">asmCultureName</span> = <span class="r13 r">assemblyName</span>.<span class="i">CultureName</span> ?? <b>string</b>.<span class="i">Empty</span>;
+                <b>string</b> <span id="r18 rd" class="r18 r">asmFilePath</span> = <b>null</b>;
+ 
+                <b>for</b> (<b>int</b> <span id="r19 rd" class="r19 r">i</span> = 0; <span class="r19 r">i</span> &lt; <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a>.<span class="i">Length</span>; <span class="r19 r">i</span>++)
+                {
+                    <b>string</b> <span id="r20 rd" class="r20 r">probingPath</span> = <a href="#18f3a90a0c88286a" class="i field">_probingPaths</a>[<span class="r19 r">i</span>];
+                    <b>string</b> <span id="r21 rd" class="r21 r">asmCulturePath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r20 r">probingPath</span>, <span class="r17 r">asmCultureName</span>);
+                    <b>for</b> (<b>int</b> <span id="r22 rd" class="r22 r">k</span> = 0; <span class="r22 r">k</span> &lt; <a href="#02a14b7963088cef" class="i field">_extensions</a>.<span class="i">Length</span>; <span class="r22 r">k</span>++)
+                    {
+                        <b>string</b> <span id="r23 rd" class="r23 r">asmFileName</span> = <span class="r13 r">assemblyName</span>.<span class="i">Name</span> + <a href="#02a14b7963088cef" class="i field">_extensions</a>[<span class="r22 r">k</span>];
+                        <span class="r18 r">asmFilePath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r21 r">asmCulturePath</span>, <span class="r23 r">asmFileName</span>);
+ 
+                        <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r18 r">asmFilePath</span>))
+                        {
+                            <span class="r15 r">isAssemblyFileFound</span> = <b>true</b>;
+                            <span class="i">AssemblyName</span> <span id="r24 rd" class="r24 r">asmNameFound</span> = <span class="i">AssemblyLoadContext</span>.<span class="i">GetAssemblyName</span>(<span class="r18 r">asmFilePath</span>);
+                            <b>if</b> (<a href="#246e2f2156a463be" class="i method">IsAssemblyMatching</a>(<span class="r13 r">assemblyName</span>, <span class="r24 r">asmNameFound</span>))
+                            {
+                                <span class="r16 r">isAssemblyFileMatching</span> = <b>true</b>;
+                                <b>break</b>;
+                            }
+                        }
+                    }
+ 
+                    <b>if</b> (<span class="r15 r">isAssemblyFileFound</span> &amp;&amp; <span class="r16 r">isAssemblyFileMatching</span>)
+                    {
+                        <b>break</b>;
+                    }
+                }
+ 
+                <span class="c">// We failed to find the assembly file; or we found the file, but the assembly file doesn&#39;t match the request.</span>
+                <span class="c">// In this case, return null so that other Resolving event handlers can kick in to resolve the request.</span>
+                <b>if</b> (!<span class="r15 r">isAssemblyFileFound</span> || !<span class="r16 r">isAssemblyFileMatching</span>)
+                {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+                    <span class="c">// Try loading from GAC</span>
+                    <b>if</b> (!<a href="#bf8d06c8990a4f0e" class="i method">TryFindInGAC</a>(<span class="r13 r">assemblyName</span>, <b>out</b> <span class="r18 r">asmFilePath</span>))
+                    {
+                        <b>return</b> <b>null</b>;
+                    }
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">                    return null;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                }
+ 
+                <span class="r14 r">asmLoaded</span> = <span class="r18 r">asmFilePath</span>.<span class="i">EndsWith</span>(<span class="s">&quot;.ni.dll&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>)
+                                ? <span class="r12 r">loadContext</span>.<span class="i">LoadFromNativeImagePath</span>(<span class="r18 r">asmFilePath</span>, <b>null</b>)
+                                : <span class="r12 r">loadContext</span>.<span class="i">LoadFromAssemblyPath</span>(<span class="r18 r">asmFilePath</span>);
+                <b>if</b> (<span class="r14 r">asmLoaded</span> != <b>null</b>)
+                {
+                    <span class="c">// Add the loaded assembly to the cache</span>
+                    <a href="#896a51559ec61129" class="i field">s_assemblyCache</a>.<span class="i">TryAdd</span>(<span class="r13 r">assemblyName</span>.<span class="i">Name</span>, <span class="r14 r">asmLoaded</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r14 r">asmLoaded</span>;
+        }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+        <span class="c">// Try to find the assembly in GAC by looking up the directories in well know locations.</span>
+        <span class="c">// First try to find in GAC_MSIL, then depending on process bitness; GAC_64 or GAC32.</span>
+        <span class="c">// If there are multiple version of the assembly, load the latest.</span>
+        <b>private bool</b> <a id="bf8d06c8990a4f0e" href="../R/bf8d06c8990a4f0e.html" target="n" data-glyph="76,1" class="i method">TryFindInGAC</a>(<span class="i">AssemblyName</span> <span id="r25 rd" class="r25 r">assemblyName</span>, <b>out string</b> <span id="r26 rd" class="r26 r">assemblyFilePath</span>)
+        {
+            <span class="r26 r">assemblyFilePath</span> = <b>null</b>;
+            <b>if</b> (<a href="#e26c3d4873034cfe" class="i field">_denyListedAssemblies</a>.<span class="i">Contains</span>(<span class="r25 r">assemblyName</span>.<span class="i">Name</span>))
+            {
+                <span class="c">// DotNet catches and throws a new exception with no inner exception</span>
+                <span class="c">// We cannot change the message DotNet returns.</span>
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>if</b> (<span class="i n">Internal</span>.<a href="../engine/Utils.cs.html#f365eaa75311eda0" class="t t">InternalTestHooks</a>.<a href="../engine/Utils.cs.html#465f5deb46e7a9cb" class="i field">DisableGACLoading</a>)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>bool</b> <span id="r27 rd" class="r27 r">assemblyFound</span> = <b>false</b>;
+            <b>char</b> <span id="r28 rd" class="r28 r">dirSeparator</span> = <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">DirectorySeparatorChar</span>;
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#81294e4d2019a08c" class="i field">_winDir</a>))
+            {
+                <span class="c">// cache value of &#39;_winDir&#39; folder in member variable.</span>
+                <a href="#81294e4d2019a08c" class="i field">_winDir</a> = <span class="i">Environment</span>.<span class="i">GetEnvironmentVariable</span>(<span class="s">&quot;winDir&quot;</span>);
+            }
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#7459d8793ea88fda" class="i field">_gacPathMSIL</a>))
+            {
+                <span class="c">// cache value of &#39;_gacPathMSIL&#39; folder in member variable.</span>
+                <a href="#7459d8793ea88fda" class="i field">_gacPathMSIL</a> = <span class="s">$&quot;</span>{<a href="#81294e4d2019a08c" class="i field">_winDir</a>}{<span class="r28 r">dirSeparator</span>}<span class="s">Microsoft.NET</span>{<span class="r28 r">dirSeparator</span>}<span class="s">assembly</span>{<span class="r28 r">dirSeparator</span>}<span class="s">GAC_MSIL</span><span class="s">&quot;</span>;
+            }
+ 
+            <span class="r27 r">assemblyFound</span> = <a href="#ebf4ea9258bcfbee" class="i method">FindInGac</a>(<a href="#7459d8793ea88fda" class="i field">_gacPathMSIL</a>, <span class="r25 r">assemblyName</span>, <b>out</b> <span class="r26 r">assemblyFilePath</span>);
+ 
+            <b>if</b> (!<span class="r27 r">assemblyFound</span>)
+            {
+                <b>string</b> <span id="r29 rd" class="r29 r">gacBitnessAwarePath</span> = <b>null</b>;
+ 
+                <b>if</b> (<span class="i">Environment</span>.<span class="i">Is64BitProcess</span>)
+                {
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#98e7a6fe3e0cc240" class="i field">_gacPath64</a>))
+                    {
+                        <span class="c">// cache value of &#39;_gacPath64&#39; folder in member variable.</span>
+                        <a href="#98e7a6fe3e0cc240" class="i field">_gacPath64</a> = <span class="s">$&quot;</span>{<a href="#81294e4d2019a08c" class="i field">_winDir</a>}{<span class="r28 r">dirSeparator</span>}<span class="s">Microsoft.NET</span>{<span class="r28 r">dirSeparator</span>}<span class="s">assembly</span>{<span class="r28 r">dirSeparator</span>}<span class="s">GAC_64</span><span class="s">&quot;</span>;
+                    }
+ 
+                    <span class="r29 r">gacBitnessAwarePath</span> = <a href="#98e7a6fe3e0cc240" class="i field">_gacPath64</a>;
+                }
+                <b>else</b>
+                {
+                    <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="#e311070d089e6950" class="i field">_gacPath32</a>))
+                    {
+                        <span class="c">// cache value of &#39;_gacPath32&#39; folder in member variable.</span>
+                        <a href="#e311070d089e6950" class="i field">_gacPath32</a> = <span class="s">$&quot;</span>{<a href="#81294e4d2019a08c" class="i field">_winDir</a>}{<span class="r28 r">dirSeparator</span>}<span class="s">Microsoft.NET</span>{<span class="r28 r">dirSeparator</span>}<span class="s">assembly</span>{<span class="r28 r">dirSeparator</span>}<span class="s">GAC_32</span><span class="s">&quot;</span>;
+                    }
+ 
+                    <span class="r29 r">gacBitnessAwarePath</span> = <a href="#e311070d089e6950" class="i field">_gacPath32</a>;
+                }
+ 
+                <span class="r27 r">assemblyFound</span> = <a href="#ebf4ea9258bcfbee" class="i method">FindInGac</a>(<span class="r29 r">gacBitnessAwarePath</span>, <span class="r25 r">assemblyName</span>, <b>out</b> <span class="r26 r">assemblyFilePath</span>);
+            }
+ 
+            <b>return</b> <span class="r27 r">assemblyFound</span>;
+        }
+ 
+        <span class="c">// Find the assembly under &#39;gacRoot&#39; and select the latest version.</span>
+        <b>private static bool</b> <a id="ebf4ea9258bcfbee" href="../R/ebf4ea9258bcfbee.html" target="n" data-glyph="76,1" class="i method">FindInGac</a>(<b>string</b> <span id="r30 rd" class="r30 r">gacRoot</span>, <span class="i">AssemblyName</span> <span id="r31 rd" class="r31 r">assemblyName</span>, <b>out string</b> <span id="r32 rd" class="r32 r">assemblyPath</span>)
+        {
+            <b>bool</b> <span id="r33 rd" class="r33 r">assemblyFound</span> = <b>false</b>;
+            <span class="r32 r">assemblyPath</span> = <b>null</b>;
+ 
+            <b>char</b> <span id="r34 rd" class="r34 r">dirSeparator</span> = <span class="i">IO</span>.<span class="i">Path</span>.<span class="i">DirectorySeparatorChar</span>;
+            <b>string</b> <span id="r35 rd" class="r35 r">tempAssemblyDirPath</span> = <span class="s">$&quot;</span>{<span class="r30 r">gacRoot</span>}{<span class="r34 r">dirSeparator</span>}{<span class="r31 r">assemblyName</span>.<span class="i">Name</span>}<span class="s">&quot;</span>;
+ 
+            <b>if</b> (<span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r35 r">tempAssemblyDirPath</span>))
+            {
+                <span class="c">// Enumerate all directories, sort by name and select the last. This selects the latest version.</span>
+                <b>var</b> <span id="r36 rd" class="r36 r">chosenVersionDirectory</span> = <span class="i">Directory</span>.<span class="i">EnumerateDirectories</span>(<span class="r35 r">tempAssemblyDirPath</span>).<span class="i">OrderBy</span>(<b>static</b> <span id="r37 rd" class="r37 r">d</span> =&gt; <span class="r37 r">d</span>).<span class="i">LastOrDefault</span>();
+ 
+                <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r36 r">chosenVersionDirectory</span>))
+                {
+                    <span class="c">// Select first or default as the directory will contain only one assembly. If nothing then default is null;</span>
+                    <b>var</b> <span id="r38 rd" class="r38 r">foundAssemblyPath</span> = <span class="i">Directory</span>.<span class="i">EnumerateFiles</span>(<span class="r36 r">chosenVersionDirectory</span>, <span class="s">$&quot;</span>{<span class="r31 r">assemblyName</span>.<span class="i">Name</span>}<span class="s">*</span><span class="s">&quot;</span>).<span class="i">FirstOrDefault</span>();
+ 
+                    <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r38 r">foundAssemblyPath</span>))
+                    {
+                        <span class="i">AssemblyName</span> <span id="r39 rd" class="r39 r">asmNameFound</span> = <span class="i">AssemblyLoadContext</span>.<span class="i">GetAssemblyName</span>(<span class="r38 r">foundAssemblyPath</span>);
+                        <b>if</b> (<a href="#246e2f2156a463be" class="i method">IsAssemblyMatching</a>(<span class="r31 r">assemblyName</span>, <span class="r39 r">asmNameFound</span>))
+                        {
+                            <span class="r32 r">assemblyPath</span> = <span class="r38 r">foundAssemblyPath</span>;
+                            <span class="r33 r">assemblyFound</span> = <b>true</b>;
+                        }
+                    }
+                }
+            }
+ 
+            <b>return</b> <span class="r33 r">assemblyFound</span>;
+        }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Try to get the specified assembly from cache.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="c28d4a9e65903de7" href="../R/c28d4a9e65903de7.html" target="n" data-glyph="76,1" class="i method">TryGetAssemblyFromCache</a>(<span class="i">AssemblyName</span> <span id="r40 rd" class="r40 r">assemblyName</span>, <b>out</b> <span class="i">Assembly</span> <span id="r41 rd" class="r41 r">asmLoaded</span>)
+        {
+            <b>if</b> (<a href="#896a51559ec61129" class="i field">s_assemblyCache</a>.<span class="i">TryGetValue</span>(<span class="r40 r">assemblyName</span>.<span class="i">Name</span>, <b>out</b> <span class="r41 r">asmLoaded</span>))
+            {
+                <span class="c">// Check if loaded assembly matches the request</span>
+                <b>if</b> (<span class="i">IsAssemblyMatching</span>(<span class="r40 r">assemblyName</span>, <span class="r41 r">asmLoaded</span>.<span class="i">GetName</span>()))
+                    <b>return</b> <b>true</b>;
+ 
+                <span class="c">// In the context of a given instance of AssemblyLoadContext, only one assembly with the</span>
+                <span class="c">// same name can be loaded. So we throw exception if assembly doesn&#39;t match the request.</span>
+                <span class="i">ThrowFileLoadException</span>(
+                    <a href="#25b778b847db46a0" class="i field">ManifestDefinitionDoesNotMatch</a>,
+                    <span class="r40 r">assemblyName</span>.<span class="i">FullName</span>);
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check if the loaded assembly matches the request.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">requestedAssembly</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">AssemblyName of the requested assembly.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">loadedAssembly</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">AssemblyName of the loaded assembly.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="246e2f2156a463be" href="../R/246e2f2156a463be.html" target="n" data-glyph="76,1" class="i method">IsAssemblyMatching</a>(<span class="i">AssemblyName</span> <span id="r42 rd" class="r42 r">requestedAssembly</span>, <span class="i">AssemblyName</span> <span id="r43 rd" class="r43 r">loadedAssembly</span>)
+        {
+            <span class="c">//</span>
+            <span class="c">// We use the same rules as CoreCLR loader to compare the requested assembly and loaded assembly:</span>
+            <span class="c">//  1. If &#39;Version&#39; of the requested assembly is specified, then the requested version should be less or equal to the loaded version;</span>
+            <span class="c">//  2. If &#39;CultureName&#39; of the requested assembly is specified (not NullOrEmpty), then the CultureName of the loaded assembly should be the same;</span>
+            <span class="c">//  3. If &#39;PublicKeyToken&#39; of the requested assembly is specified (not Null or EmptyArray), then the PublicKenToken of the loaded assembly should be the same.</span>
+            <span class="c">//</span>
+ 
+            <span class="c">// Version of the requested assembly should be the same or before the version of loaded assembly</span>
+            <b>if</b> (<span class="r42 r">requestedAssembly</span>.<span class="i">Version</span> != <b>null</b> &amp;&amp; <span class="r42 r">requestedAssembly</span>.<span class="i">Version</span>.<span class="i">CompareTo</span>(<span class="r43 r">loadedAssembly</span>.<span class="i">Version</span>) &gt; 0)
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <span class="c">// CultureName of requested assembly and loaded assembly should be the same</span>
+            <b>string</b> <span id="r44 rd" class="r44 r">requestedCultureName</span> = <span class="r42 r">requestedAssembly</span>.<span class="i">CultureName</span>;
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r44 r">requestedCultureName</span>) &amp;&amp; !<span class="r44 r">requestedCultureName</span>.<span class="i">Equals</span>(<span class="r43 r">loadedAssembly</span>.<span class="i">CultureName</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <span class="c">// PublicKeyToken should be the same, unless it&#39;s not specified in the requested assembly</span>
+            <b>byte</b>[] <span id="r45 rd" class="r45 r">requestedPublicKeyToken</span> = <span class="r42 r">requestedAssembly</span>.<span class="i">GetPublicKeyToken</span>();
+            <b>byte</b>[] <span id="r46 rd" class="r46 r">loadedPublicKeyToken</span> = <span class="r43 r">loadedAssembly</span>.<span class="i">GetPublicKeyToken</span>();
+ 
+            <b>if</b> (<span class="r45 r">requestedPublicKeyToken</span> != <b>null</b> &amp;&amp; <span class="r45 r">requestedPublicKeyToken</span>.<span class="i">Length</span> &gt; 0)
+            {
+                <b>if</b> (<span class="r46 r">loadedPublicKeyToken</span> == <b>null</b> || <span class="r45 r">requestedPublicKeyToken</span>.<span class="i">Length</span> != <span class="r46 r">loadedPublicKeyToken</span>.<span class="i">Length</span>)
+                    <b>return</b> <b>false</b>;
+ 
+                <b>for</b> (<b>int</b> <span id="r47 rd" class="r47 r">i</span> = 0; <span class="r47 r">i</span> &lt; <span class="r45 r">requestedPublicKeyToken</span>.<span class="i">Length</span>; <span class="r47 r">i</span>++)
+                {
+                    <b>if</b> (<span class="r45 r">requestedPublicKeyToken</span>[<span class="r47 r">i</span>] != <span class="r46 r">loadedPublicKeyToken</span>[<span class="r47 r">i</span>])
+                        <b>return</b> <b>false</b>;
+                }
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the TPA that is represented by the specified assembly strong name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">tpaStrongName</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The assembly strong name of a CoreCLR Trusted_Platform_Assembly</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">Assembly</span> <a id="36bc675d88f8bbed" href="../R/36bc675d88f8bbed.html" target="n" data-glyph="76,1" class="i method">GetTrustedPlatformAssembly</a>(<b>string</b> <span id="r48 rd" class="r48 r">tpaStrongName</span>)
+        {
+            <span class="c">// We always depend on the default context to load the TPAs that are recorded in</span>
+            <span class="c">// the type catalog.</span>
+            <span class="c">//   - If the requested TPA is already loaded, then &#39;Assembly.Load&#39; will just get</span>
+            <span class="c">//     it back from the cache of default context.</span>
+            <span class="c">//   - If the requested TPA is not loaded yet, then &#39;Assembly.Load&#39; will make the</span>
+            <span class="c">//     default context to load it</span>
+            <span class="i">AssemblyName</span> <span id="r49 rd" class="r49 r">assemblyName</span> = <b>new</b>(<span class="r48 r">tpaStrongName</span>);
+            <span class="i">Assembly</span> <span id="r50 rd" class="r50 r">asmLoaded</span> = <span class="i">Assembly</span>.<span class="i">Load</span>(<span class="r49 r">assemblyName</span>);
+            <b>return</b> <span class="r50 r">asmLoaded</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Throw FileLoadException.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="8499719748986d78" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ThrowFileLoadException</a>(<b>string</b> <span id="r51 rd" class="r51 r">errorTemplate</span>, <b>params object</b>[] <span id="r52 rd" class="r52 r">args</span>)
+        {
+            <b>string</b> <span id="r53 rd" class="r53 r">message</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="r51 r">errorTemplate</span>, <span class="r52 r">args</span>);
+            <b>throw</b> <b>new</b> <span class="i">FileLoadException</span>(<span class="r53 r">message</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Throw FileNotFoundException.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="fd801110e4955404" href="../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ThrowFileNotFoundException</a>(<b>string</b> <span id="r54 rd" class="r54 r">errorTemplate</span>, <b>params object</b>[] <span id="r55 rd" class="r55 r">args</span>)
+        {
+            <b>string</b> <span id="r56 rd" class="r56 r">message</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="r54 r">errorTemplate</span>, <span class="r55 r">args</span>);
+            <b>throw</b> <b>new</b> <span class="i">FileNotFoundException</span>(<span class="r56 r">message</span>);
+        }
+ 
+        <b>private static string</b> <a id="6863c59ff78acf44" href="../R/6863c59ff78acf44.html" target="n" data-glyph="46,1" class="i field">s_nativeDllSubFolder</a>;
+        <b>private static string</b> <a id="f52c14299720cd6e" href="../R/f52c14299720cd6e.html" target="n" data-glyph="46,1" class="i field">s_nativeDllExtension</a>;
+ 
+        <b>private static string</b> <a id="40e7ae0cfae5f506" href="../R/40e7ae0cfae5f506.html" target="n" data-glyph="76,1" class="i method">GetNativeDllSubFolderName</a>(<b>out string</b> <span id="r57 rd" class="r57 r">ext</span>)
+        {
+            <b>string</b> <span id="r58 rd" class="r58 r">folderName</span> = <b>string</b>.<span class="i">Empty</span>;
+            <span class="r57 r">ext</span> = <b>string</b>.<span class="i">Empty</span>;
+            <b>var</b> <span id="r59 rd" class="r59 r">processArch</span> = <span class="i">RuntimeInformation</span>.<span class="i">ProcessArchitecture</span>.<span class="i">ToString</span>().<span class="i">ToLowerInvariant</span>();
+ 
+            <b>if</b> (<span class="i">RuntimeInformation</span>.<span class="i">IsOSPlatform</span>(<span class="i">OSPlatform</span>.<span class="i">Windows</span>))
+            {
+                <span class="r58 r">folderName</span> = <span class="s">&quot;win-&quot;</span> + <span class="r59 r">processArch</span>;
+                <span class="r57 r">ext</span> = <span class="s">&quot;.dll&quot;</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="i">RuntimeInformation</span>.<span class="i">IsOSPlatform</span>(<span class="i">OSPlatform</span>.<span class="i">Linux</span>))
+            {
+                <span class="r58 r">folderName</span> = <span class="s">&quot;linux-&quot;</span> + <span class="r59 r">processArch</span>;
+                <span class="r57 r">ext</span> = <span class="s">&quot;.so&quot;</span>;
+            }
+            <b>else</b> <b>if</b> (<span class="i">RuntimeInformation</span>.<span class="i">IsOSPlatform</span>(<span class="i">OSPlatform</span>.<span class="i">OSX</span>))
+            {
+                <span class="r58 r">folderName</span> = <span class="s">&quot;osx-x64&quot;</span>;
+                <span class="r57 r">ext</span> = <span class="s">&quot;.dylib&quot;</span>;
+            }
+ 
+            <b>return</b> <span class="r58 r">folderName</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private_Methods
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This is the managed entry point for Microsoft.PowerShell.CoreCLR.AssemblyLoadContext.dll.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public static class</b> <a id="7f05eb3ba5c8923a" href="../R/../../0000000000.html" target="n" data-glyph="0,0" class="t t">PowerShellAssemblyLoadContextInitializer</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a singleton of PowerShellAssemblyLoadContext.</span>
+        <span class="c">///</span><span class="c"> Then register to the Resolving event of the load context that loads this assembly.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method is to be used by native host whose TPA list doesn&#39;t include PS assemblies, such as the</span>
+        <span class="c">///</span><span class="c"> in-box Nano powershell, the PS remote WinRM plugin, in-box Nano DSC and in-box Nano SCOM agent.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">basePaths</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Base directory paths that are separated by semicolon &#39;;&#39;.</span>
+        <span class="c">///</span><span class="c"> They will be the default paths to probe assemblies.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="2ec4de1570f929cc" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">SetPowerShellAssemblyLoadContext</a>([<span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">LPWStr</span>)] <b>string</b> <span id="r60 rd" class="r60 r">basePaths</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r60 r">basePaths</span>))
+                <b>throw</b> <b>new</b> <span class="i">ArgumentNullException</span>(<b>nameof</b>(<span class="r60 r">basePaths</span>));
+ 
+            <a href="#606826c84576695c" class="t t">PowerShellAssemblyLoadContext</a>.<a href="#e9ad779e132ba23b" class="i method">InitializeSingleton</a>(<span class="r60 r">basePaths</span>);
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Provides helper functions to faciliate calling managed code from a native PowerShell host.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public static unsafe class</b> <a id="ad6a945863fda46d" href="../R/../../0000000000.html" target="n" data-glyph="0,0" class="t t">PowerShellUnsafeAssemblyLoad</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Load an assembly in memory from unmanaged code.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This API is covered by the experimental feature &#39;PSLoadAssemblyFromNativeCode&#39;,</span>
+        <span class="c">///</span><span class="c"> and it may be deprecated and removed in future.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Unmanaged pointer to assembly data buffer.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">size</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Size in bytes of the assembly data buffer.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Returns zero on success and non-zero on failure.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        [<span class="i">UnmanagedCallersOnly</span>]
+        <b>public static int</b> <a id="6c0ac07ff0f55bbf" href="../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">LoadAssemblyFromNativeMemory</a>(<span class="i">IntPtr</span> <span id="r61 rd" class="r61 r">data</span>, <b>int</b> <span id="r62 rd" class="r62 r">size</span>)
+        {
+            <b>try</b>
+            {
+                <b>using</b> <b>var</b> <span id="r63 rd" class="r63 r">stream</span> = <b>new</b> <span class="i">UnmanagedMemoryStream</span>((<b>byte</b>*)<span class="r61 r">data</span>, <span class="r62 r">size</span>);
+                <span class="i">AssemblyLoadContext</span>.<span class="i">Default</span>.<span class="i">LoadFromStream</span>(<span class="r63 r">stream</span>);
+                <b>return</b> 0;
+            }
+            <b>catch</b>
+            {
+                <b>return</b> -1;
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

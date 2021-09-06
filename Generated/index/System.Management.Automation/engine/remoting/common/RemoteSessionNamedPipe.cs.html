@@ -1,0 +1,1360 @@
+﻿<!DOCTYPE html>
+<html><head><title>RemoteSessionNamedPipe.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(1351);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/common/RemoteSessionNamedPipe.cs" target="_top">engine\remoting\common\RemoteSessionNamedPipe.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">Pipes</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Server</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">InteropServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">AccessControl</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>.<span class="i">Principal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Tasks</span>;
+ 
+<b>using</b> <span class="i n">Microsoft</span>.<span class="i">Win32</span>.<span class="i">SafeHandles</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Debug</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Shared named pipe utilities.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal static class</b> <a id="6f8b3085a1f6f905" href="../../../R/6f8b3085a1f6f905.html" target="n" data-glyph="2,0" class="t t">NamedPipeUtils</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Strings
+ 
+        <b>internal const string</b> <a id="2123549b6dcf5453" href="../../../R/2123549b6dcf5453.html" target="n" data-glyph="8,1" class="i field">NamedPipeNamePrefix</a> = <span class="s">&quot;PSHost.&quot;</span>;
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">        internal const string DefaultAppDomainName = &quot;None&quot;;
+        // This `CoreFxPipe` prefix is defined by CoreFx
+        internal const string NamedPipeNamePrefixSearch = &quot;CoreFxPipe_PSHost*&quot;;
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+        <b>internal const string</b> <a id="51672229da1b0aeb" href="../../../R/51672229da1b0aeb.html" target="n" data-glyph="8,1" class="i field">DefaultAppDomainName</a> = <span class="s">&quot;DefaultAppDomain&quot;</span>;
+        <b>internal const string</b> <a id="4ee1b1d91a4e9f07" href="../../../R/4ee1b1d91a4e9f07.html" target="n" data-glyph="8,1" class="i field">NamedPipeNamePrefixSearch</a> = <span class="s">&quot;PSHost*&quot;</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        <span class="c">// On non-Windows, .NET named pipes are limited to up to 104 characters</span>
+        <b>internal const int</b> <a id="523cccd02f4517e9" href="../../../R/523cccd02f4517e9.html" target="n" data-glyph="8,1" class="i field">MaxNamedPipeNameSize</a> = 104;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Static Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a pipe name based on process information.</span>
+        <span class="c">///</span><span class="c"> E.g., &quot;PSHost.ProcessStartTime.ProcessId.DefaultAppDomain.ProcessName&quot;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">procId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Process Id.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Pipe name.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="872b59856b61dc4d" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">CreateProcessPipeName</a>(
+            <b>int</b> <span id="r0 rd" class="r0 r">procId</span>)
+        {
+            <b>return</b> <span class="i">CreateProcessPipeName</span>(
+                <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span>.<span class="i">GetProcessById</span>(<span class="r0 r">procId</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a pipe name based on process information.</span>
+        <span class="c">///</span><span class="c"> E.g., &quot;PSHost.ProcessStartTime.ProcessId.DefaultAppDomain.ProcessName&quot;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">proc</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Process object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Pipe name.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="a2835f25b099c9b7" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">CreateProcessPipeName</a>(
+            <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span> <span id="r1 rd" class="r1 r">proc</span>)
+        {
+            <b>return</b> <a href="#822e0184b640677c" class="i method">CreateProcessPipeName</a>(<span class="r1 r">proc</span>, <a href="#51672229da1b0aeb" class="i field">DefaultAppDomainName</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a pipe name based on process Id and appdomain name information.</span>
+        <span class="c">///</span><span class="c"> E.g., &quot;PSHost.ProcessStartTime.ProcessId.DefaultAppDomain.ProcessName&quot;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">procId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Process Id.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of process app domain to connect to.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Pipe name.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="92ca6b55c3fbba3d" href="../../../R/92ca6b55c3fbba3d.html" target="n" data-glyph="74,1" class="i method">CreateProcessPipeName</a>(
+            <b>int</b> <span id="r2 rd" class="r2 r">procId</span>,
+            <b>string</b> <span id="r3 rd" class="r3 r">appDomainName</span>)
+        {
+            <b>return</b> <span class="i">CreateProcessPipeName</span>(<span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span>.<span class="i">GetProcessById</span>(<span class="r2 r">procId</span>), <span class="r3 r">appDomainName</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Create a pipe name based on process and appdomain name information.</span>
+        <span class="c">///</span><span class="c"> E.g., &quot;PSHost.ProcessStartTime.ProcessId.DefaultAppDomain.ProcessName&quot;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">proc</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Process object.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r5 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of process app domain to connect to.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Pipe name.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="822e0184b640677c" href="../../../R/822e0184b640677c.html" target="n" data-glyph="74,1" class="i method">CreateProcessPipeName</a>(
+            <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span> <span id="r4 rd" class="r4 r">proc</span>,
+            <b>string</b> <span id="r5 rd" class="r5 r">appDomainName</span>)
+        {
+            <b>if</b> (<span class="r4 r">proc</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r4 r">proc</span>));
+            }
+ 
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r5 r">appDomainName</span>))
+            {
+                <span class="r5 r">appDomainName</span> = <a href="#51672229da1b0aeb" class="i field">DefaultAppDomainName</a>;
+            }
+ 
+            <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">StringBuilder</span> <span id="r6 rd" class="r6 r">pipeNameBuilder</span> = <b>new</b> <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">StringBuilder</span>(<a href="#523cccd02f4517e9" class="i field">MaxNamedPipeNameSize</a>);
+            <span class="r6 r">pipeNameBuilder</span>.<span class="i">Append</span>(<a href="#2123549b6dcf5453" class="i field">NamedPipeNamePrefix</a>)
+                <span class="c">// The starttime is there to prevent another process easily guessing the pipe name</span>
+                <span class="c">// and squatting on it.</span>
+                <span class="c">// There is a limit of 104 characters in total including the temp path to the named pipe file</span>
+                <span class="c">// on non-Windows systems, so we&#39;ll convert the starttime to hex and just take the first 8 characters.</span>
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">                .Append(proc.StartTime.ToFileTime().ToString(&quot;X8&quot;).AsSpan(1, 8))
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+                .<span class="i">Append</span>(<span class="r4 r">proc</span>.<span class="i">StartTime</span>.<span class="i">ToFileTime</span>().<span class="i">ToString</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>))
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                .<span class="i">Append</span>(<span class="s">&#39;.&#39;</span>)
+                .<span class="i">Append</span>(<span class="r4 r">proc</span>.<span class="i">Id</span>.<span class="i">ToString</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>))
+                .<span class="i">Append</span>(<span class="s">&#39;.&#39;</span>)
+                .<span class="i">Append</span>(<a href="#b481cf4fd4b319b3" class="i method">CleanAppDomainNameForPipeName</a>(<span class="r5 r">appDomainName</span>))
+                .<span class="i">Append</span>(<span class="s">&#39;.&#39;</span>)
+                .<span class="i">Append</span>(<span class="r4 r">proc</span>.<span class="i">ProcessName</span>);
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            int charsToTrim = pipeNameBuilder.Length - MaxNamedPipeNameSize;
+            if (charsToTrim &gt; 0)
+            {
+                // TODO: In the case the pipe name is truncated, the user cannot connect to it using the cmdlet
+                // unless we add a `-Force` type switch as it attempts to validate the current process name
+                // matches the process name in the pipe name
+                pipeNameBuilder.Remove(MaxNamedPipeNameSize + 1, charsToTrim);
+            }
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <b>return</b> <span class="r6 r">pipeNameBuilder</span>.<span class="i">ToString</span>();
+        }
+ 
+        <b>private static string</b> <a id="b481cf4fd4b319b3" href="../../../R/b481cf4fd4b319b3.html" target="n" data-glyph="76,1" class="i method">CleanAppDomainNameForPipeName</a>(<b>string</b> <span id="r7 rd" class="r7 r">appDomainName</span>)
+        {
+            <span class="c">// Pipe names cannot contain the &#39;:&#39; character.  Remove unwanted characters.</span>
+            <b>return</b> <span class="r7 r">appDomainName</span>.<span class="i">Replace</span>(<span class="s">&quot;:&quot;</span>, <b>string</b>.<span class="i">Empty</span>).<span class="i">Replace</span>(<span class="s">&quot; &quot;</span>, <b>string</b>.<span class="i">Empty</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the current process AppDomain name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">AppDomain Name string.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="29f3972fc30dd8ca" href="../../../R/29f3972fc30dd8ca.html" target="n" data-glyph="74,1" class="i method">GetCurrentAppDomainName</a>()
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">CORECLR</span> <span class="c">// There is only one AppDomain per application in CoreCLR, which would be the default</span>
+            <b>return</b> <a href="#51672229da1b0aeb" class="i field">DefaultAppDomainName</a>;
+<span class="k preprocess">#</span><span class="k preprocess">else</span>       <span class="c">// Use the AppDomain in which current powershell is running</span>
+<span class="e">            return AppDomain.CurrentDomain.IsDefaultAppDomain() ? DefaultAppDomainName : AppDomain.CurrentDomain.FriendlyName;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Native API for Named Pipes.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal static class</b> <a id="98d00e2818535eae" href="../../../R/98d00e2818535eae.html" target="n" data-glyph="2,0" class="t t">NamedPipeNative</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Pipe constants
+ 
+        <span class="c">// Pipe open modes</span>
+        <b>internal const uint</b> <a id="e2c1b7222f3857ae" href="../../../R/e2c1b7222f3857ae.html" target="n" data-glyph="8,1" class="i field">PIPE_ACCESS_DUPLEX</a> = 0x00000003;
+        <b>internal const uint</b> <a id="c16e7cfd34cf54b9" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_ACCESS_OUTBOUND</a> = 0x00000002;
+        <b>internal const uint</b> <a id="74e51e95442747f6" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_ACCESS_INBOUND</a> = 0x00000001;
+ 
+        <span class="c">// Pipe modes</span>
+        <b>internal const uint</b> <a id="17a15d435f824300" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_TYPE_BYTE</a> = 0x00000000;
+        <b>internal const uint</b> <a id="1d99eb627efb4ed4" href="../../../R/1d99eb627efb4ed4.html" target="n" data-glyph="8,1" class="i field">PIPE_TYPE_MESSAGE</a> = 0x00000004;
+        <b>internal const uint</b> <a id="8be98ead3ee5e490" href="../../../R/8be98ead3ee5e490.html" target="n" data-glyph="8,1" class="i field">FILE_FLAG_OVERLAPPED</a> = 0x40000000;
+        <b>internal const uint</b> <a id="9cd7eb971c1df255" href="../../../R/9cd7eb971c1df255.html" target="n" data-glyph="8,1" class="i field">FILE_FLAG_FIRST_PIPE_INSTANCE</a> = 0x00080000;
+        <b>internal const uint</b> <a id="aeea3e8154c7fd5c" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_WAIT</a> = 0x00000000;
+        <b>internal const uint</b> <a id="8fc0054be41d0e93" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_NOWAIT</a> = 0x00000001;
+        <b>internal const uint</b> <a id="7108794750001d1b" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_READMODE_BYTE</a> = 0x00000000;
+        <b>internal const uint</b> <a id="babae4e5651bdcf4" href="../../../R/babae4e5651bdcf4.html" target="n" data-glyph="8,1" class="i field">PIPE_READMODE_MESSAGE</a> = 0x00000002;
+        <b>internal const uint</b> <a id="b39d9592f1942b01" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_ACCEPT_REMOTE_CLIENTS</a> = 0x00000000;
+        <b>internal const uint</b> <a id="8c181cf660cd1170" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">PIPE_REJECT_REMOTE_CLIENTS</a> = 0x00000008;
+ 
+        <span class="c">// Pipe errors</span>
+        <b>internal const uint</b> <a id="6db4149a14d45fce" href="../../../R/6db4149a14d45fce.html" target="n" data-glyph="8,1" class="i field">ERROR_FILE_NOT_FOUND</a> = 2;
+        <b>internal const uint</b> <a id="ea04ddc33f25601e" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_BROKEN_PIPE</a> = 109;
+        <b>internal const uint</b> <a id="c39681743e797d9e" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_PIPE_BUSY</a> = 231;
+        <b>internal const uint</b> <a id="f0d2bb1c54dbba9f" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_NO_DATA</a> = 232;
+        <b>internal const uint</b> <a id="6098c972b4522540" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_MORE_DATA</a> = 234;
+        <b>internal const uint</b> <a id="d0c5068084376478" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_PIPE_CONNECTED</a> = 535;
+        <b>internal const uint</b> <a id="d23064dde0f7568d" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_IO_INCOMPLETE</a> = 996;
+        <b>internal const uint</b> <a id="2591b69da2be567e" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">ERROR_IO_PENDING</a> = 997;
+ 
+        <span class="c">// File function constants</span>
+        <b>internal const uint</b> <a id="7fedf55d4132caa2" href="../../../R/7fedf55d4132caa2.html" target="n" data-glyph="8,1" class="i field">GENERIC_READ</a> = 0x80000000;
+        <b>internal const uint</b> <a id="46f75be52612c475" href="../../../R/46f75be52612c475.html" target="n" data-glyph="8,1" class="i field">GENERIC_WRITE</a> = 0x40000000;
+        <b>internal const uint</b> <a id="5b297224ab1c1b68" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">GENERIC_EXECUTE</a> = 0x20000000;
+        <b>internal const uint</b> <a id="418e97e8d8fca325" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">GENERIC_ALL</a> = 0x10000000;
+ 
+        <b>internal const uint</b> <a id="bd2d25f3cc611c92" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">CREATE_NEW</a> = 1;
+        <b>internal const uint</b> <a id="d7228201cd968459" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">CREATE_ALWAYS</a> = 2;
+        <b>internal const uint</b> <a id="8d8fe3c5dd8c1316" href="../../../R/8d8fe3c5dd8c1316.html" target="n" data-glyph="8,1" class="i field">OPEN_EXISTING</a> = 3;
+        <b>internal const uint</b> <a id="7e264142cea2c68f" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">OPEN_ALWAYS</a> = 4;
+        <b>internal const uint</b> <a id="5acbf43ea52b907d" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">TRUNCATE_EXISTING</a> = 5;
+ 
+        <b>internal const uint</b> <a id="5656c4268add62d6" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">SECURITY_IMPERSONATIONLEVEL_ANONYMOUS</a> = 0;
+        <b>internal const uint</b> <a id="0e8c9eb98d50cf78" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">SECURITY_IMPERSONATIONLEVEL_IDENTIFICATION</a> = 1;
+        <b>internal const uint</b> <a id="d2b75003a5232124" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">SECURITY_IMPERSONATIONLEVEL_IMPERSONATION</a> = 2;
+        <b>internal const uint</b> <a id="b7804b207b0cd617" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">SECURITY_IMPERSONATIONLEVEL_DELEGATION</a> = 3;
+ 
+        <span class="c">// Infinite timeout</span>
+        <b>internal const uint</b> <a id="81f4905dc9e6f449" href="../../../R/../../0000000000.html" target="n" data-glyph="8,1" class="i field">INFINITE</a> = 0xFFFFFFFF;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Data structures
+ 
+        [<span class="i">StructLayout</span>(<span class="i">LayoutKind</span>.<span class="i">Sequential</span>)]
+        <b>internal class</b> <a id="aa84de349d2b40d6" href="../../../R/aa84de349d2b40d6.html" target="n" data-glyph="2,1" class="t t">SECURITY_ATTRIBUTES</a>
+        {
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> The size, in bytes, of this structure. Set this value to the size of the SECURITY_ATTRIBUTES structure.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public int</b> <a id="02f7feb5152b44dc" href="../../../R/02f7feb5152b44dc.html" target="n" data-glyph="42,2" class="i field">NLength</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> A pointer to a security descriptor for the object that controls the sharing of it.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public</b> <span class="i">IntPtr</span> <a id="26b784106ee9ff4d" href="../../../R/26b784106ee9ff4d.html" target="n" data-glyph="42,2" class="i field">LPSecurityDescriptor</a> = <span class="i">IntPtr</span>.<span class="i">Zero</span>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> A Boolean value that specifies whether the returned handle is inherited when a new process is created.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public bool</b> <a id="7f60e1f844e5062e" href="../../../R/7f60e1f844e5062e.html" target="n" data-glyph="42,2" class="i field">InheritHandle</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Initializes a new instance of the SECURITY_ATTRIBUTES class.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public</b> <a id="0607b064389345a3" href="../../../R/0607b064389345a3.html" target="n" data-glyph="72,2" class="t constructor">SECURITY_ATTRIBUTES</a>()
+            {
+                <a href="#aa84de349d2b40d6" class="k">this</a>.<a href="#02f7feb5152b44dc" class="i field">NLength</a> = 12;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Pipe methods
+ 
+        [<span class="i">DllImport</span>(<a href="../../../utils/PInvokeDllNames.cs.html#6c73838805dd2f2a" class="t t">PinvokeDllNames</a>.<a href="../../../utils/PInvokeDllNames.cs.html#aff79d831f54b79a" class="i field">CreateNamedPipeDllName</a>, <span class="i">SetLastError</span> = <b>true</b>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>)]
+        <b>internal static extern</b> <span class="i">SafePipeHandle</span> <a id="56a9a0661a83c321" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">CreateNamedPipe</a>(
+           <b>string</b> <span id="r8 rd" class="r8 r">lpName</span>,
+           <b>uint</b> <span id="r9 rd" class="r9 r">dwOpenMode</span>,
+           <b>uint</b> <span id="r10 rd" class="r10 r">dwPipeMode</span>,
+           <b>uint</b> <span id="r11 rd" class="r11 r">nMaxInstances</span>,
+           <b>uint</b> <span id="r12 rd" class="r12 r">nOutBufferSize</span>,
+           <b>uint</b> <span id="r13 rd" class="r13 r">nInBufferSize</span>,
+           <b>uint</b> <span id="r14 rd" class="r14 r">nDefaultTimeOut</span>,
+           <a href="#aa84de349d2b40d6" class="t t">SECURITY_ATTRIBUTES</a> <span id="r15 rd" class="r15 r">securityAttributes</span>);
+ 
+        <b>internal static</b> <a href="#aa84de349d2b40d6" class="t t">SECURITY_ATTRIBUTES</a> <a id="91a91ffed3c10984" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">GetSecurityAttributes</a>(<span class="i">GCHandle</span> <span id="r16 rd" class="r16 r">securityDescriptorPinnedHandle</span>, <b>bool</b> <span id="r17 rd" class="r17 r">inheritHandle</span> = <b>false</b>)
+        {
+            <a href="#aa84de349d2b40d6" class="t t">SECURITY_ATTRIBUTES</a> <span id="r18 rd" class="r18 r">securityAttributes</span> = <b>new</b> <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#0607b064389345a3" class="t constructor">SECURITY_ATTRIBUTES</a>();
+            <span class="r18 r">securityAttributes</span>.<a href="#7f60e1f844e5062e" class="i field">InheritHandle</a> = <span class="r17 r">inheritHandle</span>;
+            <span class="r18 r">securityAttributes</span>.<a href="#02f7feb5152b44dc" class="i field">NLength</a> = (<b>int</b>)<span class="i">Marshal</span>.<span class="i">SizeOf</span>(<span class="r18 r">securityAttributes</span>);
+            <span class="r18 r">securityAttributes</span>.<a href="#26b784106ee9ff4d" class="i field">LPSecurityDescriptor</a> = <span class="r16 r">securityDescriptorPinnedHandle</span>.<span class="i">AddrOfPinnedObject</span>();
+            <b>return</b> <span class="r18 r">securityAttributes</span>;
+        }
+ 
+        [<span class="i">DllImport</span>(<a href="../../../utils/PInvokeDllNames.cs.html#6c73838805dd2f2a" class="t t">PinvokeDllNames</a>.<a href="../../../utils/PInvokeDllNames.cs.html#c72846465597e9c7" class="i field">CreateFileDllName</a>, <span class="i">SetLastError</span> = <b>true</b>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>, <span class="i">CallingConvention</span> = <span class="i">CallingConvention</span>.<span class="i">StdCall</span>)]
+        <b>internal static extern</b> <span class="i">SafePipeHandle</span> <a id="34fc4513fba4664e" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">CreateFile</a>(
+              <b>string</b> <span id="r19 rd" class="r19 r">lpFileName</span>,
+              <b>uint</b> <span id="r20 rd" class="r20 r">dwDesiredAccess</span>,
+              <b>uint</b> <span id="r21 rd" class="r21 r">dwShareMode</span>,
+              <span class="i">IntPtr</span> <span id="r22 rd" class="r22 r">SecurityAttributes</span>,
+              <b>uint</b> <span id="r23 rd" class="r23 r">dwCreationDisposition</span>,
+              <b>uint</b> <span id="r24 rd" class="r24 r">dwFlagsAndAttributes</span>,
+              <span class="i">IntPtr</span> <span id="r25 rd" class="r25 r">hTemplateFile</span>);
+ 
+        [<span class="i">DllImport</span>(<a href="../../../utils/PInvokeDllNames.cs.html#6c73838805dd2f2a" class="t t">PinvokeDllNames</a>.<a href="../../../utils/PInvokeDllNames.cs.html#bf83448e2311e569" class="i field">WaitNamedPipeDllName</a>, <span class="i">SetLastError</span> = <b>true</b>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>)]
+        [<b>return</b>: <span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">Bool</span>)]
+        <b>internal static extern bool</b> <a id="2e7cfd95e7a76305" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">WaitNamedPipe</a>(<b>string</b> <span id="r26 rd" class="r26 r">lpNamedPipeName</span>, <b>uint</b> <span id="r27 rd" class="r27 r">nTimeOut</span>);
+ 
+        [<span class="i">DllImport</span>(<a href="../../../utils/PInvokeDllNames.cs.html#6c73838805dd2f2a" class="t t">PinvokeDllNames</a>.<a href="../../../utils/PInvokeDllNames.cs.html#ef9a8c0af1e46ca8" class="i field">ImpersonateNamedPipeClientDllName</a>, <span class="i">SetLastError</span> = <b>true</b>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>)]
+        [<b>return</b>: <span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">Bool</span>)]
+        <b>internal static extern bool</b> <a id="1e4d0b9bb2191702" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ImpersonateNamedPipeClient</a>(<span class="i">IntPtr</span> <span id="r28 rd" class="r28 r">hNamedPipe</span>);
+ 
+        [<span class="i">DllImport</span>(<a href="../../../utils/PInvokeDllNames.cs.html#6c73838805dd2f2a" class="t t">PinvokeDllNames</a>.<a href="../../../utils/PInvokeDllNames.cs.html#3852957f42bf782b" class="i field">RevertToSelfDllName</a>, <span class="i">SetLastError</span> = <b>true</b>, <span class="i">CharSet</span> = <span class="i">CharSet</span>.<span class="i">Unicode</span>)]
+        [<b>return</b>: <span class="i">MarshalAs</span>(<span class="i">UnmanagedType</span>.<span class="i">Bool</span>)]
+        <b>internal static extern bool</b> <a id="d0ace59548b69fed" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">RevertToSelf</a>();
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Event arguments for listener thread end event.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="f47338ffea46ebd1" href="../../../R/f47338ffea46ebd1.html" target="n" data-glyph="2,0" class="t t">ListenerEndedEventArgs</a> : <span class="i">EventArgs</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Exception reason for listener end event.  Can be null</span>
+        <span class="c">///</span><span class="c"> which indicates listener thread end is not due to an error.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">Exception</span> <a id="989d86b0ed1ffde1" href="../../../R/989d86b0ed1ffde1.html" target="n" data-glyph="102,1" class="i property">Reason</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if listener should be restarted after ending.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public bool</b> <a id="a3face1346f8d9d9" href="../../../R/a3face1346f8d9d9.html" target="n" data-glyph="102,1" class="i property">RestartListener</a> { <b>get</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>private</b> <a id="d10e179d54b99a82" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">ListenerEndedEventArgs</a>() { }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">reason</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Listener end reason.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">restartListener</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Restart listener.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="938fa5279252db8d" href="../../../R/938fa5279252db8d.html" target="n" data-glyph="72,1" class="t constructor">ListenerEndedEventArgs</a>(
+            <span class="i">Exception</span> <span id="r29 rd" class="r29 r">reason</span>,
+            <b>bool</b> <span id="r30 rd" class="r30 r">restartListener</span>)
+        {
+            <a href="#989d86b0ed1ffde1" class="i property">Reason</a> = <span class="r29 r">reason</span>;
+            <a href="#a3face1346f8d9d9" class="i property">RestartListener</a> = <span class="r30 r">restartListener</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Light wrapper class for BCL NamedPipeServerStream class, that</span>
+    <span class="c">///</span><span class="c"> creates the named pipe server with process named pipe name,</span>
+    <span class="c">///</span><span class="c"> having correct access restrictions, and provides a listener</span>
+    <span class="c">///</span><span class="c"> thread loop.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>public sealed class</b> <a id="c14a08ba7cdb8bb2" href="../../../R/c14a08ba7cdb8bb2.html" target="n" data-glyph="0,0" class="t t">RemoteSessionNamedPipeServer</a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Members
+ 
+        <b>private readonly object</b> <a id="5f10cbcc05f8c743" href="../../../R/5f10cbcc05f8c743.html" target="n" data-glyph="46,1" class="i field">_syncObject</a>;
+        <b>private readonly</b> <a href="../../../utils/PowerShellETWTracer.cs.html#3fd13a01d0177ce2" class="t t">PowerShellTraceSource</a> <a id="cef601655e942e31" href="../../../R/cef601655e942e31.html" target="n" data-glyph="46,1" class="i field">_tracer</a> = <a href="../../../utils/PowerShellETWTracer.cs.html#37e484a307a595c3" class="t t">PowerShellTraceSourceFactory</a>.<a href="../../../utils/PowerShellETWTracer.cs.html#c94a9fbfef99a75d" class="i method">GetTraceSource</a>();
+ 
+        <b>private const string</b> <a id="9f9351fe3be29691" href="../../../R/9f9351fe3be29691.html" target="n" data-glyph="10,1" class="i field">_threadName</a> = <span class="s">&quot;IPC Listener Thread&quot;</span>;
+        <b>private const int</b> <a id="53877ae64adaa607" href="../../../R/53877ae64adaa607.html" target="n" data-glyph="10,1" class="i field">_namedPipeBufferSizeForRemoting</a> = 32768;
+        <b>private const int</b> <a id="c2dfd54de1b20651" href="../../../R/c2dfd54de1b20651.html" target="n" data-glyph="10,1" class="i field">_maxPipePathLengthLinux</a> = 108;
+        <b>private const int</b> <a id="62aa490e696fc52e" href="../../../R/62aa490e696fc52e.html" target="n" data-glyph="10,1" class="i field">_maxPipePathLengthMacOS</a> = 104;
+ 
+        <span class="c">// Singleton server.</span>
+        <b>private static readonly object</b> <a id="e7cd45df533ec9a0" href="../../../R/e7cd45df533ec9a0.html" target="n" data-glyph="46,1" class="i field">s_syncObject</a>;
+        <b>internal static</b> <a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <a id="2ac05011532d360a" href="../../../R/2ac05011532d360a.html" target="n" data-glyph="44,1" class="i field">IPCNamedPipeServer</a>;
+        <b>internal static bool</b> <a id="1ad38a1eb366599a" href="../../../R/1ad38a1eb366599a.html" target="n" data-glyph="44,1" class="i field">IPCNamedPipeServerEnabled</a>;
+ 
+        <span class="c">// Optional custom server.</span>
+        <b>private static</b> <a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <a id="59e9113fddc51f06" href="../../../R/59e9113fddc51f06.html" target="n" data-glyph="46,1" class="i field">_customNamedPipeServer</a>;
+ 
+        <span class="c">// Access mask constant taken from PipeSecurity access rights and is equivalent to</span>
+        <span class="c">// PipeAccessRights.FullControl.</span>
+        <span class="c">// See: https://msdn.microsoft.com/library/vstudio/bb348408(v=vs.100).aspx</span>
+        <span class="c">//</span>
+        <b>private const int</b> <a id="7cb4e8386b66867b" href="../../../R/7cb4e8386b66867b.html" target="n" data-glyph="10,1" class="i field">_pipeAccessMaskFullControl</a> = 0x1f019f;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the Named Pipe stream object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">NamedPipeServerStream</span> <a id="cbabd703b330a4e7" href="../../../R/cbabd703b330a4e7.html" target="n" data-glyph="104,1" class="i property">Stream</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns the Named Pipe name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="fddbe79d52bf76f9" href="../../../R/fddbe79d52bf76f9.html" target="n" data-glyph="104,1" class="i property">PipeName</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns true if listener is currently running.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="a2399bd8fddc75c4" href="../../../R/a2399bd8fddc75c4.html" target="n" data-glyph="104,1" class="i property">IsListenerRunning</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of session configuration.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="ab2f661a5dfed7bf" href="../../../R/ab2f661a5dfed7bf.html" target="n" data-glyph="104,1" class="i property">ConfigurationName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Accessor for the named pipe reader.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">StreamReader</span> <a id="63fd4bb62eaca834" href="../../../R/63fd4bb62eaca834.html" target="n" data-glyph="104,1" class="i property">TextReader</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Accessor for the named pipe writer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">StreamWriter</span> <a id="f0364b8cec6d371c" href="../../../R/f0364b8cec6d371c.html" target="n" data-glyph="104,1" class="i property">TextWriter</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns true if object is currently disposed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="63d9efb38747cf05" href="../../../R/63d9efb38747cf05.html" target="n" data-glyph="104,1" class="i property">IsDisposed</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Buffer size for PSRP fragmentor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static int</b> <a id="0e40898fb21d19f1" href="../../../R/0e40898fb21d19f1.html" target="n" data-glyph="104,1" class="i property">NamedPipeBufferSizeForRemoting</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#53877ae64adaa607" class="i field">_namedPipeBufferSizeForRemoting</a>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Events
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Event raised when the named pipe server listening thread</span>
+        <span class="c">///</span><span class="c"> ends.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal event</b> <span class="i">EventHandler</span>&lt;<a href="#f47338ffea46ebd1" class="t t">ListenerEndedEventArgs</a>&gt; <a id="38830dd0a6911885" href="../../../R/38830dd0a6911885.html" target="n" data-glyph="32,1" class="i">ListenerEnded</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates a RemoteSessionNamedPipeServer with the current process and AppDomain information.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">RemoteSessionNamedPipeServer.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <a id="9d3b86c859e48b61" href="../../../R/9d3b86c859e48b61.html" target="n" data-glyph="74,1" class="i method">CreateRemoteSessionNamedPipeServer</a>()
+        {
+            <b>string</b> <span id="r31 rd" class="r31 r">appDomainName</span> = <a href="#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="#29f3972fc30dd8ca" class="i method">GetCurrentAppDomainName</a>();
+ 
+            <b>return</b> <b>new</b> <a href="#049e6db4239c139a" class="t constructor">RemoteSessionNamedPipeServer</a>(<a href="#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<span class="i">CreateProcessPipeName</span>(
+                <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span>.<span class="i">GetCurrentProcess</span>(), <span class="r31 r">appDomainName</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor.  Creates named pipe server with provided pipe name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">pipeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Named Pipe name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="049e6db4239c139a" href="../../../R/049e6db4239c139a.html" target="n" data-glyph="74,1" class="t constructor">RemoteSessionNamedPipeServer</a>(
+            <b>string</b> <span id="r32 rd" class="r32 r">pipeName</span>)
+        {
+            <b>if</b> (<span class="r32 r">pipeName</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r32 r">pipeName</span>));
+            }
+ 
+            <a href="#5f10cbcc05f8c743" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+            <a href="#fddbe79d52bf76f9" class="i property">PipeName</a> = <span class="r32 r">pipeName</span>;
+ 
+            <a href="#cbabd703b330a4e7" class="i property">Stream</a> = <a href="#8be70158968fc542" class="i method">CreateNamedPipe</a>(
+                <span class="r33 r">serverName</span>: <span class="s">&quot;.&quot;</span>,
+                <span class="r34 r">namespaceName</span>: <span class="s">&quot;pipe&quot;</span>,
+                <span class="r35 r">coreName</span>: <span class="r32 r">pipeName</span>,
+                <span class="r36 r">securityDesc</span>: <a href="#a02bc6bbd5e5ab58" class="i method">GetServerPipeSecurity</a>());
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper method to create a PowerShell transport named pipe via native API, along</span>
+        <span class="c">///</span><span class="c"> with a returned .Net NamedPipeServerStream object wrapping the named pipe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">serverName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Named pipe server name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">namespaceName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Named pipe namespace name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">coreName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Named pipe core name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">securityDesc</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">NamedPipeServerStream.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <span class="i">NamedPipeServerStream</span> <a id="8be70158968fc542" href="../../../R/8be70158968fc542.html" target="n" data-glyph="76,1" class="i method">CreateNamedPipe</a>(
+            <b>string</b> <span id="r33 rd" class="r33 r">serverName</span>,
+            <b>string</b> <span id="r34 rd" class="r34 r">namespaceName</span>,
+            <b>string</b> <span id="r35 rd" class="r35 r">coreName</span>,
+            <span class="i">CommonSecurityDescriptor</span> <span id="r36 rd" class="r36 r">securityDesc</span>)
+        {
+            <b>if</b> (<span class="r33 r">serverName</span> == <b>null</b>) { <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r33 r">serverName</span>)); }
+ 
+            <b>if</b> (<span class="r34 r">namespaceName</span> == <b>null</b>) { <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r34 r">namespaceName</span>)); }
+ 
+            <b>if</b> (<span class="r35 r">coreName</span> == <b>null</b>) { <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r35 r">coreName</span>)); }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">UNIX</span>
+            <b>string</b> <span id="r37 rd" class="r37 r">fullPipeName</span> = <span class="s">@&quot;\\&quot;</span> + <span class="r33 r">serverName</span> + <span class="s">@&quot;\&quot;</span> + <span class="r34 r">namespaceName</span> + <span class="s">@&quot;\&quot;</span> + <span class="r35 r">coreName</span>;
+ 
+            <span class="c">// Create optional security attributes based on provided PipeSecurity.</span>
+            <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#aa84de349d2b40d6" class="t t">SECURITY_ATTRIBUTES</a> <span id="r38 rd" class="r38 r">securityAttributes</span> = <b>null</b>;
+            <span class="i">GCHandle</span>? <span id="r39 rd" class="r39 r">securityDescHandle</span> = <b>null</b>;
+            <b>if</b> (<span class="r36 r">securityDesc</span> != <b>null</b>)
+            {
+                <b>byte</b>[] <span id="r40 rd" class="r40 r">securityDescBuffer</span> = <b>new</b> <b>byte</b>[<span class="r36 r">securityDesc</span>.<span class="i">BinaryLength</span>];
+                <span class="r36 r">securityDesc</span>.<span class="i">GetBinaryForm</span>(<span class="r40 r">securityDescBuffer</span>, 0);
+                <span class="r39 r">securityDescHandle</span> = <span class="i">GCHandle</span>.<span class="i">Alloc</span>(<span class="r40 r">securityDescBuffer</span>, <span class="i">GCHandleType</span>.<span class="i">Pinned</span>);
+                <span class="r38 r">securityAttributes</span> = <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<span class="i">GetSecurityAttributes</span>(<span class="r39 r">securityDescHandle</span>.<span class="i">Value</span>);
+            }
+ 
+            <span class="c">// Create named pipe.</span>
+            <span class="i">SafePipeHandle</span> <span id="r41 rd" class="r41 r">pipeHandle</span> = <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<span class="i">CreateNamedPipe</span>(
+                <span class="r37 r">fullPipeName</span>,
+                <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#e2c1b7222f3857ae" class="i field">PIPE_ACCESS_DUPLEX</a> | <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#9cd7eb971c1df255" class="i field">FILE_FLAG_FIRST_PIPE_INSTANCE</a> | <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#8be98ead3ee5e490" class="i field">FILE_FLAG_OVERLAPPED</a>,
+                <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#1d99eb627efb4ed4" class="i field">PIPE_TYPE_MESSAGE</a> | <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#babae4e5651bdcf4" class="i field">PIPE_READMODE_MESSAGE</a>,
+                1,
+                <a href="#53877ae64adaa607" class="i field">_namedPipeBufferSizeForRemoting</a>,
+                <a href="#53877ae64adaa607" class="i field">_namedPipeBufferSizeForRemoting</a>,
+                0,
+                <span class="r38 r">securityAttributes</span>);
+ 
+            <b>int</b> <span id="r42 rd" class="r42 r">lastError</span> = <span class="i">Marshal</span>.<span class="i">GetLastWin32Error</span>();
+            <b>if</b> (<span class="r39 r">securityDescHandle</span> != <b>null</b>)
+            {
+                <span class="r39 r">securityDescHandle</span>.<span class="i">Value</span>.<span class="i">Free</span>();
+            }
+ 
+            <b>if</b> (<span class="r41 r">pipeHandle</span>.<span class="i">IsInvalid</span>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(
+                    <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotCreateNamedPipe</span>, <span class="r42 r">lastError</span>));
+            }
+ 
+            <span class="c">// Create the .Net NamedPipeServerStream wrapper.</span>
+            <b>try</b>
+            {
+                <b>return</b> <b>new</b> <span class="i">NamedPipeServerStream</span>(
+                    <span class="i">PipeDirection</span>.<span class="i">InOut</span>,
+                    <b>true</b>,                       <span class="c">// IsAsync</span>
+                    <b>false</b>,                      <span class="c">// IsConnected</span>
+                    <span class="r41 r">pipeHandle</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <span class="r41 r">pipeHandle</span>.<span class="i">Dispose</span>();
+                <b>throw</b>;
+            }
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">            return new NamedPipeServerStream(
+                pipeName: coreName,
+                direction: PipeDirection.InOut,
+                maxNumberOfServerInstances: 1,
+                transmissionMode: PipeTransmissionMode.Byte,
+                options: PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+                inBufferSize: _namedPipeBufferSizeForRemoting,
+                outBufferSize: _namedPipeBufferSizeForRemoting);
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <b>static</b> <a id="8f29e5b6ccf6eeb2" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t method">RemoteSessionNamedPipeServer</a>()
+        {
+            <a href="#e7cd45df533ec9a0" class="i field">s_syncObject</a> = <b>new</b> <b>object</b>();
+ 
+            <span class="c">// All PowerShell instances will start with the named pipe</span>
+            <span class="c">// and listener created and running.</span>
+            <a href="#1ad38a1eb366599a" class="i field">IPCNamedPipeServerEnabled</a> = <b>true</b>;
+ 
+            <a href="#f7d7340e431620cf" class="i method">CreateIPCNamedPipeServerSingleton</a>();
+ 
+            <a href="#a4ea30e2ad15491d" class="i method">CreateProcessExitHandler</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="9538ca0fa746bfd8" href="../../../R/9538ca0fa746bfd8.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <b>lock</b> (<a href="#5f10cbcc05f8c743" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#63d9efb38747cf05" class="i property">IsDisposed</a>) { <b>return</b>; }
+ 
+                <a href="#63d9efb38747cf05" class="i property">IsDisposed</a> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<a href="#63fd4bb62eaca834" class="i property">TextReader</a> != <b>null</b>)
+            {
+                <b>try</b> { <a href="#63fd4bb62eaca834" class="i property">TextReader</a>.<span class="i">Dispose</span>(); }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+ 
+                <a href="#63fd4bb62eaca834" class="i property">TextReader</a> = <b>null</b>;
+            }
+ 
+            <b>if</b> (<a href="#f0364b8cec6d371c" class="i property">TextWriter</a> != <b>null</b>)
+            {
+                <b>try</b> { <a href="#f0364b8cec6d371c" class="i property">TextWriter</a>.<span class="i">Dispose</span>(); }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+ 
+                <a href="#f0364b8cec6d371c" class="i property">TextWriter</a> = <b>null</b>;
+            }
+ 
+            <b>if</b> (<a href="#cbabd703b330a4e7" class="i property">Stream</a> != <b>null</b>)
+            {
+                <b>try</b> { <a href="#cbabd703b330a4e7" class="i property">Stream</a>.<span class="i">Dispose</span>(); }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Public Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates the custom named pipe server with the given pipename.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">pipeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The name of the pipe to create.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public static void</b> <a id="08dbe1dffde04530" href="../../../R/08dbe1dffde04530.html" target="n" data-glyph="72,1" class="i method">CreateCustomNamedPipeServer</a>(<b>string</b> <span id="r43 rd" class="r43 r">pipeName</span>)
+        {
+            <b>lock</b> (<a href="#e7cd45df533ec9a0" class="i field">s_syncObject</a>)
+            {
+                <b>if</b> (<a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a> != <b>null</b> &amp;&amp; !<a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a>.<a href="#63d9efb38747cf05" class="i property">IsDisposed</a>)
+                {
+                    <b>if</b> (<span class="r43 r">pipeName</span> == <a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a>.<a href="#fddbe79d52bf76f9" class="i property">PipeName</a>)
+                    {
+                        <span class="c">// we shouldn&#39;t recreate the server object if we&#39;re using the same pipeName</span>
+                        <b>return</b>;
+                    }
+ 
+                    <span class="c">// Dispose of the current pipe server so we can create a new one with the new pipeName</span>
+                    <a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a>.<a href="#9538ca0fa746bfd8" class="i method">Dispose</a>();
+                }
+ 
+                <b>if</b> (!<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#a0395f876114b36d" class="i property">IsWindows</a>)
+                {
+                    <b>int</b> <span id="r44 rd" class="r44 r">maxNameLength</span> = (<a href="../../../CoreCLR/CorePsPlatform.cs.html#693813241122eb45" class="t t">Platform</a>.<a href="../../../CoreCLR/CorePsPlatform.cs.html#99a87a41a4637eed" class="i property">IsLinux</a> ? <a href="#c2dfd54de1b20651" class="i field">_maxPipePathLengthLinux</a> : <a href="#62aa490e696fc52e" class="i field">_maxPipePathLengthMacOS</a>) - <span class="i">Path</span>.<span class="i">GetTempPath</span>().<span class="i">Length</span>;
+                    <b>if</b> (<span class="r43 r">pipeName</span>.<span class="i">Length</span> &gt; <span class="r44 r">maxNameLength</span>)
+                    {
+                        <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(
+                            <b>string</b>.<span class="i">Format</span>(
+                                <span class="i">RemotingErrorIdStrings</span>.<span class="i">CustomPipeNameTooLong</span>,
+                                <span class="r44 r">maxNameLength</span>,
+                                <span class="r43 r">pipeName</span>,
+                                <span class="r43 r">pipeName</span>.<span class="i">Length</span>));
+                    }
+                }
+ 
+                <b>try</b>
+                {
+                    <b>try</b>
+                    {
+                        <a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a> = <b>new</b> <a href="#049e6db4239c139a" class="t constructor">RemoteSessionNamedPipeServer</a>(<span class="r43 r">pipeName</span>);
+                    }
+                    <b>catch</b> (<span class="i">IOException</span>)
+                    {
+                        <span class="c">// Expected when named pipe server for this process already exists.</span>
+                        <span class="c">// This can happen if process has multiple AppDomains hosting PowerShell (SMA.dll).</span>
+                        <b>return</b>;
+                    }
+ 
+                    <span class="c">// Listener ended callback, used to create listening new pipe server.</span>
+                    <a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a>.<a href="#38830dd0a6911885" class="i">ListenerEnded</a> += <span class="i">OnCustomNamedPipeServerEnded</span>;
+ 
+                    <span class="c">// Start the pipe server listening thread, and provide client connection callback.</span>
+                    <a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a>.<span class="i">StartListening</span>(<span class="i">ClientConnectionCallback</span>);
+                }
+                <b>catch</b> (<span class="i">Exception</span>)
+                {
+                    <a href="#59e9113fddc51f06" class="i field">_customNamedPipeServer</a> = <b>null</b>;
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Starts named pipe server listening thread.  When a client connects this thread</span>
+        <span class="c">///</span><span class="c"> makes a callback to implement the client communication.  When the thread ends</span>
+        <span class="c">///</span><span class="c"> this object is disposed and a new RemoteSessionNamedPipeServer must be created</span>
+        <span class="c">///</span><span class="c"> and a new listening thread started to handle subsequent client connections.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r45 r">clientConnectCallback</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Connection callback.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="986fa56480978732" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">StartListening</a>(
+            <span class="i">Action</span>&lt;<a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a>&gt; <span id="r45 rd" class="r45 r">clientConnectCallback</span>)
+        {
+            <b>if</b> (<span class="r45 r">clientConnectCallback</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r45 r">clientConnectCallback</span>));
+            }
+ 
+            <b>lock</b> (<a href="#5f10cbcc05f8c743" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#a2399bd8fddc75c4" class="i property">IsListenerRunning</a>)
+                {
+                    <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">NamedPipeAlreadyListening</span>);
+                }
+ 
+                <a href="#a2399bd8fddc75c4" class="i property">IsListenerRunning</a> = <b>true</b>;
+ 
+                <span class="c">// Create listener thread.</span>
+                <span class="i">Thread</span> <span id="r46 rd" class="r46 r">listenerThread</span> = <b>new</b> <span class="i">Thread</span>(<span class="i">ProcessListeningThread</span>);
+                <span class="r46 r">listenerThread</span>.<span class="i">Name</span> = <a href="#9f9351fe3be29691" class="i field">_threadName</a>;
+                <span class="r46 r">listenerThread</span>.<span class="i">IsBackground</span> = <b>true</b>;
+                <span class="r46 r">listenerThread</span>.<span class="i">Start</span>(<span class="r45 r">clientConnectCallback</span>);
+            }
+        }
+ 
+        <b>internal static</b> <span class="i">CommonSecurityDescriptor</span> <a id="a02bc6bbd5e5ab58" href="../../../R/a02bc6bbd5e5ab58.html" target="n" data-glyph="74,1" class="i method">GetServerPipeSecurity</a>()
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            return null;
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+            <span class="c">// Built-in Admin SID</span>
+            <span class="i">SecurityIdentifier</span> <span id="r47 rd" class="r47 r">adminSID</span> = <b>new</b> <span class="i">SecurityIdentifier</span>(<span class="i">WellKnownSidType</span>.<span class="i">BuiltinAdministratorsSid</span>, <b>null</b>);
+            <span class="i">DiscretionaryAcl</span> <span id="r48 rd" class="r48 r">dacl</span> = <b>new</b> <span class="i">DiscretionaryAcl</span>(<b>false</b>, <b>false</b>, 1);
+            <span class="r48 r">dacl</span>.<span class="i">AddAccess</span>(
+                <span class="i">AccessControlType</span>.<span class="i">Allow</span>,
+                <span class="r47 r">adminSID</span>,
+                <a href="#7cb4e8386b66867b" class="i field">_pipeAccessMaskFullControl</a>,
+                <span class="i">InheritanceFlags</span>.<span class="i">None</span>,
+                <span class="i">PropagationFlags</span>.<span class="i">None</span>);
+ 
+            <span class="i">CommonSecurityDescriptor</span> <span id="r49 rd" class="r49 r">securityDesc</span> = <b>new</b> <span class="i">CommonSecurityDescriptor</span>(
+                <b>false</b>, <b>false</b>,
+                <span class="i">ControlFlags</span>.<span class="i">DiscretionaryAclPresent</span> | <span class="i">ControlFlags</span>.<span class="i">OwnerDefaulted</span> | <span class="i">ControlFlags</span>.<span class="i">GroupDefaulted</span>,
+                <b>null</b>, <b>null</b>, <b>null</b>, <span class="r48 r">dacl</span>);
+ 
+            <span class="c">// Conditionally add User SID</span>
+            <b>bool</b> <span id="r50 rd" class="r50 r">isAdminElevated</span> = <b>new</b> <span class="i">WindowsPrincipal</span>(<span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>()).<span class="i">IsInRole</span>(<span class="i">WindowsBuiltInRole</span>.<span class="i">Administrator</span>);
+            <b>if</b> (!<span class="r50 r">isAdminElevated</span>)
+            {
+                <span class="r49 r">securityDesc</span>.<span class="i">DiscretionaryAcl</span>.<span class="i">AddAccess</span>(
+                    <span class="i">AccessControlType</span>.<span class="i">Allow</span>,
+                    <span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>().<span class="i">User</span>,
+                    <a href="#7cb4e8386b66867b" class="i field">_pipeAccessMaskFullControl</a>,
+                    <span class="i">InheritanceFlags</span>.<span class="i">None</span>,
+                    <span class="i">PropagationFlags</span>.<span class="i">None</span>);
+            }
+ 
+            <b>return</b> <span class="r49 r">securityDesc</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Wait for client connection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="38335ebf7168680f" href="../../../R/38335ebf7168680f.html" target="n" data-glyph="76,1" class="i method">WaitForConnection</a>()
+        {
+            <a href="#cbabd703b330a4e7" class="i property">Stream</a>.<span class="i">WaitForConnection</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Process listening thread.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r51 r">state</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Client callback delegate.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Reliability&quot;</span>, <span class="s">&quot;CA2001:AvoidCallingProblematicMethods&quot;</span>, <span class="i">MessageId</span> = <span class="s">&quot;System.Runtime.InteropServices.SafeHandle.DangerousGetHandle&quot;</span>)]
+        <b>private void</b> <a id="0d7ba68aad501d9b" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ProcessListeningThread</a>(<b>object</b> <span id="r51 rd" class="r51 r">state</span>)
+        {
+            <b>string</b> <span id="r52 rd" class="r52 r">processId</span> = <span class="i">Environment</span>.<span class="i">ProcessId</span>.<span class="i">ToString</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>);
+            <b>string</b> <span id="r53 rd" class="r53 r">appDomainName</span> = <a href="#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="#29f3972fc30dd8ca" class="i method">GetCurrentAppDomainName</a>();
+ 
+            <span class="c">// Logging.</span>
+            <a href="#cef601655e942e31" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;RemoteSessionNamedPipeServer&quot;</span>, <span class="s">&quot;StartListening&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                <span class="s">&quot;Listener thread started on Process {0} in AppDomainName {1}.&quot;</span>, <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>);
+            <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#13469194b3854daf" class="i method">LogOperationalInformation</a>(
+                <a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#b8ed17760c89d474" class="i field">NamedPipeIPC_ServerListenerStarted</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#399fd86ea109ec79" class="i field">Open</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#83a463188f9452ff" class="i field">NamedPipe</a>,
+                <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>);
+ 
+            <span class="i">Exception</span> <span id="r54 rd" class="r54 r">ex</span> = <b>null</b>;
+            <b>string</b> <span id="r55 rd" class="r55 r">userName</span> = <b>string</b>.<span class="i">Empty</span>;
+            <b>bool</b> <span id="r56 rd" class="r56 r">restartListenerThread</span> = <b>true</b>;
+ 
+            <span class="c">// Wait for connection.</span>
+            <b>try</b>
+            {
+                <span class="c">// Begin listening for a client connect.</span>
+                <a href="#c14a08ba7cdb8bb2" class="k">this</a>.<a href="#38335ebf7168680f" class="i method">WaitForConnection</a>();
+ 
+                <b>try</b>
+                {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">                    userName = System.Environment.UserName;
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+                    <span class="r55 r">userName</span> = <span class="i">WindowsIdentity</span>.<span class="i">GetCurrent</span>().<span class="i">Name</span>;
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                }
+                <b>catch</b> (<span class="i n">System</span>.<span class="i">Security</span>.<span class="i">SecurityException</span>) { }
+ 
+                <span class="c">// Logging.</span>
+                <a href="#cef601655e942e31" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;RemoteSessionNamedPipeServer&quot;</span>, <span class="s">&quot;StartListening&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                    <span class="s">&quot;Client connection started on Process {0} in AppDomainName {1} for User {2}.&quot;</span>, <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r55 r">userName</span>);
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#13469194b3854daf" class="i method">LogOperationalInformation</a>(
+                    <a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#013439d65772050b" class="i field">NamedPipeIPC_ServerConnect</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#a0f7cf0d4987790f" class="i field">Connect</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#83a463188f9452ff" class="i field">NamedPipe</a>,
+                    <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                    <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r55 r">userName</span>);
+ 
+                <span class="c">// Create reader/writer streams.</span>
+                <a href="#63fd4bb62eaca834" class="i property">TextReader</a> = <b>new</b> <span class="i">StreamReader</span>(<a href="#cbabd703b330a4e7" class="i property">Stream</a>);
+                <a href="#f0364b8cec6d371c" class="i property">TextWriter</a> = <b>new</b> <span class="i">StreamWriter</span>(<a href="#cbabd703b330a4e7" class="i property">Stream</a>);
+                <a href="#f0364b8cec6d371c" class="i property">TextWriter</a>.<span class="i">AutoFlush</span> = <b>true</b>;
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r57 rd" class="r57 r">e</span>)
+            {
+                <span class="r54 r">ex</span> = <span class="r57 r">e</span>;
+            }
+ 
+            <b>if</b> (<span class="r54 r">ex</span> != <b>null</b>)
+            {
+                <span class="c">// Error during connection handling.  Don&#39;t try to restart listening thread.</span>
+                <b>string</b> <span id="r58 rd" class="r58 r">errorMessage</span> = !<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r54 r">ex</span>.<span class="i">Message</span>) ? <span class="r54 r">ex</span>.<span class="i">Message</span> : <b>string</b>.<span class="i">Empty</span>;
+                <a href="#cef601655e942e31" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;RemoteSessionNamedPipeServer&quot;</span>, <span class="s">&quot;StartListening&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                    <span class="s">&quot;Unexpected error in listener thread on process {0} in AppDomainName {1}.  Error Message: {2}&quot;</span>, <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r58 r">errorMessage</span>);
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#ea022c98a8d5cada" class="i method">LogOperationalError</a>(<a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#0d5b46cd2539428e" class="i field">NamedPipeIPC_ServerListenerError</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#faf4fe68c87fb192" class="i field">Exception</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#83a463188f9452ff" class="i field">NamedPipe</a>,
+                    <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                    <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r58 r">errorMessage</span>);
+ 
+                <a href="#9538ca0fa746bfd8" class="i method">Dispose</a>();
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Start server session on new connection.</span>
+            <span class="r54 r">ex</span> = <b>null</b>;
+            <b>try</b>
+            {
+                <span class="i">Action</span>&lt;<a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a>&gt; <span id="r59 rd" class="r59 r">clientConnectCallback</span> = <span class="r51 r">state</span> <b>as</b> <span class="i">Action</span>&lt;<a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a>&gt;;
+                <span class="i">Dbg</span>.<span class="i">Assert</span>(<span class="r59 r">clientConnectCallback</span> != <b>null</b>, <span class="s">&quot;Client callback should never be null.&quot;</span>);
+ 
+                <span class="c">// Handle a new client connect by making the callback.</span>
+                <span class="c">// The callback must handle all exceptions except</span>
+                <span class="c">// for a named pipe disposed or disconnected exception</span>
+                <span class="c">// which propagates up to the thread listener loop.</span>
+                <span class="r59 r">clientConnectCallback</span>(<a href="#c14a08ba7cdb8bb2" class="k">this</a>);
+            }
+            <b>catch</b> (<span class="i">IOException</span>)
+            {
+                <span class="c">// Expected connection terminated.</span>
+            }
+            <b>catch</b> (<span class="i">ObjectDisposedException</span>)
+            {
+                <span class="c">// Expected from PS transport close/dispose.</span>
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r60 rd" class="r60 r">e</span>)
+            {
+                <span class="r54 r">ex</span> = <span class="r60 r">e</span>;
+                <span class="r56 r">restartListenerThread</span> = <b>false</b>;
+            }
+ 
+            <span class="c">// Logging.</span>
+            <a href="#cef601655e942e31" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;RemoteSessionNamedPipeServer&quot;</span>, <span class="s">&quot;StartListening&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                <span class="s">&quot;Client connection ended on process {0} in AppDomainName {1} for User {2}.&quot;</span>, <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r55 r">userName</span>);
+            <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#13469194b3854daf" class="i method">LogOperationalInformation</a>(
+                <a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#c6467167e2978bfc" class="i field">NamedPipeIPC_ServerDisconnect</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#7bf2b73f1de59d2e" class="i field">Close</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#83a463188f9452ff" class="i field">NamedPipe</a>,
+                <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r55 r">userName</span>);
+ 
+            <b>if</b> (<span class="r54 r">ex</span> == <b>null</b>)
+            {
+                <span class="c">// Normal listener exit.</span>
+                <a href="#cef601655e942e31" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;RemoteSessionNamedPipeServer&quot;</span>, <span class="s">&quot;StartListening&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                    <span class="s">&quot;Listener thread ended on process {0} in AppDomainName {1}.&quot;</span>, <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>);
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#13469194b3854daf" class="i method">LogOperationalInformation</a>(<a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#52670d5716088f70" class="i field">NamedPipeIPC_ServerListenerEnded</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#7bf2b73f1de59d2e" class="i field">Close</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#83a463188f9452ff" class="i field">NamedPipe</a>,
+                    <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                    <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>);
+            }
+            <b>else</b>
+            {
+                <span class="c">// Unexpected error.</span>
+                <b>string</b> <span id="r61 rd" class="r61 r">errorMessage</span> = !<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r54 r">ex</span>.<span class="i">Message</span>) ? <span class="r54 r">ex</span>.<span class="i">Message</span> : <b>string</b>.<span class="i">Empty</span>;
+                <a href="#cef601655e942e31" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;RemoteSessionNamedPipeServer&quot;</span>, <span class="s">&quot;StartListening&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                    <span class="s">&quot;Unexpected error in listener thread on process {0} in AppDomainName {1}.  Error Message: {2}&quot;</span>, <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r61 r">errorMessage</span>);
+                <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#ea022c98a8d5cada" class="i method">LogOperationalError</a>(<a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#0d5b46cd2539428e" class="i field">NamedPipeIPC_ServerListenerError</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#faf4fe68c87fb192" class="i field">Exception</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#83a463188f9452ff" class="i field">NamedPipe</a>,
+                    <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#05d709c2010b41d5" class="i field">UseAlwaysOperational</a>,
+                    <span class="r52 r">processId</span>, <span class="r53 r">appDomainName</span>, <span class="r61 r">errorMessage</span>);
+            }
+ 
+            <b>lock</b> (<a href="#5f10cbcc05f8c743" class="i field">_syncObject</a>)
+            {
+                <a href="#a2399bd8fddc75c4" class="i property">IsListenerRunning</a> = <b>false</b>;
+            }
+ 
+            <span class="c">// Ensure this named pipe server object is disposed.</span>
+            <a href="#9538ca0fa746bfd8" class="i method">Dispose</a>();
+ 
+            <a href="#38830dd0a6911885" class="i">ListenerEnded</a>.<span class="i">SafeInvoke</span>(
+                <a href="#c14a08ba7cdb8bb2" class="k">this</a>,
+                <b>new</b> <a href="#938fa5279252db8d" class="t constructor">ListenerEndedEventArgs</a>(<span class="r54 r">ex</span>, <span class="r56 r">restartListenerThread</span>));
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Static Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Ensures the namedpipe singleton server is running and waits for a client connection.</span>
+        <span class="c">///</span><span class="c"> This is a blocking call that returns after the client connection ends.</span>
+        <span class="c">///</span><span class="c"> This method supports PowerShell running in &quot;NamedPipeServerMode&quot;, which is used for</span>
+        <span class="c">///</span><span class="c"> PowerShell Direct Windows Server Container connection and management.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">configurationName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of the configuration to use.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="b334c00d95d2bddd" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">RunServerMode</a>(<b>string</b> <span id="r62 rd" class="r62 r">configurationName</span>)
+        {
+            <a href="#1ad38a1eb366599a" class="i field">IPCNamedPipeServerEnabled</a> = <b>true</b>;
+            <a href="#f7d7340e431620cf" class="i method">CreateIPCNamedPipeServerSingleton</a>();
+ 
+            <b>if</b> (<a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <span class="t">RuntimeException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">NamedPipeServerCannotStart</span>);
+            }
+ 
+            <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>.<a href="#ab2f661a5dfed7bf" class="i property">ConfigurationName</a> = <span class="r62 r">configurationName</span>;
+ 
+            <span class="i">ManualResetEventSlim</span> <span id="r63 rd" class="r63 r">clientConnectionEnded</span> = <b>new</b> <span class="i">ManualResetEventSlim</span>(<b>false</b>);
+            <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>.<a href="#38830dd0a6911885" class="i">ListenerEnded</a> -= <span class="i">OnIPCNamedPipeServerEnded</span>;
+            <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>.<a href="#38830dd0a6911885" class="i">ListenerEnded</a> += (<span id="r64 rd" class="r64 r">sender</span>, <span id="r65 rd" class="r65 r">e</span>) =&gt; <span class="r63 r">clientConnectionEnded</span>.<span class="i">Set</span>();
+ 
+            <span class="c">// Wait for server to service a single client connection.</span>
+            <span class="r63 r">clientConnectionEnded</span>.<span class="i">Wait</span>();
+            <span class="r63 r">clientConnectionEnded</span>.<span class="i">Dispose</span>();
+            <a href="#1ad38a1eb366599a" class="i field">IPCNamedPipeServerEnabled</a> = <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates the process named pipe server object singleton and</span>
+        <span class="c">///</span><span class="c"> starts the client listening thread.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="f7d7340e431620cf" href="../../../R/f7d7340e431620cf.html" target="n" data-glyph="74,1" class="i method">CreateIPCNamedPipeServerSingleton</a>()
+        {
+            <b>lock</b> (<a href="#e7cd45df533ec9a0" class="i field">s_syncObject</a>)
+            {
+                <b>if</b> (!<a href="#1ad38a1eb366599a" class="i field">IPCNamedPipeServerEnabled</a>) { <b>return</b>; }
+ 
+                <b>if</b> (<a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a> == <b>null</b> || <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>.<a href="#63d9efb38747cf05" class="i property">IsDisposed</a>)
+                {
+                    <b>try</b>
+                    {
+                        <b>try</b>
+                        {
+                            <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a> = <a href="#9d3b86c859e48b61" class="i method">CreateRemoteSessionNamedPipeServer</a>();
+                        }
+                        <b>catch</b> (<span class="i">IOException</span>)
+                        {
+                            <span class="c">// Expected when named pipe server for this process already exists.</span>
+                            <span class="c">// This can happen if process has multiple AppDomains hosting PowerShell (SMA.dll).</span>
+                            <b>return</b>;
+                        }
+ 
+                        <span class="c">// Listener ended callback, used to create listening new pipe server.</span>
+                        <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>.<a href="#38830dd0a6911885" class="i">ListenerEnded</a> += <span class="i">OnIPCNamedPipeServerEnded</span>;
+ 
+                        <span class="c">// Start the pipe server listening thread, and provide client connection callback.</span>
+                        <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>.<span class="i">StartListening</span>(<span class="i">ClientConnectionCallback</span>);
+                    }
+                    <b>catch</b> (<span class="i">Exception</span>)
+                    {
+                        <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a> = <b>null</b>;
+                    }
+                }
+            }
+        }
+ 
+        <b>private static void</b> <a id="a4ea30e2ad15491d" href="../../../R/a4ea30e2ad15491d.html" target="n" data-glyph="76,1" class="i method">CreateProcessExitHandler</a>()
+        {
+            <span class="i">AppDomain</span>.<span class="i">CurrentDomain</span>.<span class="i">ProcessExit</span> += (<span id="r66 rd" class="r66 r">sender</span>, <span id="r67 rd" class="r67 r">args</span>) =&gt;
+            {
+                <a href="#1ad38a1eb366599a" class="i field">IPCNamedPipeServerEnabled</a> = <b>false</b>;
+                <a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <span id="r68 rd" class="r68 r">namedPipeServer</span> = <a href="#2ac05011532d360a" class="i field">IPCNamedPipeServer</a>;
+                <b>if</b> (<span class="r68 r">namedPipeServer</span> != <b>null</b>)
+                {
+                    <b>try</b>
+                    {
+                        <span class="c">// Terminate the IPC thread.</span>
+                        <span class="r68 r">namedPipeServer</span>.<a href="#9538ca0fa746bfd8" class="i method">Dispose</a>();
+                    }
+                    <b>catch</b> (<span class="i">ObjectDisposedException</span>)
+                    {
+                        <span class="c">// Ignore if object already disposed.</span>
+                    }
+                    <b>catch</b> (<span class="i">Exception</span>)
+                    {
+                        <span class="c">// Don&#39;t throw an exception on the app domain unload event thread.</span>
+                    }
+                }
+            };
+        }
+ 
+        <b>private static void</b> <a id="8829657aa7284bf7" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OnIPCNamedPipeServerEnded</a>(<b>object</b> <span id="r69 rd" class="r69 r">sender</span>, <a href="#f47338ffea46ebd1" class="t t">ListenerEndedEventArgs</a> <span id="r70 rd" class="r70 r">args</span>)
+        {
+            <b>if</b> (<span class="r70 r">args</span>.<a href="#a3face1346f8d9d9" class="i property">RestartListener</a>)
+            {
+                <a href="#f7d7340e431620cf" class="i method">CreateIPCNamedPipeServerSingleton</a>();
+            }
+        }
+ 
+        <b>private static void</b> <a id="b635b8926b53a4b7" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OnCustomNamedPipeServerEnded</a>(<b>object</b> <span id="r71 rd" class="r71 r">sender</span>, <a href="#f47338ffea46ebd1" class="t t">ListenerEndedEventArgs</a> <span id="r72 rd" class="r72 r">args</span>)
+        {
+            <b>if</b> (<span class="r72 r">args</span>.<a href="#a3face1346f8d9d9" class="i property">RestartListener</a> &amp;&amp; <span class="r71 r">sender</span> <b>is</b> <a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <span id="r73 rd" class="r73 r">server</span>)
+            {
+                <a href="#08dbe1dffde04530" class="i method">CreateCustomNamedPipeServer</a>(<span class="r73 r">server</span>.<a href="#fddbe79d52bf76f9" class="i property">PipeName</a>);
+            }
+        }
+ 
+        <b>private static void</b> <a id="fce0e9ef71ce4054" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ClientConnectionCallback</a>(<a href="#c14a08ba7cdb8bb2" class="t t">RemoteSessionNamedPipeServer</a> <span id="r74 rd" class="r74 r">pipeServer</span>)
+        {
+            <span class="c">// Create server mediator object and begin remote session with client.</span>
+            <a href="../server/OutOfProcServerMediator.cs.html#933684383c32ec5f" class="t t">NamedPipeProcessMediator</a>.<span class="i">Run</span>(
+                <b>string</b>.<span class="i">Empty</span>,
+                <span class="r74 r">pipeServer</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Base class for RemoteSessionNamedPipeClient and ContainerSessionNamedPipeClient.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="565e9e795ba1a099" href="../../../R/565e9e795ba1a099.html" target="n" data-glyph="2,0" class="t t">NamedPipeClientBase</a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Members
+ 
+        <b>private</b> <span class="i">NamedPipeClientStream</span> <a id="bc96ed6ab2a536c0" href="../../../R/bc96ed6ab2a536c0.html" target="n" data-glyph="46,1" class="i field">_clientPipeStream</a>;
+        <b>private readonly</b> <a href="../../../utils/PowerShellETWTracer.cs.html#3fd13a01d0177ce2" class="t t">PowerShellTraceSource</a> <a id="9a223ec630fd1828" href="../../../R/9a223ec630fd1828.html" target="n" data-glyph="46,1" class="i field">_tracer</a> = <a href="../../../utils/PowerShellETWTracer.cs.html#37e484a307a595c3" class="t t">PowerShellTraceSourceFactory</a>.<a href="../../../utils/PowerShellETWTracer.cs.html#c94a9fbfef99a75d" class="i method">GetTraceSource</a>();
+ 
+        <b>protected string</b> <a id="561441bf9fdb8572" href="../../../R/561441bf9fdb8572.html" target="n" data-glyph="45,1" class="i field">_pipeName</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Accessor for the named pipe reader.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">StreamReader</span> <a id="29003eab6bc634b0" href="../../../R/29003eab6bc634b0.html" target="n" data-glyph="102,1" class="i property">TextReader</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Accessor for the named pipe writer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public</b> <span class="i">StreamWriter</span> <a id="857889df835323ab" href="../../../R/857889df835323ab.html" target="n" data-glyph="102,1" class="i property">TextWriter</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of pipe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public string</b> <a id="217c7056c426f4bd" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">PipeName</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#561441bf9fdb8572" class="i field">_pipeName</a>; }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <b>public</b> <a id="7aa52d8366226bcc" href="../../../R/7aa52d8366226bcc.html" target="n" data-glyph="72,1" class="t constructor">NamedPipeClientBase</a>()
+        { }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="b58dad3f69e597fb" href="../../../R/b58dad3f69e597fb.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <b>if</b> (<a href="#29003eab6bc634b0" class="i property">TextReader</a> != <b>null</b>)
+            {
+                <b>try</b> { <a href="#29003eab6bc634b0" class="i property">TextReader</a>.<span class="i">Dispose</span>(); }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+ 
+                <a href="#29003eab6bc634b0" class="i property">TextReader</a> = <b>null</b>;
+            }
+ 
+            <b>if</b> (<a href="#857889df835323ab" class="i property">TextWriter</a> != <b>null</b>)
+            {
+                <b>try</b> { <a href="#857889df835323ab" class="i property">TextWriter</a>.<span class="i">Dispose</span>(); }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+ 
+                <a href="#857889df835323ab" class="i property">TextWriter</a> = <b>null</b>;
+            }
+ 
+            <b>if</b> (<a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a> != <b>null</b>)
+            {
+                <b>try</b> { <a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a>.<span class="i">Dispose</span>(); }
+                <b>catch</b> (<span class="i">ObjectDisposedException</span>) { }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Connect to named pipe server.  This is a blocking call until a</span>
+        <span class="c">///</span><span class="c"> connection occurs or the timeout time has elapsed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r75 r">timeout</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Connection attempt timeout in milliseconds.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="6cc2557d125b0059" href="../../../R/6cc2557d125b0059.html" target="n" data-glyph="72,1" class="i method">Connect</a>(
+            <b>int</b> <span id="r75 rd" class="r75 r">timeout</span>)
+        {
+            <span class="c">// Uses Native API to connect to pipe and return NamedPipeClientStream object.</span>
+            <a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a> = <a href="#fca7a2d597f4af87" class="i method">DoConnect</a>(<span class="r75 r">timeout</span>);
+ 
+            <span class="c">// Create reader/writer streams.</span>
+            <a href="#29003eab6bc634b0" class="i property">TextReader</a> = <b>new</b> <span class="i">StreamReader</span>(<a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a>);
+            <a href="#857889df835323ab" class="i property">TextWriter</a> = <b>new</b> <span class="i">StreamWriter</span>(<a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a>);
+            <a href="#857889df835323ab" class="i property">TextWriter</a>.<span class="i">AutoFlush</span> = <b>true</b>;
+ 
+            <a href="#9a223ec630fd1828" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;NamedPipeClientBase&quot;</span>, <span class="s">&quot;Connect&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>,
+                <span class="s">&quot;Connection started on pipe: {0}&quot;</span>, <a href="#561441bf9fdb8572" class="i field">_pipeName</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Closes the named pipe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="fa7a2e910f508d2e" href="../../../R/fa7a2e910f508d2e.html" target="n" data-glyph="72,1" class="i method">Close</a>()
+        {
+            <b>if</b> (<a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a> != <b>null</b>)
+            {
+                <a href="#bc96ed6ab2a536c0" class="i field">_clientPipeStream</a>.<span class="i">Dispose</span>();
+            }
+        }
+ 
+        <b>public virtual void</b> <a id="5d02ad8a9f75f4c8" href="../../../R/5d02ad8a9f75f4c8.html" target="n" data-glyph="72,1" class="i method">AbortConnect</a>()
+        { }
+ 
+        <b>protected virtual</b> <span class="i">NamedPipeClientStream</span> <a id="fca7a2d597f4af87" href="../../../R/fca7a2d597f4af87.html" target="n" data-glyph="75,1" class="i method">DoConnect</a>(<b>int</b> <span id="r76 rd" class="r76 r">timeout</span>)
+        {
+            <b>return</b> <b>null</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Light wrapper class for BCL NamedPipeClientStream class, that</span>
+    <span class="c">///</span><span class="c"> creates the named pipe name and initiates connection to</span>
+    <span class="c">///</span><span class="c"> target named pipe server.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="8b72c0ebec3f5383" href="../../../R/8b72c0ebec3f5383.html" target="n" data-glyph="2,0" class="t t">RemoteSessionNamedPipeClient</a> : <a href="#565e9e795ba1a099" class="t t">NamedPipeClientBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Members
+ 
+        <b>private volatile bool</b> <a id="f39682c9bac31b83" href="../../../R/f39682c9bac31b83.html" target="n" data-glyph="46,1" class="i field">_connecting</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>private</b> <a id="d567aeb0707ba030" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">RemoteSessionNamedPipeClient</a>()
+        { }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor.  Creates Named Pipe based on process object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r77 r">process</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Target process object for pipe.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r78 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">AppDomain name or null for default AppDomain.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="720f4b1f9e81e2ad" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">RemoteSessionNamedPipeClient</a>(<span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">Process</span> <span id="r77 rd" class="r77 r">process</span>, <b>string</b> <span id="r78 rd" class="r78 r">appDomainName</span>)
+            : <a href="#7513b8983a34395e" class="k">this</a>(<a href="#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="#822e0184b640677c" class="i method">CreateProcessPipeName</a>(<span class="r77 r">process</span>, <span class="r78 r">appDomainName</span>))
+        { }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor. Creates Named Pipe based on process Id.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r79 r">procId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Target process Id for pipe.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r80 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">AppDomain name or null for default AppDomain.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="db122997adc333b7" href="../../../R/db122997adc333b7.html" target="n" data-glyph="72,1" class="t constructor">RemoteSessionNamedPipeClient</a>(<b>int</b> <span id="r79 rd" class="r79 r">procId</span>, <b>string</b> <span id="r80 rd" class="r80 r">appDomainName</span>)
+            : <a href="#7513b8983a34395e" class="k">this</a>(<a href="#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="#92ca6b55c3fbba3d" class="i method">CreateProcessPipeName</a>(<span class="r79 r">procId</span>, <span class="r80 r">appDomainName</span>))
+        { }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor. Creates Named Pipe based on name argument.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r81 r">pipeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Named Pipe name.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="7513b8983a34395e" href="../../../R/7513b8983a34395e.html" target="n" data-glyph="74,1" class="t constructor">RemoteSessionNamedPipeClient</a>(
+           <b>string</b> <span id="r81 rd" class="r81 r">pipeName</span>)
+        {
+            <b>if</b> (<span class="r81 r">pipeName</span> == <b>null</b>)
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r81 r">pipeName</span>));
+            }
+ 
+            <a href="#561441bf9fdb8572" class="i field">_pipeName</a> = <span class="r81 r">pipeName</span>;
+ 
+            <span class="c">// Defer creating the .Net NamedPipeClientStream object until we connect.</span>
+            <span class="c">// _clientPipeStream == null.</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r82 r">serverName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r83 r">namespaceName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r84 r">coreName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="a1fb66f46f633016" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">RemoteSessionNamedPipeClient</a>(
+            <b>string</b> <span id="r82 rd" class="r82 r">serverName</span>,
+            <b>string</b> <span id="r83 rd" class="r83 r">namespaceName</span>,
+            <b>string</b> <span id="r84 rd" class="r84 r">coreName</span>)
+        {
+            <b>if</b> (<span class="r82 r">serverName</span> == <b>null</b>) { <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r82 r">serverName</span>)); }
+ 
+            <b>if</b> (<span class="r83 r">namespaceName</span> == <b>null</b>) { <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r83 r">namespaceName</span>)); }
+ 
+            <b>if</b> (<span class="r84 r">coreName</span> == <b>null</b>) { <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r84 r">coreName</span>)); }
+ 
+            <a href="#561441bf9fdb8572" class="i field">_pipeName</a> = <span class="s">@&quot;\\&quot;</span> + <span class="r82 r">serverName</span> + <span class="s">@&quot;\&quot;</span> + <span class="r83 r">namespaceName</span> + <span class="s">@&quot;\&quot;</span> + <span class="r84 r">coreName</span>;
+ 
+            <span class="c">// Defer creating the .Net NamedPipeClientStream object until we connect.</span>
+            <span class="c">// _clientPipeStream == null.</span>
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Public Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Abort connection attempt.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="63ce29ee508677ca" href="../../../R/63ce29ee508677ca.html" target="n" data-glyph="72,1" class="i method">AbortConnect</a>()
+        {
+            <a href="#f39682c9bac31b83" class="i field">_connecting</a> = <b>false</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Protected Methods
+ 
+        <b>protected override</b> <span class="i">NamedPipeClientStream</span> <a id="789ca126c4d995bd" href="../../../R/789ca126c4d995bd.html" target="n" data-glyph="75,1" class="i method">DoConnect</a>(<b>int</b> <span id="r85 rd" class="r85 r">timeout</span>)
+        {
+            <span class="c">// Repeatedly attempt connection to pipe until timeout expires.</span>
+            <b>int</b> <span id="r86 rd" class="r86 r">startTime</span> = <span class="i">Environment</span>.<span class="i">TickCount</span>;
+            <b>int</b> <span id="r87 rd" class="r87 r">elapsedTime</span> = 0;
+            <a href="#f39682c9bac31b83" class="i field">_connecting</a> = <b>true</b>;
+ 
+            <span class="i">NamedPipeClientStream</span> <span id="r88 rd" class="r88 r">namedPipeClientStream</span> = <b>new</b> <span class="i">NamedPipeClientStream</span>(
+                <span class="i">serverName</span>: <span class="s">&quot;.&quot;</span>,
+                <span class="i">pipeName</span>: <a href="#561441bf9fdb8572" class="i field">_pipeName</a>,
+                <span class="i">direction</span>: <span class="i">PipeDirection</span>.<span class="i">InOut</span>,
+                <span class="i">options</span>: <span class="i">PipeOptions</span>.<span class="i">Asynchronous</span>);
+ 
+            <span class="r88 r">namedPipeClientStream</span>.<span class="i">Connect</span>();
+ 
+            <b>do</b>
+            {
+                <b>if</b> (!<span class="r88 r">namedPipeClientStream</span>.<span class="i">IsConnected</span>)
+                {
+                    <span class="i">Thread</span>.<span class="i">Sleep</span>(100);
+                    <span class="r87 r">elapsedTime</span> = <b>unchecked</b>(<span class="i">Environment</span>.<span class="i">TickCount</span> - <span class="r86 r">startTime</span>);
+                    <b>continue</b>;
+                }
+ 
+                <a href="#f39682c9bac31b83" class="i field">_connecting</a> = <b>false</b>;
+                <b>return</b> <span class="r88 r">namedPipeClientStream</span>;
+            } <b>while</b> (<a href="#f39682c9bac31b83" class="i field">_connecting</a> &amp;&amp; (<span class="r87 r">elapsedTime</span> &lt; <span class="r85 r">timeout</span>));
+ 
+            <a href="#f39682c9bac31b83" class="i field">_connecting</a> = <b>false</b>;
+ 
+            <b>throw</b> <b>new</b> <span class="i">TimeoutException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ConnectNamedPipeTimeout</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Light wrapper class for BCL NamedPipeClientStream class, that</span>
+    <span class="c">///</span><span class="c"> creates the named pipe name and initiates connection to</span>
+    <span class="c">///</span><span class="c"> target named pipe server inside Windows Server container.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="9af988ab387a71fe" href="../../../R/../../0000000000.html" target="n" data-glyph="2,0" class="t t">ContainerSessionNamedPipeClient</a> : <a href="#565e9e795ba1a099" class="t t">NamedPipeClientBase</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor. Creates Named Pipe based on process Id, app domain name and container object root path.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r89 r">procId</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Target process Id for pipe.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">appDomainName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">AppDomain name or null for default AppDomain.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r91 r">containerObRoot</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Container OB root.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public</b> <a id="9b13d847fb5925fe" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="t constructor">ContainerSessionNamedPipeClient</a>(
+            <b>int</b> <span id="r89 rd" class="r89 r">procId</span>,
+            <b>string</b> <span id="r90 rd" class="r90 r">appDomainName</span>,
+            <b>string</b> <span id="r91 rd" class="r91 r">containerObRoot</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r91 r">containerObRoot</span>))
+            {
+                <b>throw</b> <b>new</b> <a href="../../../utils/MshArgumentNullException.cs.html#166e605c6cb05157" class="t constructor">PSArgumentNullException</a>(<b>nameof</b>(<span class="r91 r">containerObRoot</span>));
+            }
+ 
+            <span class="c">//</span>
+            <span class="c">// Named pipe inside Windows Server container is under different name space.</span>
+            <span class="c">//</span>
+            <a href="#561441bf9fdb8572" class="i field">_pipeName</a> = <span class="r91 r">containerObRoot</span> + <span class="s">@&quot;\Device\NamedPipe\&quot;</span> +
+                <a href="#6f8b3085a1f6f905" class="t t">NamedPipeUtils</a>.<a href="#92ca6b55c3fbba3d" class="i method">CreateProcessPipeName</a>(<span class="r89 r">procId</span>, <span class="r90 r">appDomainName</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Protected Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper method to open a named pipe via native APIs and return in</span>
+        <span class="c">///</span><span class="c"> .Net NamedPipeClientStream wrapper object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override</b> <span class="i">NamedPipeClientStream</span> <a id="c41a6f419f028e51" href="../../../R/c41a6f419f028e51.html" target="n" data-glyph="75,1" class="i method">DoConnect</a>(<b>int</b> <span id="r92 rd" class="r92 r">timeout</span>)
+        {
+            <span class="c">//</span>
+            <span class="c">// WaitNamedPipe API is not supported by Windows Server container now, so we need to repeatedly</span>
+            <span class="c">// attempt connection to pipe server until timeout expires.</span>
+            <span class="c">//</span>
+            <b>int</b> <span id="r93 rd" class="r93 r">startTime</span> = <span class="i">Environment</span>.<span class="i">TickCount</span>;
+            <b>int</b> <span id="r94 rd" class="r94 r">elapsedTime</span> = 0;
+            <span class="i">SafePipeHandle</span> <span id="r95 rd" class="r95 r">pipeHandle</span> = <b>null</b>;
+ 
+            <b>do</b>
+            {
+                <span class="c">// Get handle to pipe.</span>
+                <span class="r95 r">pipeHandle</span> = <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<span class="i">CreateFile</span>(
+                    <span class="i">lpFileName</span>: <a href="#561441bf9fdb8572" class="i field">_pipeName</a>,
+                    <span class="i">dwDesiredAccess</span>: <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#7fedf55d4132caa2" class="i field">GENERIC_READ</a> | <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#46f75be52612c475" class="i field">GENERIC_WRITE</a>,
+                    <span class="i">dwShareMode</span>: 0,
+                    <span class="i">SecurityAttributes</span>: <span class="i">IntPtr</span>.<span class="i">Zero</span>,
+                    <span class="i">dwCreationDisposition</span>: <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#8d8fe3c5dd8c1316" class="i field">OPEN_EXISTING</a>,
+                    <span class="i">dwFlagsAndAttributes</span>: <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#8be98ead3ee5e490" class="i field">FILE_FLAG_OVERLAPPED</a>,
+                    <span class="i">hTemplateFile</span>: <span class="i">IntPtr</span>.<span class="i">Zero</span>);
+ 
+                <b>int</b> <span id="r96 rd" class="r96 r">lastError</span> = <span class="i">Marshal</span>.<span class="i">GetLastWin32Error</span>();
+                <b>if</b> (<span class="r95 r">pipeHandle</span>.<span class="i">IsInvalid</span>)
+                {
+                    <b>if</b> (<span class="r96 r">lastError</span> == <a href="#98d00e2818535eae" class="t t">NamedPipeNative</a>.<a href="#6db4149a14d45fce" class="i field">ERROR_FILE_NOT_FOUND</a>)
+                    {
+                        <span class="r94 r">elapsedTime</span> = <b>unchecked</b>(<span class="i">Environment</span>.<span class="i">TickCount</span> - <span class="r93 r">startTime</span>);
+                        <span class="i">Thread</span>.<span class="i">Sleep</span>(100);
+                        <b>continue</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <b>throw</b> <b>new</b> <a href="../../../utils/MshInvalidOperationException.cs.html#de5b942a57457045" class="t constructor">PSInvalidOperationException</a>(
+                            <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotConnectContainerNamedPipe</span>, <span class="r96 r">lastError</span>));
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>break</b>;
+                }
+            } <b>while</b> (<span class="r94 r">elapsedTime</span> &lt; <span class="r92 r">timeout</span>);
+ 
+            <b>try</b>
+            {
+                <b>return</b> <b>new</b> <span class="i">NamedPipeClientStream</span>(
+                    <span class="i">PipeDirection</span>.<span class="i">InOut</span>,
+                    <b>true</b>,
+                    <b>true</b>,
+                    <span class="r95 r">pipeHandle</span>);
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <span class="r95 r">pipeHandle</span>.<span class="i">Dispose</span>();
+                <b>throw</b>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

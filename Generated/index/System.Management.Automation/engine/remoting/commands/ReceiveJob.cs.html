@@ -1,0 +1,1634 @@
+﻿<!DOCTYPE html>
+<html><head><title>ReceiveJob.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(1625);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/commands/ReceiveJob.cs" target="_top">engine\remoting\commands\ReceiveJob.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<span class="c">// Stops compiler from warning about unknown warnings</span>
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 1634, 1691
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Cmdlet used for receiving results from job object.</span>
+    <span class="c">///</span><span class="c"> This cmdlet is intended to have a slightly different behavior</span>
+    <span class="c">///</span><span class="c"> in the following two cases:</span>
+    <span class="c">///</span><span class="c">          1. The job object to receive results from is a PSRemotingJob</span>
+    <span class="c">///</span><span class="c">               In this case, the cmdlet can use two additional</span>
+    <span class="c">///</span><span class="c">               parameters to filter results - ComputerName and Runspace</span>
+    <span class="c">///</span><span class="c">               The parameters help filter out results for a specified</span>
+    <span class="c">///</span><span class="c">               computer or runspace from the job object</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">               $job = Start-PSJob -Command &#39;get-process&#39; -ComputerName server1, server2</span>
+    <span class="c">///</span><span class="c">               Receive-PSJob -Job $job -ComputerName server1</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">               $job = Start-PSJob -Command &#39;get-process&#39; -Session $r1, $r2</span>
+    <span class="c">///</span><span class="c">               Receive-PSJob -Job $job -Session $r1</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">         2. The job object to receive results is a PSJob (or derivative</span>
+    <span class="c">///</span><span class="c">            other than PSRemotingJob)</span>
+    <span class="c">///</span><span class="c">              In this case, the user cannot will use the location parameter</span>
+    <span class="c">///</span><span class="c">              to do any filtering and will not have ComputerName and Runspace</span>
+    <span class="c">///</span><span class="c">              parameters</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">              $job = Get-WMIObject &#39;....&#39; -AsJob</span>
+    <span class="c">///</span><span class="c">              Receive-PSJob -Job $job -Location &quot;Server2&quot;</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">              The following will result in an error:</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c">              $job = Get-WMIObject &#39;....&#39; -AsJob</span>
+    <span class="c">///</span><span class="c">              Receive-PSJob -Job $job -ComputerName &quot;Server2&quot;</span>
+    <span class="c">///</span><span class="c">              The parameter ComputerName cannot be used with jobs which are</span>
+    <span class="c">///</span><span class="c">              not PSRemotingJob.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#4b3c39661547d6b5" class="t t">VerbsCommunications</a>.<a href="../../../utils/Verbs.cs.html#bbc246902c2f6875" class="i field">Receive</a>, <span class="s">&quot;Job&quot;</span>, <span class="i">DefaultParameterSetName</span> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="#a7e637ae2f01c820" class="i field">LocationParameterSet</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkID=2096965&quot;</span>, <span class="i">RemotingCapability</span> = <a href="../common/misc.cs.html#59e8ed9184274cab" class="t t">RemotingCapability</a>.<a href="../common/misc.cs.html#d29c65a273d5cb37" class="i field">SupportedByCommand</a>)]
+    <b>public class</b> <a id="23a93f1c27fadeef" href="../../../R/23a93f1c27fadeef.html" target="n" data-glyph="0,0" class="t t"><span id="493672aaf4bb2607">ReceiveJobCommand</span></a> : <a href="RemoveJob.cs.html#6d4a842df78cbd2d" class="t t">JobCmdletBase</a>, <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Properties
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Job object from which specific results need to</span>
+        <span class="c">///</span><span class="c"> be extracted.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="#a7e637ae2f01c820" class="i field">LocationParameterSet</a>)]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        <b>public</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>[] <a id="29f1aafdcfc2f6d3" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Job</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#8bb11eb173093bd0" class="i field">_jobs</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#8bb11eb173093bd0" class="i field">_jobs</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>[] <a id="8bb11eb173093bd0" href="../../../R/8bb11eb173093bd0.html" target="n" data-glyph="46,1" class="i field">_jobs</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Name of the computer for which the results needs to be</span>
+        <span class="c">///</span><span class="c"> returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>,
+                   <a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1)]
+        [<span class="i">Alias</span>(<span class="s">&quot;Cn&quot;</span>)]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        <b>public string</b>[] <a id="587eba281b61bc76" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">ComputerName</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#6642e33dbbeeeaed" class="i field">_computerNames</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#6642e33dbbeeeaed" class="i field">_computerNames</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private string</b>[] <a id="6642e33dbbeeeaed" href="../../../R/6642e33dbbeeeaed.html" target="n" data-glyph="46,1" class="i field">_computerNames</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Locations for which the results needs to be returned.</span>
+        <span class="c">///</span><span class="c"> This will cater to all kinds of jobs and not only</span>
+        <span class="c">///</span><span class="c"> remoting jobs.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="#a7e637ae2f01c820" class="i field">LocationParameterSet</a>,
+                   <a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        <b>public string</b>[] <a id="864cd9985a5d442f" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Location</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#9a95ff1dda2100f8" class="i field">_locations</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#9a95ff1dda2100f8" class="i field">_locations</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private string</b>[] <a id="9a95ff1dda2100f8" href="../../../R/9a95ff1dda2100f8.html" target="n" data-glyph="46,1" class="i field">_locations</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Runspaces for which the results needs to be</span>
+        <span class="c">///</span><span class="c"> returned.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>,
+                   <a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 1)]
+        [<span class="i">ValidateNotNull</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        <b>public</b> <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>[] <a id="bb3c234f288a00a0" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Session</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#4bf61ebcbd9af1ae" class="i field">_remoteRunspaceInfos</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#4bf61ebcbd9af1ae" class="i field">_remoteRunspaceInfos</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private</b> <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>[] <a id="4bf61ebcbd9af1ae" href="../../../R/4bf61ebcbd9af1ae.html" target="n" data-glyph="46,1" class="i field">_remoteRunspaceInfos</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the results need to be not removed from the store</span>
+        <span class="c">///</span><span class="c"> after being written. Default is results are removed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="f8fbcec9cd7a2fd4" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Keep</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> !<a href="#d11ed247718c6c2b" class="i field">_flush</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#d11ed247718c6c2b" class="i field">_flush</a> = !<b>value</b>;
+                <a href="#14cd7dbe9ba44322" class="i method">ValidateWait</a>();
+            }
+        }
+ 
+        <b>private bool</b> <a id="d11ed247718c6c2b" href="../../../R/d11ed247718c6c2b.html" target="n" data-glyph="46,1" class="i field">_flush</a> = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="b83860f88523a2ce" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">NoRecurse</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> !<a href="#2b3f2d76128d1bd4" class="i field">_recurse</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#2b3f2d76128d1bd4" class="i field">_recurse</a> = !<b>value</b>;
+            }
+        }
+ 
+        <b>private bool</b> <a id="2b3f2d76128d1bd4" href="../../../R/2b3f2d76128d1bd4.html" target="n" data-glyph="46,1" class="i field">_recurse</a> = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="56c6c5d3edbf998e" href="../../../R/56c6c5d3edbf998e.html" target="n" data-glyph="102,1" class="i property">Force</a>
+        { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a> <a id="6b1c6d930bc2edfc" href="../../../R/6b1c6d930bc2edfc.html" target="n" data-glyph="102,1" class="i property">State</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#1213da49468b8ccd" class="i field">NotStarted</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Hashtable</span> <a id="91bdbcf4cad03c09" href="../../../R/91bdbcf4cad03c09.html" target="n" data-glyph="102,1" class="i property">Filter</a>
+        {
+            <b>get</b> { <b>return</b> <b>null</b>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override string</b>[] <a id="bdfcd65a6ae32ec3" href="../../../R/bdfcd65a6ae32ec3.html" target="n" data-glyph="102,1" class="i property">Command</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected const string</b> <a id="a7e637ae2f01c820" href="../../../R/a7e637ae2f01c820.html" target="n" data-glyph="9,1" class="i field">LocationParameterSet</a> = <span class="s">&quot;Location&quot;</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="d8f0955bd53053fc" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Wait</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#62c552dd509ba8c8" class="i field">_wait</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#62c552dd509ba8c8" class="i field">_wait</a> = <b>value</b>;
+                <a href="#14cd7dbe9ba44322" class="i method">ValidateWait</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="56d928e60f294437" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">AutoRemoveJob</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#03503ced744947bd" class="i field">_autoRemoveJob</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#03503ced744947bd" class="i field">_autoRemoveJob</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="858f902392ee8bd9" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">WriteEvents</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#6e8cccdd2252791c" class="i field">_writeStateChangedEvents</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#6e8cccdd2252791c" class="i field">_writeStateChangedEvents</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>()]
+        <b>public</b> <a href="../../MshCmdlet.cs.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="c6843233fcaacd18" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">WriteJobInResults</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#b8219c455c9a3af6" class="i field">_outputJobFirst</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="#b8219c455c9a3af6" class="i field">_outputJobFirst</a> = <b>value</b>;
+            }
+        }
+ 
+        <b>private bool</b> <a id="03503ced744947bd" href="../../../R/03503ced744947bd.html" target="n" data-glyph="46,1" class="i field">_autoRemoveJob</a>;
+        <b>private bool</b> <a id="6e8cccdd2252791c" href="../../../R/6e8cccdd2252791c.html" target="n" data-glyph="46,1" class="i field">_writeStateChangedEvents</a>;
+        <b>private bool</b> <a id="62c552dd509ba8c8" href="../../../R/62c552dd509ba8c8.html" target="n" data-glyph="46,1" class="i field">_wait</a>;
+        <b>private bool</b> <a id="603d8a662ee48761" href="../../../R/603d8a662ee48761.html" target="n" data-glyph="46,1" class="i field">_isStopping</a>;
+        <b>private bool</b> <a id="36fde09bd59cc4ef" href="../../../R/36fde09bd59cc4ef.html" target="n" data-glyph="46,1" class="i field">_isDisposed</a>;
+        <b>private readonly</b> <span class="i">ReaderWriterLockSlim</span> <a id="209e31500593c684" href="../../../R/209e31500593c684.html" target="n" data-glyph="46,1" class="i field">_resultsReaderWriterLock</a> = <b>new</b> <span class="i">ReaderWriterLockSlim</span>();
+        <b>private readonly</b> <a href="../../../utils/PowerShellETWTracer.cs.html#3fd13a01d0177ce2" class="t t">PowerShellTraceSource</a> <a id="519744bb7ea1fd15" href="../../../R/519744bb7ea1fd15.html" target="n" data-glyph="46,1" class="i field">_tracer</a> = <a href="../../../utils/PowerShellETWTracer.cs.html#37e484a307a595c3" class="t t">PowerShellTraceSourceFactory</a>.<a href="../../../utils/PowerShellETWTracer.cs.html#c94a9fbfef99a75d" class="i method">GetTraceSource</a>();
+        <b>private readonly</b> <span class="i">ManualResetEvent</span> <a id="23e0656cffa38c73" href="../../../R/23e0656cffa38c73.html" target="n" data-glyph="46,1" class="i field">_writeExistingData</a> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>true</b>);
+        <b>private readonly</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <a id="0742eff38ee70c96" href="../../../R/0742eff38ee70c96.html" target="n" data-glyph="46,1" class="i field">_results</a> = <b>new</b> <a href="../../hostifaces/PSDataCollection.cs.html#ee85ce3306fe4e5b" class="t constructor">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;();
+        <b>private bool</b> <a id="604dfd883d97b4d6" href="../../../R/604dfd883d97b4d6.html" target="n" data-glyph="46,1" class="i field">_holdingResultsRef</a>;
+        <b>private readonly</b> <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <a id="370f1773143c0a7c" href="../../../R/370f1773143c0a7c.html" target="n" data-glyph="46,1" class="i field">_jobsBeingAggregated</a> = <b>new</b> <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;();
+        <b>private readonly</b> <span class="i">List</span>&lt;<span class="i">Guid</span>&gt; <a id="d74f45b918a8a5eb" href="../../../R/d74f45b918a8a5eb.html" target="n" data-glyph="46,1" class="i field">_jobsSpecifiedInParameters</a> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Guid</span>&gt;();
+        <b>private readonly object</b> <a id="711968b97c78c19f" href="../../../R/711968b97c78c19f.html" target="n" data-glyph="46,1" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+        <b>private bool</b> <a id="b8219c455c9a3af6" href="../../../R/b8219c455c9a3af6.html" target="n" data-glyph="46,1" class="i field">_outputJobFirst</a>;
+        <b>private</b> <a href="#930323e7ce0b20ed" class="t t">OutputProcessingState</a> <a id="8b39cb44459d92c4" href="../../../R/8b39cb44459d92c4.html" target="n" data-glyph="46,1" class="i field">_outputProcessingNotification</a>;
+        <b>private bool</b> <a id="eac172061e6e1614" href="../../../R/eac172061e6e1614.html" target="n" data-glyph="46,1" class="i field">_processingOutput</a>;
+ 
+        <b>private const string</b> <a id="48c6ec433bd79aae" href="../../../R/48c6ec433bd79aae.html" target="n" data-glyph="10,1" class="i field">ClassNameTrace</a> = <span class="s">&quot;ReceiveJobCommand&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Properties
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="d818fdb0da620c7a" href="../../../R/d818fdb0da620c7a.html" target="n" data-glyph="75,1" class="i method">BeginProcessing</a>()
+        {
+            <a href="#8816ef340cdb628c" class="i method">ValidateAutoRemove</a>();
+            <a href="#7d8c349ae3c9e422" class="i method">ValidateWriteJobInResults</a>();
+            <a href="#56ebb8de73be1bfa" class="i method">ValidateWriteEvents</a>();
+            <a href="#0fa37dcc991a9a74" class="i method">ValidateForce</a>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Retrieve the results for the specified computers or</span>
+        <span class="c">///</span><span class="c"> runspaces.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="e82a87a379c6dea4" href="../../../R/e82a87a379c6dea4.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <b>bool</b> <span id="r0 rd" class="r0 r">checkForRecurse</span> = <b>false</b>;
+            <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r1 rd" class="r1 r">jobsToWrite</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt;();
+ 
+            <b>switch</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+            {
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>:
+                    {
+                        <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r2 rd" class="r2 r">job</span> <b>in</b> <a href="#8bb11eb173093bd0" class="i field">_jobs</a>)
+                        {
+                            <a href="../client/Job.cs.html#3e3a8a0a8fbfcb51" class="t t">PSRemotingJob</a> <span id="r3 rd" class="r3 r">remoteJob</span> =
+                                        <span class="r2 r">job</span> <b>as</b> <a href="../client/Job.cs.html#3e3a8a0a8fbfcb51" class="t t">PSRemotingJob</a>;
+ 
+                            <b>if</b> (<span class="r3 r">remoteJob</span> == <b>null</b>)
+                            {
+                                <b>string</b> <span id="r4 rd" class="r4 r">message</span> = <span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RunspaceParamNotSupported</span>);
+ 
+                                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<b>new</b> <span class="t">ErrorRecord</span>(<b>new</b> <span class="i">ArgumentException</span>(<span class="r4 r">message</span>),
+                                    <span class="s">&quot;RunspaceParameterNotSupported&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                                        <span class="r2 r">job</span>));
+ 
+                                <b>continue</b>;
+                            }
+ 
+                            <span class="c">// Runspace parameter is supported only on PSRemotingJob objects</span>
+                            <b>foreach</b> (<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r5 rd" class="r5 r">remoteRunspaceInfo</span> <b>in</b> <a href="#4bf61ebcbd9af1ae" class="i field">_remoteRunspaceInfos</a>)
+                            {
+                                <span class="c">// get the required child jobs</span>
+                                <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r6 rd" class="r6 r">childJobs</span> = <span class="r3 r">remoteJob</span>.<a href="../client/Job.cs.html#204d80d20c5fcf33" class="i method">GetJobsForRunspace</a>(<span class="r5 r">remoteRunspaceInfo</span>);
+                                <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<span class="r6 r">childJobs</span>);
+                                <span class="c">// WriteResultsForJobsInCollection(childJobs, false);</span>
+ 
+                            }
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="PSRemotingCmdlet.cs.html#03ac4b61d9472c2d" class="i field">ComputerNameParameterSet</a>:
+                    {
+                        <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r7 rd" class="r7 r">job</span> <b>in</b> <a href="#8bb11eb173093bd0" class="i field">_jobs</a>)
+                        {
+                            <span class="c">// the job can either be a remoting job or another one</span>
+                            <a href="../client/Job.cs.html#3e3a8a0a8fbfcb51" class="t t">PSRemotingJob</a> <span id="r8 rd" class="r8 r">remoteJob</span> =
+                                        <span class="r7 r">job</span> <b>as</b> <a href="../client/Job.cs.html#3e3a8a0a8fbfcb51" class="t t">PSRemotingJob</a>;
+ 
+                            <span class="c">// ComputerName parameter can only be used with remoting jobs</span>
+                            <b>if</b> (<span class="r8 r">remoteJob</span> == <b>null</b>)
+                            {
+                                <b>string</b> <span id="r9 rd" class="r9 r">message</span> = <span class="i">GetMessage</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ComputerNameParamNotSupported</span>);
+ 
+                                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<b>new</b> <span class="t">ErrorRecord</span>(<b>new</b> <span class="i">ArgumentException</span>(<span class="r9 r">message</span>),
+                                    <span class="s">&quot;ComputerNameParameterNotSupported&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>,
+                                        <span class="r7 r">job</span>));
+ 
+                                <b>continue</b>;
+                            }
+ 
+                            <b>string</b>[] <span id="r10 rd" class="r10 r">resolvedComputernames</span> = <b>null</b>;
+                            <a href="PSRemotingCmdlet.cs.html#cf8d963b1364b5ca" class="i method">ResolveComputerNames</a>(<a href="#6642e33dbbeeeaed" class="i field">_computerNames</a>, <b>out</b> <span class="r10 r">resolvedComputernames</span>);
+ 
+                            <b>foreach</b> (<b>string</b> <span id="r11 rd" class="r11 r">resolvedComputerName</span> <b>in</b> <span class="r10 r">resolvedComputernames</span>)
+                            {
+                                <span class="c">// get the required child Job objects</span>
+                                <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r12 rd" class="r12 r">childJobs</span> = <span class="r8 r">remoteJob</span>.<a href="../client/Job.cs.html#4fa564a4d1ac28d0" class="i method">GetJobsForComputer</a>(<span class="r11 r">resolvedComputerName</span>);
+                                <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<span class="r12 r">childJobs</span>);
+                                <span class="c">// WriteResultsForJobsInCollection(childJobs, false);</span>
+ 
+                            }
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <span class="s">&quot;Location&quot;</span>:
+                    {
+                        <b>if</b> (<a href="#9a95ff1dda2100f8" class="i field">_locations</a> == <b>null</b>)
+                        {
+                            <span class="c">// WriteAll();</span>
+                            <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<a href="#8bb11eb173093bd0" class="i field">_jobs</a>);
+                            <span class="r0 r">checkForRecurse</span> = <b>true</b>;
+                        }
+                        <b>else</b>
+                        {
+                            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r13 rd" class="r13 r">job</span> <b>in</b> <a href="#8bb11eb173093bd0" class="i field">_jobs</a>)
+                            {
+                                <b>foreach</b> (<b>string</b> <span id="r14 rd" class="r14 r">location</span> <b>in</b> <a href="#9a95ff1dda2100f8" class="i field">_locations</a>)
+                                {
+                                    <span class="c">// get the required child Job objects</span>
+                                    <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r15 rd" class="r15 r">childJobs</span> = <span class="r13 r">job</span>.<a href="../client/Job.cs.html#6e1d44c476877cbf" class="i method">GetJobsForLocation</a>(<span class="r14 r">location</span>);
+                                    <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<span class="r15 r">childJobs</span>);
+                                    <span class="c">// WriteResultsForJobsInCollection(childJobs, false);</span>
+                                }
+                            }
+                        }
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="RemoveJob.cs.html#b9fcc6d73680e09f" class="i field">InstanceIdParameterSet</a>:
+                    {
+                        <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r16 rd" class="r16 r">jobs</span> = <a href="RemoveJob.cs.html#faea27dc9874c464" class="i method">FindJobsMatchingByInstanceId</a>(<b>true</b>, <b>false</b>, <b>true</b>, <b>false</b>);
+ 
+                        <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<span class="r16 r">jobs</span>);
+                        <span class="r0 r">checkForRecurse</span> = <b>true</b>;
+                        <span class="c">// WriteResultsForJobsInCollection(jobs, true);</span>
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="RemoveJob.cs.html#5b871caa1267d529" class="i field">SessionIdParameterSet</a>:
+                    {
+                        <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r17 rd" class="r17 r">jobs</span> = <a href="RemoveJob.cs.html#1bcdf7b70be6c851" class="i method">FindJobsMatchingBySessionId</a>(<b>true</b>, <b>false</b>, <b>true</b>, <b>false</b>);
+                        <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<span class="r17 r">jobs</span>);
+                        <span class="r0 r">checkForRecurse</span> = <b>true</b>;
+                        <span class="c">// WriteResultsForJobsInCollection(jobs, true);</span>
+                    }
+ 
+                    <b>break</b>;
+ 
+                <b>case</b> <a href="#23a93f1c27fadeef" class="t t">ReceiveJobCommand</a>.<a href="RemoveJob.cs.html#f6461d28caff9c5c" class="i field">NameParameterSet</a>:
+                    {
+                        <span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r18 rd" class="r18 r">jobs</span> = <a href="RemoveJob.cs.html#f951c3eecc4e85e0" class="i method">FindJobsMatchingByName</a>(<b>true</b>, <b>false</b>, <b>true</b>, <b>false</b>);
+                        <span class="r1 r">jobsToWrite</span>.<span class="i">AddRange</span>(<span class="r18 r">jobs</span>);
+                        <span class="r0 r">checkForRecurse</span> = <b>true</b>;
+                        <span class="c">// WriteResultsForJobsInCollection(jobs, true);</span>
+                    }
+ 
+                    <b>break</b>;
+            }
+ 
+            <span class="c">// if block has been specified and the cmdlet has not been</span>
+            <span class="c">// stopped, we continue to write recursively, until there</span>
+            <span class="c">// is no more data to write</span>
+            <b>if</b> (<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+            {
+                <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">Reset</span>();
+ 
+                <span class="c">// if writejobresults is specified we will write only the top level jobs</span>
+                <span class="c">// this is because that is what the proxy requires. Anything else being</span>
+                <span class="c">// written is useless and will only add weight to the serialization</span>
+ 
+                <span class="i">WriteJobsIfRequired</span>(<span class="r1 r">jobsToWrite</span>);
+ 
+                <span class="c">// Make a note of the jobs specified by the user (does not include child jobs)</span>
+                <span class="c">// for the purpose of removal. Only the parent jobs should have remove called.</span>
+                <b>foreach</b> (<b>var</b> <span id="r19 rd" class="r19 r">job</span> <b>in</b> <span class="r1 r">jobsToWrite</span>)
+                {
+                    <a href="#d74f45b918a8a5eb" class="i field">_jobsSpecifiedInParameters</a>.<span class="i">Add</span>(<span class="r19 r">job</span>.<span class="i">InstanceId</span>);
+                }
+ 
+                <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a> || <a href="#603d8a662ee48761" class="i field">_isStopping</a>) <b>return</b>;
+ 
+                    <span class="c">// Check to see that we only AddRef once. ProcessRecord is called</span>
+                    <span class="c">// once per job on the pipeline.</span>
+                    <b>if</b> (!<a href="#604dfd883d97b4d6" class="i field">_holdingResultsRef</a>)
+                    {
+                        <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;ProcessRecord&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;Adding Ref to results collection&quot;</span>,
+                         <b>null</b>);
+                        <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#20fe51d62499cf69" class="i method">AddRef</a>();
+                        <a href="#604dfd883d97b4d6" class="i field">_holdingResultsRef</a> = <b>true</b>;
+                    }
+                }
+ 
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;ProcessRecord&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;BEGIN Register for jobs&quot;</span>);
+                <a href="#0202d0046892a102" class="i method">WriteResultsForJobsInCollection</a>(<span class="r1 r">jobsToWrite</span>, <span class="r0 r">checkForRecurse</span>, <b>true</b>);
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;ProcessRecord&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;END Register for jobs&quot;</span>);
+ 
+                <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (<a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Count</span> == 0 &amp;&amp; <a href="#604dfd883d97b4d6" class="i field">_holdingResultsRef</a>)
+                    {
+                        <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;ProcessRecord&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>,
+                                             <span class="s">&quot;Removing Ref to results collection&quot;</span>, <b>null</b>);
+                        <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#737fb48bd51a18aa" class="i method">DecrementRef</a>();
+                        <a href="#604dfd883d97b4d6" class="i field">_holdingResultsRef</a> = <b>false</b>;
+                    }
+                }
+ 
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;ProcessRecord&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;BEGIN Write existing job data&quot;</span>);
+                <a href="#0202d0046892a102" class="i method">WriteResultsForJobsInCollection</a>(<span class="r1 r">jobsToWrite</span>, <span class="r0 r">checkForRecurse</span>, <b>false</b>);
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;ProcessRecord&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;END Write existing job data&quot;</span>);
+                <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">Set</span>();
+            }
+            <b>else</b>
+            {
+                <a href="#0202d0046892a102" class="i method">WriteResultsForJobsInCollection</a>(<span class="r1 r">jobsToWrite</span>, <span class="r0 r">checkForRecurse</span>, <b>false</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> StopProcessing - when the command is stopped,</span>
+        <span class="c">///</span><span class="c"> unregister all the event handlers from the jobs</span>
+        <span class="c">///</span><span class="c"> and decrement reference for results.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="14ae2525c3c8f75c" href="../../../R/14ae2525c3c8f75c.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;StopProcessing&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;Entered Stop Processing&quot;</span>,
+                     <b>null</b>);
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <a href="#603d8a662ee48761" class="i field">_isStopping</a> = <b>true</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">Set</span>();
+            <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>[] <span id="r20 rd" class="r20 r">aggregatedJobs</span> = <b>new</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>[<a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Count</span>];
+ 
+            <b>for</b> (<b>int</b> <span id="r21 rd" class="r21 r">i</span> = 0; <span class="r21 r">i</span> &lt; <a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Count</span>; <span class="r21 r">i</span>++)
+            {
+                <span class="r20 r">aggregatedJobs</span>[<span class="r21 r">i</span>] = <a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>[<span class="r21 r">i</span>];
+            }
+ 
+            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r22 rd" class="r22 r">job</span> <b>in</b> <span class="r20 r">aggregatedJobs</span>)
+            {
+                <a href="#ead3929e0969f865" class="i method">StopAggregateResultsFromJob</a>(<span class="r22 r">job</span>);
+            }
+ 
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterWriteLock</span>();
+            <b>try</b>
+            {
+                <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+                <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>false</b>);
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitWriteLock</span>();
+            }
+ 
+            <a href="RemoveJob.cs.html#6d4a842df78cbd2d" class="k">base</a>.<a href="../../cmdlet.cs.html#ed29eac69e2abf69" class="i method">StopProcessing</a>();
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;StopProcessing&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>, <span class="s">&quot;Exiting Stop Processing&quot;</span>,
+                     <b>null</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If we are not stopping, continue writing output</span>
+        <span class="c">///</span><span class="c"> as and when they are available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="b5c1c52c8d82da42" href="../../../R/b5c1c52c8d82da42.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <b>try</b>
+            {
+                <b>if</b> (<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+                {
+                    <b>int</b> <span id="r23 rd" class="r23 r">totalCount</span> = 0;
+                    <b>foreach</b> (<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r24 rd" class="r24 r">result</span> <b>in</b> <a href="#0742eff38ee70c96" class="i field">_results</a>)
+                    {
+                        <b>if</b> (<a href="#603d8a662ee48761" class="i field">_isStopping</a>) <b>break</b>;
+ 
+                        <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>true</b>);
+                        <span class="r24 r">result</span>.<a href="../common/psstreamobject.cs.html#589e153477386fc8" class="i method">WriteStreamObject</a>(<a href="#23a93f1c27fadeef" class="k">this</a>, <b>true</b>, <b>true</b>);
+                        <b>if</b> (++<span class="r23 r">totalCount</span> == <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a>)
+                        {
+                            <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>false</b>);
+                        }
+                    }
+ 
+                    <a href="#79f98b0761f9d658" class="i field">_eventArgsWritten</a>.<span class="i">Clear</span>();
+                }
+                <b>else</b>
+                {
+                    <b>int</b> <span id="r25 rd" class="r25 r">totalCount</span> = 0;
+                    <b>foreach</b> (<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r26 rd" class="r26 r">result</span> <b>in</b> <a href="#0742eff38ee70c96" class="i field">_results</a>)
+                    {
+                        <b>if</b> (<a href="#603d8a662ee48761" class="i field">_isStopping</a>) <b>break</b>;
+ 
+                        <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>true</b>);
+                        <span class="r26 r">result</span>.<a href="../common/psstreamobject.cs.html#589e153477386fc8" class="i method">WriteStreamObject</a>(<a href="#23a93f1c27fadeef" class="k">this</a>, <b>false</b>, <b>true</b>);
+                        <b>if</b> (++<span class="r25 r">totalCount</span> == <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a>)
+                        {
+                            <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>false</b>);
+                        }
+                    }
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>false</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="e459920e557c6af6" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#a30a271d10f7b47b" class="i method">Dispose</a>(<b>true</b>);
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#23a93f1c27fadeef" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r27 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="a30a271d10f7b47b" href="../../../R/a30a271d10f7b47b.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r27 rd" class="r27 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r27 r">disposing</span>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+                <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+                {
+                    <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+                    <a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a> = <b>true</b>;
+                }
+ 
+                <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>false</b>);
+ 
+                <b>if</b> (<a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a> != <b>null</b>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r28 rd" class="r28 r">job</span> <b>in</b> <a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>)
+                    {
+                        <b>if</b> (<span class="r28 r">job</span>.<span class="i">MonitorOutputProcessing</span>)
+                        {
+                            <span class="r28 r">job</span>.<span class="i">RemoveMonitorOutputProcessing</span>(<a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a>);
+                        }
+ 
+                        <b>if</b> (<span class="r28 r">job</span>.<span class="i">UsesResultsCollection</span>)
+                        {
+                            <span class="r28 r">job</span>.<span class="i">Results</span>.<span class="i">DataAdded</span> -= <span class="i">ResultsAdded</span>;
+                        }
+                        <b>else</b>
+                        {
+                            <span class="r28 r">job</span>.<span class="i">Output</span>.<span class="i">DataAdded</span> -= <span class="i">Output_DataAdded</span>;
+                            <span class="r28 r">job</span>.<span class="i">Error</span>.<span class="i">DataAdded</span> -= <span class="i">Error_DataAdded</span>;
+                            <span class="r28 r">job</span>.<span class="i">Progress</span>.<span class="i">DataAdded</span> -= <span class="i">Progress_DataAdded</span>;
+                            <span class="r28 r">job</span>.<span class="i">Verbose</span>.<span class="i">DataAdded</span> -= <span class="i">Verbose_DataAdded</span>;
+                            <span class="r28 r">job</span>.<span class="i">Warning</span>.<span class="i">DataAdded</span> -= <span class="i">Warning_DataAdded</span>;
+                            <span class="r28 r">job</span>.<span class="i">Debug</span>.<span class="i">DataAdded</span> -= <span class="i">Debug_DataAdded</span>;
+                            <span class="r28 r">job</span>.<span class="i">Information</span>.<span class="i">DataAdded</span> -= <span class="i">Information_DataAdded</span>;
+                        }
+ 
+                        <span class="r28 r">job</span>.<span class="i">StateChanged</span> -= <span class="i">HandleJobStateChanged</span>;
+                    }
+                }
+ 
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterWriteLock</span>();
+                <b>try</b>
+                {
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#0a8262d798e33fc6" class="i method">Complete</a>();
+                }
+                <b>finally</b>
+                {
+                    <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitWriteLock</span>();
+                }
+ 
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">Dispose</span>();
+                <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#8358de7f8ecc84ec" class="i method">Clear</a>();
+                <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#17fb91187cc003fd" class="i method">Dispose</a>();
+                <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">Set</span>();
+                <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">Dispose</span>();
+            }
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Overrides
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <b>private static void</b> <a id="a80a2244a47f2e22" href="../../../R/a80a2244a47f2e22.html" target="n" data-glyph="76,1" class="i method">DoUnblockJob</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r29 rd" class="r29 r">job</span>)
+        {
+            <span class="c">// we should not do anything for a parent job</span>
+            <span class="c">// the assumption is parent job states are</span>
+            <span class="c">// computed and so unblocking the child state</span>
+            <span class="c">// should be able to handle this</span>
+            <b>if</b> (<span class="r29 r">job</span>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>.<span class="i">Count</span> != 0) <b>return</b>;
+ 
+            <span class="c">// we have a better way of handling blocked state logic</span>
+            <span class="c">// for remoting jobs, so use that if job is a remoting</span>
+            <span class="c">// job</span>
+            <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a> <span id="r30 rd" class="r30 r">remotingChildJob</span> = <span class="r29 r">job</span> <b>as</b> <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a>;
+            <b>if</b> (<span class="r30 r">remotingChildJob</span> != <b>null</b>)
+            {
+                <span class="r30 r">remotingChildJob</span>.<a href="../client/Job.cs.html#b4817be72ea6932b" class="i method">UnblockJob</a>();
+            }
+            <b>else</b>
+            {
+                <span class="c">// for all other job types, simply set the job state</span>
+                <span class="c">// to running, the handling of the parent jobs state</span>
+                <span class="c">// should be taken care of by the job implementation</span>
+                <span class="r29 r">job</span>.<a href="../client/Job.cs.html#c3fb91c6ec548ed8" class="i method">SetJobState</a>(<a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a>, <b>null</b>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Write the results from this Job object. This does not write from the</span>
+        <span class="c">///</span><span class="c"> child jobs of this job object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">job</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Job object from which to write the results from</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="a546f6cdd1019d8d" href="../../../R/a546f6cdd1019d8d.html" target="n" data-glyph="76,1" class="i method">WriteJobResults</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r31 rd" class="r31 r">job</span>)
+        {
+            <b>if</b> (<span class="r31 r">job</span> == <b>null</b>) <b>return</b>;
+ 
+            <span class="c">// Q: Why do we need to unblock the job, before getting</span>
+            <span class="c">// the results</span>
+            <span class="c">// A: The job can get into a terminal state and we do</span>
+            <span class="c">// not want to set it to running at that point. Also, if</span>
+            <span class="c">// we do not explicitly signal that the job is unblocked</span>
+            <span class="c">// then the parent job cannot be unblocked. This is because</span>
+            <span class="c">// the parent job does not maintain a list of jobs which</span>
+            <span class="c">// are blocked but just simply a count (to keep things</span>
+            <span class="c">// light weight)</span>
+ 
+            <span class="c">// check if the state of the job is blocked, if so unblock it</span>
+ 
+            <span class="c">// Skip disconnected jobs that were in Blocked state before</span>
+            <span class="c">// the disconnect, since we cannot process host data until the</span>
+            <span class="c">// job is re-connected.</span>
+            <b>if</b> (<span class="r31 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#a6de52aa4733f7cb" class="i field">Disconnected</a>)
+            {
+                <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a> <span id="r32 rd" class="r32 r">remotingChildJob</span> = <span class="r31 r">job</span> <b>as</b> <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a>;
+                <b>if</b> (<span class="r32 r">remotingChildJob</span> != <b>null</b> &amp;&amp; <span class="r32 r">remotingChildJob</span>.<a href="../client/Job.cs.html#ffbfaa3edeb24ae7" class="i property">DisconnectedAndBlocked</a>)
+                {
+                    <b>return</b>;
+                }
+            }
+ 
+            <span class="c">// TODO: Fix Unblock() handling by Job2</span>
+            <b>if</b> (<span class="r31 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#d73e45c1ea393a18" class="i field">Blocked</a>)
+            {
+                <a href="#a80a2244a47f2e22" class="i method">DoUnblockJob</a>(<span class="r31 r">job</span>);
+            }
+ 
+            <span class="c">// for the jobs that PowerShell writes, there is a</span>
+            <span class="c">// results collection internally used. This collection</span>
+            <span class="c">// can be used to write results. For all other jobs</span>
+            <span class="c">// results need to be written from the other collections</span>
+            <span class="c">// available.</span>
+            <span class="c">// There is a bug in V2 that only remoting jobs work</span>
+            <span class="c">// with Receive-Job. This is being fixed</span>
+ 
+            <b>if</b> (<span class="r31 r">job</span> <b>is not</b> <a href="../client/Job2.cs.html#f76d5e2b49661689" class="t t">Job2</a> &amp;&amp; <span class="r31 r">job</span>.<a href="../client/Job.cs.html#fd6ecf089f9dc9c7" class="i property">UsesResultsCollection</a>)
+            {
+                <span class="c">// extract results and handle them</span>
+                <span class="i">Collection</span>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <span id="r33 rd" class="r33 r">results</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>);
+ 
+                <b>if</b> (<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r34 rd" class="r34 r">psStreamObject</span> <b>in</b> <span class="r33 r">results</span>)
+                    {
+                        <span class="r34 r">psStreamObject</span>.<span class="i">WriteStreamObject</span>(<a href="#23a93f1c27fadeef" class="k">this</a>, <span class="r31 r">job</span>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r35 rd" class="r35 r">psStreamObject</span> <b>in</b> <span class="r33 r">results</span>)
+                    {
+                        <span class="r35 r">psStreamObject</span>.<span class="i">WriteStreamObject</span>(<a href="#23a93f1c27fadeef" class="k">this</a>);
+                    }
+                }
+            }
+            <b>else</b>
+            {
+                <span class="i">Collection</span>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r36 rd" class="r36 r">output</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#9f3b4cf91a5477ce" class="i property">Output</a>);
+ 
+                <b>foreach</b> (<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r37 rd" class="r37 r">o</span> <b>in</b> <span class="r36 r">output</span>)
+                {
+                    <b>if</b> (<span class="r37 r">o</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<span class="r37 r">o</span>);
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt; <span id="r38 rd" class="r38 r">errorRecords</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>&lt;<a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt;(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#322c09d9eb167da1" class="i property">Error</a>);
+ 
+                <b>foreach</b> (<a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r39 rd" class="r39 r">e</span> <b>in</b> <span class="r38 r">errorRecords</span>)
+                {
+                    <b>if</b> (<span class="r39 r">e</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r40 rd" class="r40 r">mshCommandRuntime</span> = <a href="../../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a> <b>as</b> <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                    <b>if</b> (<span class="r40 r">mshCommandRuntime</span> != <b>null</b>)
+                    {
+                        <span class="r39 r">e</span>.<a href="../../ErrorPackage.cs.html#b119c9996bde5b66" class="i property">PreserveInvocationInfoOnce</a> = <b>true</b>;
+                        <span class="r40 r">mshCommandRuntime</span>.<a href="../../MshCommandRuntime.cs.html#21697ad8aff3f0c5" class="i method">WriteError</a>(<span class="r39 r">e</span>, <b>true</b>);
+                    }
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#5d56339940b0040b" class="t t">VerboseRecord</a>&gt; <span id="r41 rd" class="r41 r">verboseRecords</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#2c4a777567a6240d" class="i property">Verbose</a>);
+ 
+                <b>foreach</b> (<a href="../../hostifaces/InformationalRecord.cs.html#5d56339940b0040b" class="t t">VerboseRecord</a> <span id="r42 rd" class="r42 r">v</span> <b>in</b> <span class="r41 r">verboseRecords</span>)
+                {
+                    <b>if</b> (<span class="r42 r">v</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r43 rd" class="r43 r">mshCommandRuntime</span> = <a href="../../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a> <b>as</b> <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                    <b>if</b> (<span class="r43 r">mshCommandRuntime</span> != <b>null</b>)
+                    {
+                        <span class="r43 r">mshCommandRuntime</span>.<a href="../../MshCommandRuntime.cs.html#f0f5e7bb99e18bae" class="i method">WriteVerbose</a>(<span class="r42 r">v</span>, <b>true</b>);
+                    }
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#8954d4e40287d3de" class="t t">DebugRecord</a>&gt; <span id="r44 rd" class="r44 r">debugRecords</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#fcf5aa47c1f50562" class="i property">Debug</a>);
+ 
+                <b>foreach</b> (<a href="../../hostifaces/InformationalRecord.cs.html#8954d4e40287d3de" class="t t">DebugRecord</a> <span id="r45 rd" class="r45 r">d</span> <b>in</b> <span class="r44 r">debugRecords</span>)
+                {
+                    <b>if</b> (<span class="r45 r">d</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r46 rd" class="r46 r">mshCommandRuntime</span> = <a href="../../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a> <b>as</b> <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                    <b>if</b> (<span class="r46 r">mshCommandRuntime</span> != <b>null</b>)
+                    {
+                        <span class="r46 r">mshCommandRuntime</span>.<a href="../../MshCommandRuntime.cs.html#c8f51b28a47480d7" class="i method">WriteDebug</a>(<span class="r45 r">d</span>, <b>true</b>);
+                    }
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a>&gt; <span id="r47 rd" class="r47 r">warningRecords</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#2271b8dbce732fb7" class="i property">Warning</a>);
+ 
+                <b>foreach</b> (<a href="../../hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a> <span id="r48 rd" class="r48 r">w</span> <b>in</b> <span class="r47 r">warningRecords</span>)
+                {
+                    <b>if</b> (<span class="r48 r">w</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r49 rd" class="r49 r">mshCommandRuntime</span> = <a href="../../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a> <b>as</b> <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                    <b>if</b> (<span class="r49 r">mshCommandRuntime</span> != <b>null</b>)
+                    {
+                        <span class="r49 r">mshCommandRuntime</span>.<a href="../../MshCommandRuntime.cs.html#9cc8b7d137e9323d" class="i method">WriteWarning</a>(<span class="r48 r">w</span>, <b>true</b>);
+                    }
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a>&gt; <span id="r50 rd" class="r50 r">progressRecords</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#0566bc7c986755b8" class="i property">Progress</a>);
+ 
+                <b>foreach</b> (<a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r51 rd" class="r51 r">p</span> <b>in</b> <span class="r50 r">progressRecords</span>)
+                {
+                    <b>if</b> (<span class="r51 r">p</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r52 rd" class="r52 r">mshCommandRuntime</span> = <a href="../../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a> <b>as</b> <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                    <b>if</b> (<span class="r52 r">mshCommandRuntime</span> != <b>null</b>)
+                    {
+                        <span class="r52 r">mshCommandRuntime</span>.<a href="../../MshCommandRuntime.cs.html#2e7944dc8af7df10" class="i method">WriteProgress</a>(<span class="r51 r">p</span>, <b>true</b>);
+                    }
+                }
+ 
+                <span class="i">Collection</span>&lt;<a href="../../InformationRecord.cs.html#508a9dbac37ec093" class="t t">InformationRecord</a>&gt; <span id="r53 rd" class="r53 r">informationRecords</span> = <a href="#c42cd6e01ec60699" class="i method">ReadAll</a>(<span class="r31 r">job</span>.<a href="../client/Job.cs.html#501ba88f677f8460" class="i property">Information</a>);
+ 
+                <b>foreach</b> (<a href="../../InformationRecord.cs.html#508a9dbac37ec093" class="t t">InformationRecord</a> <span id="r54 rd" class="r54 r">p</span> <b>in</b> <span class="r53 r">informationRecords</span>)
+                {
+                    <b>if</b> (<span class="r54 r">p</span> == <b>null</b>) <b>continue</b>;
+                    <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a> <span id="r55 rd" class="r55 r">mshCommandRuntime</span> = <a href="../../cmdlet.cs.html#fa3830ca3ad4b256" class="i property">CommandRuntime</a> <b>as</b> <a href="../../MshCommandRuntime.cs.html#f9ebe6a3b284ab55" class="t t">MshCommandRuntime</a>;
+                    <b>if</b> (<span class="r55 r">mshCommandRuntime</span> != <b>null</b>)
+                    {
+                        <span class="r55 r">mshCommandRuntime</span>.<a href="../../MshCommandRuntime.cs.html#3dd6dedf42396504" class="i method">WriteInformation</a>(<span class="r54 r">p</span>, <b>true</b>);
+                    }
+                }
+            }
+ 
+            <b>if</b> (<span class="r31 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> != <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#4d2acd22ba4f0da9" class="i field">Failed</a>) <b>return</b>;
+ 
+            <a href="#defbc5d2c64af846" class="i method">WriteReasonError</a>(<span class="r31 r">job</span>);
+        }
+ 
+        <b>private void</b> <a id="defbc5d2c64af846" href="../../../R/defbc5d2c64af846.html" target="n" data-glyph="76,1" class="i method">WriteReasonError</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r56 rd" class="r56 r">job</span>)
+        {
+            <span class="c">// Write better error for the remoting case and generic error for the other case</span>
+            <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a> <span id="r57 rd" class="r57 r">child</span> = <span class="r56 r">job</span> <b>as</b> <a href="../client/Job.cs.html#d1388b6af9650b2e" class="t t">PSRemotingChildJob</a>;
+            <b>if</b> (<span class="r57 r">child</span> != <b>null</b> &amp;&amp; <span class="r57 r">child</span>.<a href="../client/Job.cs.html#b82370f19db56028" class="i property">FailureErrorRecord</a> != <b>null</b>)
+            {
+                <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <a href="../common/psstreamobject.cs.html#396582ec8eac5f1c" class="t constructor">PSStreamObject</a>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#88738d1bbe207cf8" class="i field">Error</a>, <span class="r57 r">child</span>.<a href="../client/Job.cs.html#b82370f19db56028" class="i property">FailureErrorRecord</a>, <span class="r57 r">child</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>));
+            }
+            <b>else</b> <b>if</b> (<span class="r56 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#5814932cc8525971" class="i property">Reason</a> != <b>null</b>)
+            {
+                <span class="i">Exception</span> <span id="r58 rd" class="r58 r">baseReason</span> = <span class="r56 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#5814932cc8525971" class="i property">Reason</a>;
+                <span class="i">Exception</span> <span id="r59 rd" class="r59 r">resultReason</span> = <span class="r58 r">baseReason</span>;
+ 
+                <span class="c">// If it was generated by a job that gave location information, unpack the</span>
+                <span class="c">// base exception.</span>
+                <a href="../client/Job2.cs.html#a4812a0c60f7f1fc" class="t t">JobFailedException</a> <span id="r60 rd" class="r60 r">exceptionWithLocation</span> = <span class="r58 r">baseReason</span> <b>as</b> <a href="../client/Job2.cs.html#a4812a0c60f7f1fc" class="t t">JobFailedException</a>;
+                <b>if</b> (<span class="r60 r">exceptionWithLocation</span> != <b>null</b>)
+                {
+                    <span class="r59 r">resultReason</span> = <span class="r60 r">exceptionWithLocation</span>.<a href="../client/Job2.cs.html#9084aaa80476201b" class="i property">Reason</a>;
+                }
+ 
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r61 rd" class="r61 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r59 r">resultReason</span>, <span class="s">&quot;JobStateFailed&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#f33f25c3453e2e98" class="i field">InvalidResult</a>, <b>null</b>);
+ 
+                <span class="c">// If it was generated by a job that gave location information, set the</span>
+                <span class="c">// location information.</span>
+                <b>if</b> ((<span class="r60 r">exceptionWithLocation</span> != <b>null</b>) &amp;&amp; (<span class="r60 r">exceptionWithLocation</span>.<a href="../client/Job2.cs.html#2391b55acde0b7a6" class="i property">DisplayScriptPosition</a> != <b>null</b>))
+                {
+                    <b>if</b> (<span class="r61 r">errorRecord</span>.<a href="../../ErrorPackage.cs.html#fd1ac7b3462d4426" class="i property">InvocationInfo</a> == <b>null</b>)
+                    {
+                        <span class="r61 r">errorRecord</span>.<a href="../../ErrorPackage.cs.html#14b8261653db7b03" class="i method">SetInvocationInfo</a>(<b>new</b> <a href="../../InvocationInfo.cs.html#73425a3cbc3397ab" class="t constructor">InvocationInfo</a>(<b>null</b>, <b>null</b>));
+                    }
+ 
+                    <span class="r61 r">errorRecord</span>.<a href="../../ErrorPackage.cs.html#fd1ac7b3462d4426" class="i property">InvocationInfo</a>.<a href="../../InvocationInfo.cs.html#da1298533340b29e" class="i property">DisplayScriptPosition</a> = <span class="r60 r">exceptionWithLocation</span>.<a href="../client/Job2.cs.html#2391b55acde0b7a6" class="i property">DisplayScriptPosition</a>;
+                }
+ 
+                <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <a href="../common/psstreamobject.cs.html#396582ec8eac5f1c" class="t constructor">PSStreamObject</a>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#88738d1bbe207cf8" class="i field">Error</a>, <span class="r61 r">errorRecord</span>, <span class="r56 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>));
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns all the results from supplied PSDataCollection.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">psDataCollection</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Data collection to read from.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Collection with copy of data.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private</b> <span class="i">Collection</span>&lt;<span class="r63 r t">T</span>&gt; <a id="c42cd6e01ec60699" href="../../../R/c42cd6e01ec60699.html" target="n" data-glyph="76,1" class="i method">ReadAll</a>&lt;<span id="r63 rd t" class="r63 r t">T</span>&gt;(<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<span class="r63 r t">T</span>&gt; <span id="r62 rd" class="r62 r">psDataCollection</span>)
+        {
+            <b>if</b> (<a href="#d11ed247718c6c2b" class="i field">_flush</a>)
+            {
+                <b>return</b> <span class="r62 r">psDataCollection</span>.<a href="../../hostifaces/PSDataCollection.cs.html#403be942120e2d89" class="i method">ReadAll</a>();
+            }
+ 
+            <span class="r63 r t">T</span>[] <span id="r64 rd" class="r64 r">array</span> = <b>new</b> <span class="r63 r t">T</span>[<span class="r62 r">psDataCollection</span>.<a href="../../hostifaces/PSDataCollection.cs.html#e7cb43bbebbb4aca" class="i property">Count</a>];
+            <span class="r62 r">psDataCollection</span>.<a href="../../hostifaces/PSDataCollection.cs.html#dad997b939982ea6" class="i method">CopyTo</a>(<span class="r64 r">array</span>, 0);
+            <span class="i">Collection</span>&lt;<span class="r63 r t">T</span>&gt; <span id="r65 rd" class="r65 r">collection</span> = <b>new</b> <span class="i">Collection</span>&lt;<span class="r63 r t">T</span>&gt;();
+            <b>foreach</b> (<span class="r63 r t">T</span> <span id="r66 rd" class="r66 r">t</span> <b>in</b> <span class="r64 r">array</span>)
+            {
+                <span class="r65 r">collection</span>.<span class="i">Add</span>(<span class="r66 r">t</span>);
+            }
+ 
+            <b>return</b> <span class="r65 r">collection</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Write the results from this Job object. It also writes the</span>
+        <span class="c">///</span><span class="c"> results from its child objects recursively.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">duplicate</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Hashtable used for duplicate detection.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r68 r">job</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Job whose results are written.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">registerInsteadOfWrite</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="be062b0434bdebf3" href="../../../R/be062b0434bdebf3.html" target="n" data-glyph="76,1" class="i method">WriteJobResultsRecursivelyHelper</a>(<span class="i">Hashtable</span> <span id="r67 rd" class="r67 r">duplicate</span>, <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r68 rd" class="r68 r">job</span>, <b>bool</b> <span id="r69 rd" class="r69 r">registerInsteadOfWrite</span>)
+        {
+            <span class="c">// Check if this object is already visited. If not, add it to the cache</span>
+            <b>if</b> (<span class="r67 r">duplicate</span>.<span class="i">ContainsKey</span>(<span class="r68 r">job</span>))
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="r67 r">duplicate</span>.<span class="i">Add</span>(<span class="r68 r">job</span>, <span class="r68 r">job</span>);
+ 
+            <span class="c">// Write the results of child jobs</span>
+            <span class="i">IList</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r70 rd" class="r70 r">childJobs</span> = <span class="r68 r">job</span>.<a href="../client/Job.cs.html#db120f2476b59753" class="i property">ChildJobs</a>;
+ 
+            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r71 rd" class="r71 r">childjob</span> <b>in</b> <span class="r70 r">childJobs</span>)
+            {
+                <a href="#be062b0434bdebf3" class="i method">WriteJobResultsRecursivelyHelper</a>(<span class="r67 r">duplicate</span>, <span class="r71 r">childjob</span>, <span class="r69 r">registerInsteadOfWrite</span>);
+            }
+ 
+            <b>if</b> (<span class="r69 r">registerInsteadOfWrite</span>)
+            {
+                <span class="c">// at any point there will be only one thread which will have</span>
+                <span class="c">// access to an entry corresponding to a job</span>
+                <span class="c">// this is because of the way the synchronization happens</span>
+                <span class="c">// with the pipeline thread and event handler thread using</span>
+                <span class="c">// _writeExistingData</span>
+                <a href="#79f98b0761f9d658" class="i field">_eventArgsWritten</a>[<span class="r68 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>] = <b>false</b>;
+                <span class="c">// register the job for future updates</span>
+                <a href="#127bd7545c1bbeb3" class="i method">AggregateResultsFromJob</a>(<span class="r68 r">job</span>);
+            }
+            <b>else</b>
+            {
+                <span class="c">// Write the results of this job</span>
+                <a href="#a546f6cdd1019d8d" class="i method">WriteJobResults</a>(<span class="r68 r">job</span>);
+                <a href="#3c93a42caa3a90b2" class="i method">WriteJobStateInformationIfRequired</a>(<span class="r68 r">job</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Writes the job objects if required by the cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r72 r">jobsToWrite</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Collection of jobs to write.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">this method is intended to be called only from</span>
+        <span class="c">///</span><span class="c"> ProcessRecord. When any changes are made ensure that this</span>
+        <span class="c">///</span><span class="c"> contract is not broken</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="22c270dd4b318895" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">WriteJobsIfRequired</a>(<span class="i">IEnumerable</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r72 rd" class="r72 r">jobsToWrite</span>)
+        {
+            <b>if</b> (!<a href="#b8219c455c9a3af6" class="i field">_outputJobFirst</a>) <b>return</b>;
+ 
+            <b>foreach</b> (<b>var</b> <span id="r73 rd" class="r73 r">job</span> <b>in</b> <span class="r72 r">jobsToWrite</span>)
+            {
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<span class="s">&quot;ReceiveJobCommand&quot;</span>, <span class="s">&quot;WriteJobsIfRequired&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r73 r">job</span>, <span class="s">&quot;Writing job object as output&quot;</span>, <b>null</b>);
+                <span class="i">WriteObject</span>(<span class="r73 r">job</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r74 r">job</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">this method should always be called before</span>
+        <span class="c">///</span><span class="c"> writeExistingData is set in ProcessRecord</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="127bd7545c1bbeb3" href="../../../R/127bd7545c1bbeb3.html" target="n" data-glyph="76,1" class="i method">AggregateResultsFromJob</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r74 rd" class="r74 r">job</span>)
+        {
+            <b>if</b> ((!<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; <span class="r74 r">job</span>.<a href="../client/Job.cs.html#431bfb528e72aa9f" class="i method">IsPersistentState</a>(<span class="r74 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)) || (<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; <span class="r74 r">job</span>.<a href="../client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r74 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))) <b>return</b>;
+            <span class="r74 r">job</span>.<a href="../client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> += <span class="i">HandleJobStateChanged</span>;
+ 
+            <span class="c">// Check after the state changed event has been subscribed to avoid a race</span>
+            <span class="c">// with the job state. StopAggregate is called from the state changed handler, so-</span>
+            <span class="c">// this could cause the job to never be removed from _jobsBeingAggregated</span>
+            <span class="c">// and therefore the _results ref to never be decremented.</span>
+            <b>if</b> ((!<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; <span class="r74 r">job</span>.<a href="../client/Job.cs.html#431bfb528e72aa9f" class="i method">IsPersistentState</a>(<span class="r74 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)) || (<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; <span class="r74 r">job</span>.<a href="../client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r74 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)))
+            {
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <span class="i">HandleJobStateChanged</span>;
+                <b>return</b>;
+            }
+ 
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;AggregateResultsFromJob&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r74 r">job</span>,
+                                 <span class="s">&quot;BEGIN Adding job for aggregation&quot;</span>, <b>null</b>);
+ 
+            <span class="c">// at this point, we can be sure that any job added to this</span>
+            <span class="c">// collection will have a state changed event to a finished state.</span>
+            <a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Add</span>(<span class="r74 r">job</span>);
+ 
+            <span class="c">// Tag the output collection so that the instance ID can be added to the output objects when streaming.</span>
+            <b>if</b> (<span class="r74 r">job</span>.<a href="../client/Job.cs.html#fd6ecf089f9dc9c7" class="i property">UsesResultsCollection</a>)
+            {
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">ResultsAdded</span>;
+            }
+            <b>else</b>
+            {
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#9f3b4cf91a5477ce" class="i property">Output</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#322c09d9eb167da1" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#0566bc7c986755b8" class="i property">Progress</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#2c4a777567a6240d" class="i property">Verbose</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#2271b8dbce732fb7" class="i property">Warning</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#fcf5aa47c1f50562" class="i property">Debug</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#501ba88f677f8460" class="i property">Information</a>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a> = <span class="r74 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>;
+ 
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#9f3b4cf91a5477ce" class="i property">Output</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Output_DataAdded</span>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#322c09d9eb167da1" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Error_DataAdded</span>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#0566bc7c986755b8" class="i property">Progress</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Progress_DataAdded</span>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#2c4a777567a6240d" class="i property">Verbose</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Verbose_DataAdded</span>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#2271b8dbce732fb7" class="i property">Warning</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Warning_DataAdded</span>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#fcf5aa47c1f50562" class="i property">Debug</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Debug_DataAdded</span>;
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#501ba88f677f8460" class="i property">Information</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> += <span class="i">Information_DataAdded</span>;
+            }
+ 
+            <b>if</b> (<span class="r74 r">job</span>.<a href="../client/Job.cs.html#72d48c1ba69954a8" class="i property">MonitorOutputProcessing</a>)
+            {
+                <b>if</b> (<a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a> == <b>null</b>)
+                {
+                    <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+                    {
+                        <b>if</b> (<a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a> == <b>null</b>)
+                        {
+                            <a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a> = <b>new</b> <span class="t">OutputProcessingState</span>();
+                        }
+                    }
+                }
+ 
+                <span class="r74 r">job</span>.<a href="../client/Job.cs.html#b41adcf1d4aff556" class="i method">SetMonitorOutputProcessing</a>(<a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a>);
+            }
+ 
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;AggregateResultsFromJob&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r74 r">job</span>,
+                                 <span class="s">&quot;END Adding job for aggregation&quot;</span>, <b>null</b>);
+        }
+ 
+        <b>private void</b> <a id="479b0899dec200e0" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ResultsAdded</a>(<b>object</b> <span id="r75 rd" class="r75 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r76 rd" class="r76 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <span id="r77 rd" class="r77 r">results</span> = <span class="r75 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;;
+ 
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r77 r">results</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+            <a href="../common/psstreamobject.cs.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r78 rd" class="r78 r">record</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r77 r">results</span>, <span class="r76 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+ 
+            <b>if</b> (<span class="r78 r">record</span> != <b>null</b>)
+            {
+                <span class="r78 r">record</span>.<a href="../common/psstreamobject.cs.html#a703946e2a0f22cf" class="i property">Id</a> = <span class="r77 r">results</span>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a>;
+                <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<span class="r78 r">record</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="eb55804ec548bfde" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleJobStateChanged</a>(<b>object</b> <span id="r79 rd" class="r79 r">sender</span>, <a href="../client/Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r80 rd" class="r80 r">e</span>)
+        {
+            <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r81 rd" class="r81 r">job</span> = <span class="r79 r">sender</span> <b>as</b> <a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>;
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r81 r">job</span> != <b>null</b>, <span class="s">&quot;Job state info cannot be raised with reference to job&quot;</span>);
+ 
+            <span class="c">// waiting for existing data to be written ensures two things</span>
+            <span class="c">// 1. that no aggregation for a job is in progress</span>
+            <span class="c">// 2. the state information is written in the correct order</span>
+            <span class="c">//    as per the contract</span>
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;HandleJobStateChanged&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r81 r">job</span>,
+                                 <span class="s">&quot;BEGIN wait for write existing data&quot;</span>, <b>null</b>);
+            <b>if</b> (<span class="r80 r">e</span>.<a href="../client/Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> != <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#8b3e2b923f5b0e5d" class="i field">Running</a>)
+                <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+ 
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;HandleJobStateChanged&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r81 r">job</span>,
+                                 <span class="s">&quot;END wait for write existing data&quot;</span>, <b>null</b>);
+ 
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (!<a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Contains</span>(<span class="r81 r">job</span>))
+                {
+                    <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;HandleJobStateChanged&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r81 r">job</span>,
+                                         <span class="s">&quot;Returning because job is not in _jobsBeingAggregated&quot;</span>, <b>null</b>);
+                    <b>return</b>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r80 r">e</span>.<a href="../client/Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a> == <a href="../client/Job.cs.html#fac7cdff9aee3e4f" class="t t">JobState</a>.<a href="../client/Job.cs.html#d73e45c1ea393a18" class="i field">Blocked</a>)
+            {
+                <a href="#a80a2244a47f2e22" class="i method">DoUnblockJob</a>(<span class="r81 r">job</span>);
+            }
+ 
+            <span class="c">// Stop wait if:</span>
+            <span class="c">// Force is specified and Job is in a Finished state (Completed, Failed, Stopped)</span>
+            <span class="c">// OR</span>
+            <span class="c">// Force is not specified and Job is in a persistent state (Suspended or</span>
+            <span class="c">// Disconnected as well as above)</span>
+            <span class="c">// (logic inverted for return)</span>
+            <b>if</b> (!(!<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; <span class="r81 r">job</span>.<a href="../client/Job.cs.html#431bfb528e72aa9f" class="i method">IsPersistentState</a>(<span class="r80 r">e</span>.<a href="../client/Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)) &amp;&amp; !(<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; <span class="r81 r">job</span>.<a href="../client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r80 r">e</span>.<a href="../client/Job.cs.html#7e34bf23c7781be3" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)))
+            {
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;HandleJobStateChanged&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r81 r">job</span>,
+                                     <span class="s">&quot;Returning because job state does not meet wait requirements (continue aggregating)&quot;</span>);
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Write an error record with JobStateFailed ID if there is a JobStateInfo.Reason.</span>
+            <a href="#defbc5d2c64af846" class="i method">WriteReasonError</a>(<span class="r81 r">job</span>);
+            <a href="#3c93a42caa3a90b2" class="i method">WriteJobStateInformationIfRequired</a>(<span class="r81 r">job</span>, <span class="r80 r">e</span>);
+            <a href="#ead3929e0969f865" class="i method">StopAggregateResultsFromJob</a>(<span class="r81 r">job</span>);
+        }
+ 
+        <b>private void</b> <a id="2c91d1440471e8d3" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Progress_DataAdded</a>(<b>object</b> <span id="r82 rd" class="r82 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r83 rd" class="r83 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a>&gt; <span id="r84 rd" class="r84 r">progressRecords</span> = <span class="r82 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r84 r">progressRecords</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+ 
+                <a href="../../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r85 rd" class="r85 r">record</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r84 r">progressRecords</span>, <span class="r83 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r85 r">record</span> != <b>null</b>)
+                {
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <a href="../common/psstreamobject.cs.html#396582ec8eac5f1c" class="t constructor">PSStreamObject</a>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#c7356a25d651f7d9" class="i field">Progress</a>, <span class="r85 r">record</span>, <span class="r84 r">progressRecords</span>.<a href="../../hostifaces/PSDataCollection.cs.html#3fc5ffd5d13cd3db" class="i property">SourceId</a>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="feb79ef5835ba691" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Error_DataAdded</a>(<b>object</b> <span id="r86 rd" class="r86 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r87 rd" class="r87 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt; <span id="r88 rd" class="r88 r">errorRecords</span> = <span class="r86 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r88 r">errorRecords</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r89 rd" class="r89 r">errorRecord</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r88 r">errorRecords</span>, <span class="r87 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r89 r">errorRecord</span> != <b>null</b>)
+                {
+                    <span class="c">// error records are already tagged, skip tagging</span>
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#88738d1bbe207cf8" class="i field">Error</a>, <span class="r89 r">errorRecord</span>, <span class="i">Guid</span>.<span class="i">Empty</span>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="fe9b4bc31baef93f" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Debug_DataAdded</a>(<b>object</b> <span id="r90 rd" class="r90 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r91 rd" class="r91 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#8954d4e40287d3de" class="t t">DebugRecord</a>&gt; <span id="r92 rd" class="r92 r">debugRecords</span> = <span class="r90 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#8954d4e40287d3de" class="t t">DebugRecord</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r92 r">debugRecords</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+                <a href="../../hostifaces/InformationalRecord.cs.html#8954d4e40287d3de" class="t t">DebugRecord</a> <span id="r93 rd" class="r93 r">record</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r92 r">debugRecords</span>, <span class="r91 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r93 r">record</span> != <b>null</b>)
+                {
+                    <span class="c">// debug records are already tagged, skip tagging</span>
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#b0bf390dba8a183f" class="i field">Debug</a>, <span class="r93 r">record</span>.<a href="../../hostifaces/InformationalRecord.cs.html#4b46c95702707b8a" class="i property">Message</a>, <span class="i">Guid</span>.<span class="i">Empty</span>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="25342a6335475c1f" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Warning_DataAdded</a>(<b>object</b> <span id="r94 rd" class="r94 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r95 rd" class="r95 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a>&gt; <span id="r96 rd" class="r96 r">warningRecords</span> = <span class="r94 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r96 r">warningRecords</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+                <a href="../../hostifaces/InformationalRecord.cs.html#59cd69dde48b9557" class="t t">WarningRecord</a> <span id="r97 rd" class="r97 r">record</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r96 r">warningRecords</span>, <span class="r95 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r97 r">record</span> != <b>null</b>)
+                {
+                    <span class="c">// warning records are already tagged, skip tagging</span>
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#94b7fb40f26df4b8" class="i field">Warning</a>, <span class="r97 r">record</span>.<a href="../../hostifaces/InformationalRecord.cs.html#4b46c95702707b8a" class="i property">Message</a>, <span class="i">Guid</span>.<span class="i">Empty</span>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="ec26b25910e84f97" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Verbose_DataAdded</a>(<b>object</b> <span id="r98 rd" class="r98 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r99 rd" class="r99 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#5d56339940b0040b" class="t t">VerboseRecord</a>&gt; <span id="r100 rd" class="r100 r">verboseRecords</span> = <span class="r98 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../hostifaces/InformationalRecord.cs.html#5d56339940b0040b" class="t t">VerboseRecord</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r100 r">verboseRecords</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+                <a href="../../hostifaces/InformationalRecord.cs.html#5d56339940b0040b" class="t t">VerboseRecord</a> <span id="r101 rd" class="r101 r">record</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r100 r">verboseRecords</span>, <span class="r99 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r101 r">record</span> != <b>null</b>)
+                {
+                    <span class="c">// verbose records are already tagged, skip tagging</span>
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#a460f5b9e6091568" class="i field">Verbose</a>, <span class="r101 r">record</span>.<a href="../../hostifaces/InformationalRecord.cs.html#4b46c95702707b8a" class="i property">Message</a>, <span class="i">Guid</span>.<span class="i">Empty</span>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="2b69555b65337076" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Information_DataAdded</a>(<b>object</b> <span id="r102 rd" class="r102 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r103 rd" class="r103 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../InformationRecord.cs.html#508a9dbac37ec093" class="t t">InformationRecord</a>&gt; <span id="r104 rd" class="r104 r">informationRecords</span> = <span class="r102 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../InformationRecord.cs.html#508a9dbac37ec093" class="t t">InformationRecord</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r104 r">informationRecords</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+                <a href="../../InformationRecord.cs.html#508a9dbac37ec093" class="t t">InformationRecord</a> <span id="r105 rd" class="r105 r">record</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r104 r">informationRecords</span>, <span class="r103 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r105 r">record</span> != <b>null</b>)
+                {
+                    <span class="c">// information records are already tagged, skip tagging</span>
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#d540061bc850b342" class="i field">Information</a>, <span class="r105 r">record</span>, <span class="i">Guid</span>.<span class="i">Empty</span>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="cde055ec52be7ddd" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">Output_DataAdded</a>(<b>object</b> <span id="r106 rd" class="r106 r">sender</span>, <a href="../../hostifaces/PSDataCollection.cs.html#7044b5d8986ab72f" class="t t">DataAddedEventArgs</a> <span id="r107 rd" class="r107 r">e</span>)
+        {
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#36fde09bd59cc4ef" class="i field">_isDisposed</a>) <b>return</b>;
+            }
+ 
+            <a href="#23e0656cffa38c73" class="i field">_writeExistingData</a>.<span class="i">WaitOne</span>();
+            <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">EnterReadLock</span>();
+            <b>try</b>
+            {
+                <b>if</b> (!<a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#c160386455270a8f" class="i property">IsOpen</a>) <b>return</b>;
+                <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r108 rd" class="r108 r">output</span> = <span class="r106 r">sender</span> <b>as</b> <a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;;
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r108 r">output</span> != <b>null</b>, <span class="s">&quot;PSDataCollection is raising an inappropriate event&quot;</span>);
+                <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r109 rd" class="r109 r">obj</span> = <a href="#3e96d93e92b849dd" class="i method">GetData</a>(<span class="r108 r">output</span>, <span class="r107 r">e</span>.<a href="../../hostifaces/PSDataCollection.cs.html#0ed8637c462f29c7" class="i property">Index</a>);
+                <b>if</b> (<span class="r109 r">obj</span> != <b>null</b>)
+                {
+                    <span class="c">// output objects are already tagged, skip tagging</span>
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#503ddb460914a8c9" class="i field">Output</a>, <span class="r109 r">obj</span>, <span class="i">Guid</span>.<span class="i">Empty</span>));
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#209e31500593c684" class="i field">_resultsReaderWriterLock</a>.<span class="i">ExitReadLock</span>();
+            }
+        }
+ 
+        <b>private</b> <span class="r110 r t">T</span> <a id="3e96d93e92b849dd" href="../../../R/3e96d93e92b849dd.html" target="n" data-glyph="76,1" class="i method">GetData</a>&lt;<span id="r110 rd t" class="r110 r t">T</span>&gt;(<a href="../../hostifaces/PSDataCollection.cs.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<span class="r110 r t">T</span>&gt; <span id="r111 rd" class="r111 r">collection</span>, <b>int</b> <span id="r112 rd" class="r112 r">index</span>)
+        {
+            <b>if</b> (<a href="#d11ed247718c6c2b" class="i field">_flush</a>)
+            {
+                <span class="i">Collection</span>&lt;<span class="r110 r t">T</span>&gt; <span id="r113 rd" class="r113 r">data</span> = <span class="r111 r">collection</span>.<a href="../../hostifaces/PSDataCollection.cs.html#dbac5089cef6050c" class="i method">ReadAndRemove</a>(1);
+                <b>if</b> (<span class="r113 r">data</span>.<span class="i">Count</span> &gt; 0)
+                {
+                    <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r113 r">data</span>.<span class="i">Count</span> == 1, <span class="s">&quot;DataAdded should be raised for each object added&quot;</span>);
+                    <b>return</b> <span class="r113 r">data</span>[0];
+                }
+                <span class="c">// it is possible that when there was a wait</span>
+                <span class="c">// the data got written</span>
+                <b>return</b> <b>default</b>(<span class="r110 r t">T</span>);
+            }
+ 
+            <b>return</b> <span class="r111 r">collection</span><a href="../../hostifaces/PSDataCollection.cs.html#0fbfd44b65c14b0d">[</a><span class="r112 r">index</span>];
+        }
+ 
+        <b>private void</b> <a id="ead3929e0969f865" href="../../../R/ead3929e0969f865.html" target="n" data-glyph="76,1" class="i method">StopAggregateResultsFromJob</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r114 rd" class="r114 r">job</span>)
+        {
+            <a href="#6815b69ad2a5ef53" class="i method">SetOutputProcessingState</a>(<b>false</b>);
+ 
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;StopAggregateResultsFromJob&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r114 r">job</span>,
+                                     <span class="s">&quot;Removing job from aggregation&quot;</span>, <b>null</b>);
+                <a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Remove</span>(<span class="r114 r">job</span>);
+                <b>if</b> (<a href="#370f1773143c0a7c" class="i field">_jobsBeingAggregated</a>.<span class="i">Count</span> == 0 &amp;&amp; <a href="#604dfd883d97b4d6" class="i field">_holdingResultsRef</a>)
+                {
+                    <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;StopAggregateResultsFromJob&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>)<b>null</b>,
+                                         <span class="s">&quot;Removing Ref to results collection&quot;</span>, <b>null</b>);
+                    <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#737fb48bd51a18aa" class="i method">DecrementRef</a>();
+                    <a href="#604dfd883d97b4d6" class="i field">_holdingResultsRef</a> = <b>false</b>;
+                }
+            }
+ 
+            <b>if</b> (<span class="r114 r">job</span>.<a href="../client/Job.cs.html#72d48c1ba69954a8" class="i property">MonitorOutputProcessing</a>)
+            {
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#87a43c0cc2ce114a" class="i method">RemoveMonitorOutputProcessing</a>(<a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a>);
+            }
+ 
+            <b>if</b> (<span class="r114 r">job</span>.<a href="../client/Job.cs.html#fd6ecf089f9dc9c7" class="i property">UsesResultsCollection</a>)
+            {
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#2f6fd0f4814916f6" class="i property">Results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">ResultsAdded</span>;
+            }
+            <b>else</b>
+            {
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#9f3b4cf91a5477ce" class="i property">Output</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Output_DataAdded</span>;
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#322c09d9eb167da1" class="i property">Error</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Error_DataAdded</span>;
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#0566bc7c986755b8" class="i property">Progress</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Progress_DataAdded</span>;
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#2c4a777567a6240d" class="i property">Verbose</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Verbose_DataAdded</span>;
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#2271b8dbce732fb7" class="i property">Warning</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Warning_DataAdded</span>;
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#fcf5aa47c1f50562" class="i property">Debug</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Debug_DataAdded</span>;
+                <span class="r114 r">job</span>.<a href="../client/Job.cs.html#501ba88f677f8460" class="i property">Information</a>.<a href="../../hostifaces/PSDataCollection.cs.html#de98d172ff9dac86" class="i">DataAdded</a> -= <span class="i">Information_DataAdded</span>;
+            }
+ 
+            <span class="r114 r">job</span>.<a href="../client/Job.cs.html#a099819afc059aeb" class="i">StateChanged</a> -= <span class="i">HandleJobStateChanged</span>;
+        }
+ 
+        <b>private void</b> <a id="70d5c957d7a1d653" href="../../../R/70d5c957d7a1d653.html" target="n" data-glyph="76,1" class="i method">AutoRemoveJobIfRequired</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r115 rd" class="r115 r">job</span>)
+        {
+            <b>if</b> (!<a href="#03503ced744947bd" class="i field">_autoRemoveJob</a>) <b>return</b>;
+            <b>if</b> (!<a href="#d74f45b918a8a5eb" class="i field">_jobsSpecifiedInParameters</a>.<span class="i">Contains</span>(<span class="r115 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>)) <b>return</b>;
+            <b>if</b> (!<span class="r115 r">job</span>.<a href="../client/Job.cs.html#d7179d2607549d3b" class="i method">IsFinishedState</a>(<span class="r115 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>)) <b>return</b>;
+ 
+            <span class="c">// Only finished jobs that were specified by the user on the cmdline</span>
+            <span class="c">// (computed in processRecord) should reach this point.</span>
+            <b>if</b> (<span class="r115 r">job</span>.<a href="../client/Job.cs.html#bdbea4d2ac6ecc6b" class="i property">HasMoreData</a>)
+            {
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;AutoRemoveJobIfRequired&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r115 r">job</span>,
+                                     <span class="s">&quot;Job has data and is being removed.&quot;</span>);
+            }
+ 
+            <a href="../client/Job2.cs.html#f76d5e2b49661689" class="t t">Job2</a> <span id="r116 rd" class="r116 r">job2</span> = <span class="r115 r">job</span> <b>as</b> <a href="../client/Job2.cs.html#f76d5e2b49661689" class="t t">Job2</a>;
+            <b>if</b> (<span class="r116 r">job2</span> != <b>null</b>)
+            {
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">disable</span> 56500
+                <b>try</b>
+                {
+                    <a href="../../CommandBase.cs.html#902d53f2bbe4f061" class="i property">JobManager</a>.<a href="../client/JobManager.cs.html#f7d214b0d127f694" class="i method">RemoveJob</a>(<span class="r116 r">job2</span>, <a href="#23a93f1c27fadeef" class="k">this</a>, <b>false</b>, <b>true</b>);
+                    <span class="r115 r">job</span>.<a href="../client/Job.cs.html#a1b7a0cd2d734ade" class="i method">Dispose</a>();
+                }
+                <b>catch</b> (<span class="i">Exception</span> <span id="r117 rd" class="r117 r">ex</span>)
+                {
+                    <span class="c">// JobSourceAdapters are third party code, and could</span>
+                    <span class="c">// throw any exception type. Catch generic exception, but transfer the error</span>
+                    <span class="c">// so that it&#39;s written to the user.</span>
+                    <a href="#5ecfcc3302a71a08" class="i method">AddRemoveErrorToResults</a>(<span class="r116 r">job2</span>, <span class="r117 r">ex</span>);
+                }
+<span class="k preprocess">#</span><span class="k preprocess">pragma</span> <span class="k preprocess">warning</span> <span class="k preprocess">restore</span> 56500
+            }
+            <b>else</b>
+            {
+                <b>try</b>
+                {
+                    <a href="../../CommandBase.cs.html#025e5235224e3234" class="i property">JobRepository</a>.<a href="JobRepository.cs.html#473d130845fed012" class="i method">Remove</a>(<span class="r115 r">job</span>);
+                    <span class="r115 r">job</span>.<a href="../client/Job.cs.html#a1b7a0cd2d734ade" class="i method">Dispose</a>();
+                }
+                <b>catch</b> (<span class="i">ArgumentException</span> <span id="r118 rd" class="r118 r">ex</span>)
+                {
+                    <span class="i">AddRemoveErrorToResults</span>(<span class="r115 r">job</span>, <span class="r118 r">ex</span>);
+                }
+            }
+        }
+ 
+        <b>private void</b> <a id="5ecfcc3302a71a08" href="../../../R/5ecfcc3302a71a08.html" target="n" data-glyph="76,1" class="i method">AddRemoveErrorToResults</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r119 rd" class="r119 r">job</span>, <span class="i">Exception</span> <span id="r120 rd" class="r120 r">ex</span>)
+        {
+            <b>var</b> <span id="r121 rd" class="r121 r">ex2</span> = <b>new</b> <span class="i">ArgumentException</span>(<a href="../common/remotingexceptions.cs.html#53047fc052e9b445" class="t t">PSRemotingErrorInvariants</a>.<span class="i">FormatResourceString</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotRemoveJob</span>), <span class="r120 r">ex</span>);
+            <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="k">var</a> <span id="r122 rd" class="r122 r">removeError</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r121 r">ex2</span>, <span class="s">&quot;ReceiveJobAutoRemovalError&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <span class="r119 r">job</span>);
+            <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <a href="../common/psstreamobject.cs.html#7ce6eaead896f9b1" class="t constructor">PSStreamObject</a>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#88738d1bbe207cf8" class="i field">Error</a>, <span class="r122 r">removeError</span>));
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Write the results from this Job object. It also writes the</span>
+        <span class="c">///</span><span class="c"> results from its child objects recursively.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r123 r">job</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Job whose results are written.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r124 r">registerInsteadOfWrite</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="1189ed2ea4d694c9" href="../../../R/1189ed2ea4d694c9.html" target="n" data-glyph="76,1" class="i method">WriteJobResultsRecursively</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r123 rd" class="r123 r">job</span>, <b>bool</b> <span id="r124 rd" class="r124 r">registerInsteadOfWrite</span>)
+        {
+            <span class="i">Hashtable</span> <span id="r125 rd" class="r125 r">duplicateDetector</span> = <b>new</b> <span class="i">Hashtable</span>();
+            <a href="#be062b0434bdebf3" class="i method">WriteJobResultsRecursivelyHelper</a>(<span class="r125 r">duplicateDetector</span>, <span class="r123 r">job</span>, <span class="r124 r">registerInsteadOfWrite</span>);
+            <span class="r125 r">duplicateDetector</span>.<span class="i">Clear</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r126 r">jobs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r127 r">checkForRecurse</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r128 r">registerInsteadOfWrite</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="0202d0046892a102" href="../../../R/0202d0046892a102.html" target="n" data-glyph="76,1" class="i method">WriteResultsForJobsInCollection</a>(<span class="i">List</span>&lt;<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a>&gt; <span id="r126 rd" class="r126 r">jobs</span>, <b>bool</b> <span id="r127 rd" class="r127 r">checkForRecurse</span>, <b>bool</b> <span id="r128 rd" class="r128 r">registerInsteadOfWrite</span>)
+        {
+            <b>foreach</b> (<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r129 rd" class="r129 r">job</span> <b>in</b> <span class="r126 r">jobs</span>)
+            {
+                <b>if</b> (<span class="r127 r">checkForRecurse</span> &amp;&amp; <a href="#2b3f2d76128d1bd4" class="i field">_recurse</a>)
+                {
+                    <a href="#1189ed2ea4d694c9" class="i method">WriteJobResultsRecursively</a>(<span class="r129 r">job</span>, <span class="r128 r">registerInsteadOfWrite</span>);
+                }
+                <b>else</b>
+                {
+                    <b>if</b> (<span class="r128 r">registerInsteadOfWrite</span>)
+                    {
+                        <span class="c">// at any point there will be only one thread which will have</span>
+                        <span class="c">// access to an entry corresponding to a job</span>
+                        <span class="c">// this is because of the way the synchronization happens</span>
+                        <span class="c">// with the pipeline thread and event handler thread using</span>
+                        <span class="c">// _writeExistingData</span>
+                        <a href="#79f98b0761f9d658" class="i field">_eventArgsWritten</a>[<span class="r129 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>] = <b>false</b>;
+                        <a href="#127bd7545c1bbeb3" class="i method">AggregateResultsFromJob</a>(<span class="r129 r">job</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#a546f6cdd1019d8d" class="i method">WriteJobResults</a>(<span class="r129 r">job</span>);
+                        <a href="#3c93a42caa3a90b2" class="i method">WriteJobStateInformationIfRequired</a>(<span class="r129 r">job</span>);
+                    }
+                }
+            }
+        }
+ 
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <b>bool</b>&gt; <a id="79f98b0761f9d658" href="../../../R/79f98b0761f9d658.html" target="n" data-glyph="46,1" class="i field">_eventArgsWritten</a> = <b>new</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <b>bool</b>&gt;();
+ 
+        <b>private void</b> <a id="5e54969ba251b8f7" href="../../../R/5e54969ba251b8f7.html" target="n" data-glyph="76,1" class="i method">WriteJobStateInformation</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r130 rd" class="r130 r">job</span>, <a href="../client/Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r131 rd" class="r131 r">args</span> = <b>null</b>)
+        {
+            <span class="c">// at any point there will be only one thread which will have</span>
+            <span class="c">// access to an entry corresponding to a job</span>
+            <span class="c">// this is because of the way the synchronization happens</span>
+            <span class="c">// with the pipeline thread and event handler thread using</span>
+            <span class="c">// _writeExistingData</span>
+            <b>bool</b> <span id="r132 rd" class="r132 r">eventWritten</span>;
+            <a href="#79f98b0761f9d658" class="i field">_eventArgsWritten</a>.<span class="i">TryGetValue</span>(<span class="r130 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>, <b>out</b> <span class="r132 r">eventWritten</span>);
+ 
+            <b>if</b> (<span class="r132 r">eventWritten</span>)
+            {
+                <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;WriteJobStateInformation&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r130 r">job</span>,
+                                     <span class="s">&quot;State information already written, skipping another write&quot;</span>, <b>null</b>);
+                <b>return</b>;
+            }
+ 
+            <a href="../client/Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r133 rd" class="r133 r">eventArgs</span> = <span class="r131 r">args</span> ?? <b>new</b> <a href="../client/Job.cs.html#541d6111289d0acf" class="t constructor">JobStateEventArgs</a>(<span class="r130 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>);
+            <a href="#79f98b0761f9d658" class="i field">_eventArgsWritten</a>[<span class="r130 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>] = <b>true</b>;
+ 
+            <a href="#519744bb7ea1fd15" class="i field">_tracer</a>.<span class="i">WriteMessage</span>(<a href="#48c6ec433bd79aae" class="i field">ClassNameTrace</a>, <span class="s">&quot;WriteJobStateInformation&quot;</span>, <span class="i">Guid</span>.<span class="i">Empty</span>, <span class="r130 r">job</span>, <span class="s">&quot;Writing job state changed event args&quot;</span>, <b>null</b>);
+            <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r134 rd" class="r134 r">obj</span> = <b>new</b> <a href="../../MshObject.cs.html#3ee1d75e736c4afc" class="t constructor">PSObject</a>(<span class="r133 r">eventArgs</span>);
+            <span class="r134 r">obj</span>.<a href="../../MshObject.cs.html#59e9cd1ad57ccd34" class="i property">Properties</a>.<a href="../../MshMemberInfo.cs.html#a9e3a2dc56d98237" class="i method">Add</a>(<b>new</b> <a href="../../MshMemberInfo.cs.html#f4e5bccf8ccb9f2a" class="t constructor">PSNoteProperty</a>(<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#d19a1042a44001e8" class="t t">RemotingConstants</a>.<a href="../common/WireDataFormat/EncodeAndDecode.cs.html#0a3616a388cc20be" class="i field">EventObject</a>, <b>true</b>));
+            <a href="#0742eff38ee70c96" class="i field">_results</a>.<a href="../../hostifaces/PSDataCollection.cs.html#681501d1e27b76df" class="i method">Add</a>(<b>new</b> <a href="../common/psstreamobject.cs.html#396582ec8eac5f1c" class="t constructor">PSStreamObject</a>(<a href="../common/psstreamobject.cs.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="../common/psstreamobject.cs.html#503ddb460914a8c9" class="i field">Output</a>, <span class="r134 r">obj</span>, <span class="r130 r">job</span>.<a href="../client/Job.cs.html#958365243a8fc2cd" class="i property">InstanceId</a>));
+        }
+ 
+        <b>private void</b> <a id="3c93a42caa3a90b2" href="../../../R/3c93a42caa3a90b2.html" target="n" data-glyph="76,1" class="i method">WriteJobStateInformationIfRequired</a>(<a href="../client/Job.cs.html#e1ff43f6998863de" class="t t">Job</a> <span id="r135 rd" class="r135 r">job</span>, <a href="../client/Job.cs.html#efe480d4e86a46d4" class="t t">JobStateEventArgs</a> <span id="r136 rd" class="r136 r">args</span> = <b>null</b>)
+        {
+            <b>if</b> (<a href="#6e8cccdd2252791c" class="i field">_writeStateChangedEvents</a> &amp;&amp; <span class="r135 r">job</span>.<a href="../client/Job.cs.html#431bfb528e72aa9f" class="i method">IsPersistentState</a>(<span class="r135 r">job</span>.<a href="../client/Job.cs.html#896d1d1f27daae5f" class="i property">JobStateInfo</a>.<a href="../client/Job.cs.html#245057a5f4a9ed30" class="i property">State</a>))
+            {
+                <a href="#5e54969ba251b8f7" class="i method">WriteJobStateInformation</a>(<span class="r135 r">job</span>, <span class="r136 r">args</span>);
+            }
+ 
+            <a href="#70d5c957d7a1d653" class="i method">AutoRemoveJobIfRequired</a>(<span class="r135 r">job</span>);
+        }
+ 
+        <b>private void</b> <a id="14cd7dbe9ba44322" href="../../../R/14cd7dbe9ba44322.html" target="n" data-glyph="76,1" class="i method">ValidateWait</a>()
+        {
+            <b>if</b> (<a href="#62c552dd509ba8c8" class="i field">_wait</a> &amp;&amp; !<a href="#d11ed247718c6c2b" class="i field">_flush</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">BlockCannotBeUsedWithKeep</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="56ebb8de73be1bfa" href="../../../R/56ebb8de73be1bfa.html" target="n" data-glyph="76,1" class="i method">ValidateWriteEvents</a>()
+        {
+            <b>if</b> (<a href="#6e8cccdd2252791c" class="i field">_writeStateChangedEvents</a> &amp;&amp; !<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">WriteEventsCannotBeUsedWithoutWait</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="8816ef340cdb628c" href="../../../R/8816ef340cdb628c.html" target="n" data-glyph="76,1" class="i method">ValidateAutoRemove</a>()
+        {
+            <b>if</b> (<a href="#03503ced744947bd" class="i field">_autoRemoveJob</a> &amp;&amp; !<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">AutoRemoveCannotBeUsedWithoutWait</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="0fa37dcc991a9a74" href="../../../R/0fa37dcc991a9a74.html" target="n" data-glyph="76,1" class="i method">ValidateForce</a>()
+        {
+            <b>if</b> (<a href="#56c6c5d3edbf998e" class="i property">Force</a> &amp;&amp; !<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">ForceCannotBeUsedWithoutWait</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="7d8c349ae3c9e422" href="../../../R/7d8c349ae3c9e422.html" target="n" data-glyph="76,1" class="i method">ValidateWriteJobInResults</a>()
+        {
+            <b>if</b> (<a href="#b8219c455c9a3af6" class="i field">_outputJobFirst</a> &amp;&amp; !<a href="#62c552dd509ba8c8" class="i field">_wait</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">WriteJobInResultsCannotBeUsedWithoutWait</span>);
+            }
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Private Methods
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> OutputProcessingState
+ 
+        <b>private void</b> <a id="6815b69ad2a5ef53" href="../../../R/6815b69ad2a5ef53.html" target="n" data-glyph="76,1" class="i method">SetOutputProcessingState</a>(<b>bool</b> <span id="r137 rd" class="r137 r">processingOutput</span>)
+        {
+            <b>bool</b> <span id="r138 rd" class="r138 r">stateChanged</span>;
+            <b>lock</b> (<a href="#711968b97c78c19f" class="i field">_syncObject</a>)
+            {
+                <span class="r138 r">stateChanged</span> = (<span class="r137 r">processingOutput</span> != <a href="#eac172061e6e1614" class="i field">_processingOutput</a>);
+                <b>if</b> (<span class="r138 r">stateChanged</span>)
+                {
+                    <a href="#eac172061e6e1614" class="i field">_processingOutput</a> = <span class="r137 r">processingOutput</span>;
+                }
+            }
+ 
+            <b>if</b> (<a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a> != <b>null</b> &amp;&amp; <span class="r138 r">stateChanged</span>)
+            {
+                <a href="#8b39cb44459d92c4" class="i field">_outputProcessingNotification</a>.<a href="#af88f70d42da07de" class="i method">RaiseOutputProcessingStateChangedEvent</a>(<span class="r137 r">processingOutput</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">region</span> OutputProcessingState
+ 
+    <b>internal class</b> <a id="930323e7ce0b20ed" href="../../../R/930323e7ce0b20ed.html" target="n" data-glyph="2,0" class="t t"><span id="1c26849fab61acf2">OutputProcessingState</span></a> : <a href="../client/Job.cs.html#ee25bd0d06df876c" class="t t">IOutputProcessingState</a>
+    {
+        <b>public event</b> <span class="i">EventHandler</span>&lt;<a href="../client/Job.cs.html#7e5214a3bc47f956" class="t t">OutputProcessingStateEventArgs</a>&gt; <a id="e9db99e3d3dde678" href="../../../R/e9db99e3d3dde678.html" target="n" data-glyph="30,1" class="i">OutputProcessingStateChanged</a>;
+ 
+        <b>internal void</b> <a id="af88f70d42da07de" href="../../../R/af88f70d42da07de.html" target="n" data-glyph="74,1" class="i method">RaiseOutputProcessingStateChangedEvent</a>(<b>bool</b> <span id="r139 rd" class="r139 r">processingOutput</span>)
+        {
+            <b>try</b>
+            {
+                <a href="#e9db99e3d3dde678" class="i">OutputProcessingStateChanged</a>.<span class="i">SafeInvoke</span>&lt;<a href="../client/Job.cs.html#7e5214a3bc47f956" class="t t">OutputProcessingStateEventArgs</a>&gt;(
+                    <a href="#930323e7ce0b20ed" class="k">this</a>,
+                    <b>new</b> <a href="../client/Job.cs.html#74417b7db0a01033" class="t constructor">OutputProcessingStateEventArgs</a>(<span class="r139 r">processingOutput</span>));
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+            }
+        }
+    }
+ 
+    <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,313 @@
+﻿<!DOCTYPE html>
+<html><head><title>LightLambda.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(304);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/interpreter/LightLambda.cs" target="_top">engine\interpreter\LightLambda.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">/* ****************************************************************************
+ *
+ * Copyright (c) Microsoft Corporation.
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+ * by the terms of the Apache License, Version 2.0.
+ *
+ * You must not remove this notice, or any other, from this software.
+ *
+ *
+ * ***************************************************************************/</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CLR2</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">using Microsoft.Scripting.Ast;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Reflection</span>.<span class="i">Emit</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Security</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<span class="c">//using Microsoft.Scripting.Generation;</span>
+ 
+<b>using</b> <span class="t">AstUtils</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>.<a href="Utilities.cs.html#55b509010bbde4b3" class="t t">Utils</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>
+{
+    <b>internal sealed class</b> <a id="db72d65fbca542ef" href="../../R/db72d65fbca542ef.html" target="n" data-glyph="2,0" class="t t">LightLambdaCompileEventArgs</a> : <span class="i">EventArgs</span>
+    {
+        <b>public</b> <span class="i">Delegate</span> <a id="9c2554f41fc5060f" href="../../R/9c2554f41fc5060f.html" target="n" data-glyph="102,1" class="i property">Compiled</a> { <b>get</b>; }
+ 
+        <b>internal</b> <a id="8843be4351b9d691" href="../../R/8843be4351b9d691.html" target="n" data-glyph="74,1" class="t constructor">LightLambdaCompileEventArgs</a>(<span class="i">Delegate</span> <span id="r0 rd" class="r0 r">compiled</span>)
+        {
+            <a href="#9c2554f41fc5060f" class="i property">Compiled</a> = <span class="r0 r">compiled</span>;
+        }
+    }
+ 
+    <b>internal</b> <a href="../../P/9dfe607e31f04a73.html" target="s" class="k">partial</a> <b>class</b> <a id="9dfe607e31f04a73" href="../../R/9dfe607e31f04a73.html" target="n" data-glyph="2,0" class="t t">LightLambda</a>
+    {
+        <b>private readonly</b> <span class="i">StrongBox</span>&lt;<b>object</b>&gt;[] <a id="52d64119a97209c3" href="../../R/52d64119a97209c3.html" target="n" data-glyph="46,1" class="i field">_closure</a>;
+        <b>private readonly</b> <a href="Interpreter.cs.html#2c0965030a4850cd" class="t t">Interpreter</a> <a id="5a49b9f86af1f97e" href="../../R/5a49b9f86af1f97e.html" target="n" data-glyph="46,1" class="i field">_interpreter</a>;
+        <b>private static readonly</b> <a href="Utilities.cs.html#e1d181264f26908a" class="t t">CacheDict</a>&lt;<span class="i">Type</span>, <span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt;&gt; <a id="ed4a659ecd98983e" href="../../R/ed4a659ecd98983e.html" target="n" data-glyph="46,1" class="i field">s_runCache</a> = <b>new</b> <a href="Utilities.cs.html#e1b2af425f3a2e8f" class="t constructor">CacheDict</a>&lt;<span class="i">Type</span>, <span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt;&gt;(100);
+ 
+        <span class="c">// Adaptive compilation support</span>
+        <b>private readonly</b> <a href="LightDelegateCreator.cs.html#51f9bfb96b7e3043" class="t t">LightDelegateCreator</a> <a id="91fc4e4df041eaf2" href="../../R/91fc4e4df041eaf2.html" target="n" data-glyph="46,1" class="i field">_delegateCreator</a>;
+        <b>private</b> <span class="i">Delegate</span> <a id="4075230dec8aa715" href="../../R/4075230dec8aa715.html" target="n" data-glyph="46,1" class="i field">_compiled</a>;
+        <b>private int</b> <a id="93b6681c3f319315" href="../../R/93b6681c3f319315.html" target="n" data-glyph="46,1" class="i field">_compilationThreshold</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Provides notification that the LightLambda has been compiled.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public event</b> <span class="i">EventHandler</span>&lt;<a href="#db72d65fbca542ef" class="t t">LightLambdaCompileEventArgs</a>&gt; <a id="c8476d078f031168" href="../../R/c8476d078f031168.html" target="n" data-glyph="30,1" class="i">Compile</a>;
+ 
+        <b>internal</b> <a id="b0fb13d8dff4ad78" href="../../R/b0fb13d8dff4ad78.html" target="n" data-glyph="74,1" class="t constructor">LightLambda</a>(<a href="LightDelegateCreator.cs.html#51f9bfb96b7e3043" class="t t">LightDelegateCreator</a> <span id="r1 rd" class="r1 r">delegateCreator</span>, <span class="i">StrongBox</span>&lt;<b>object</b>&gt;[] <span id="r2 rd" class="r2 r">closure</span>, <b>int</b> <span id="r3 rd" class="r3 r">compilationThreshold</span>)
+        {
+            <a href="#91fc4e4df041eaf2" class="i field">_delegateCreator</a> = <span class="r1 r">delegateCreator</span>;
+            <a href="#52d64119a97209c3" class="i field">_closure</a> = <span class="r2 r">closure</span>;
+            <a href="#5a49b9f86af1f97e" class="i field">_interpreter</a> = <span class="r1 r">delegateCreator</span>.<a href="LightDelegateCreator.cs.html#9e24ae95fb2d5b4c" class="i property">Interpreter</a>;
+            <a href="#93b6681c3f319315" class="i field">_compilationThreshold</a> = <span class="r3 r">compilationThreshold</span>;
+        }
+ 
+        <b>private static</b> <span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt; <a id="347559ed477b0a5b" href="../../R/347559ed477b0a5b.html" target="n" data-glyph="76,1" class="i method">GetRunDelegateCtor</a>(<span class="i">Type</span> <span id="r4 rd" class="r4 r">delegateType</span>)
+        {
+            <b>lock</b> (<a href="#ed4a659ecd98983e" class="i field">s_runCache</a>)
+            {
+                <span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt; <span id="r5 rd" class="r5 r">fastCtor</span>;
+                <b>if</b> (<a href="#ed4a659ecd98983e" class="i field">s_runCache</a>.<a href="Utilities.cs.html#9b1fd092cd08575a" class="i method">TryGetValue</a>(<span class="r4 r">delegateType</span>, <b>out</b> <span class="r5 r">fastCtor</span>))
+                {
+                    <b>return</b> <span class="r5 r">fastCtor</span>;
+                }
+ 
+                <b>return</b> <a href="#68a8fbe8a52afe67" class="i method">MakeRunDelegateCtor</a>(<span class="r4 r">delegateType</span>);
+            }
+        }
+ 
+        <b>private static</b> <span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt; <a id="68a8fbe8a52afe67" href="../../R/68a8fbe8a52afe67.html" target="n" data-glyph="76,1" class="i method">MakeRunDelegateCtor</a>(<span class="i">Type</span> <span id="r6 rd" class="r6 r">delegateType</span>)
+        {
+            <b>var</b> <span id="r7 rd" class="r7 r">method</span> = <span class="r6 r">delegateType</span>.<span class="i">GetMethod</span>(<span class="s">&quot;Invoke&quot;</span>);
+            <b>var</b> <span id="r8 rd" class="r8 r">paramInfos</span> = <span class="r7 r">method</span>.<span class="i">GetParameters</span>();
+            <span class="i">Type</span>[] <span id="r9 rd" class="r9 r">paramTypes</span>;
+            <b>string</b> <span id="r10 rd" class="r10 r">name</span> = <span class="s">&quot;Run&quot;</span>;
+ 
+            <b>if</b> (<span class="r8 r">paramInfos</span>.<span class="i">Length</span> &gt;= <a href="LightLambda.Generated.cs.html#b76e72af14dd3c9f" class="i field">MaxParameters</a>)
+            {
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>if</b> (<span class="r7 r">method</span>.<span class="i">ReturnType</span> == <b>typeof</b>(<b>void</b>))
+            {
+                <span class="r10 r">name</span> += <span class="s">&quot;Void&quot;</span>;
+                <span class="r9 r">paramTypes</span> = <b>new</b> <span class="i">Type</span>[<span class="r8 r">paramInfos</span>.<span class="i">Length</span>];
+            }
+            <b>else</b>
+            {
+                <span class="r9 r">paramTypes</span> = <b>new</b> <span class="i">Type</span>[<span class="r8 r">paramInfos</span>.<span class="i">Length</span> + 1];
+                <span class="r9 r">paramTypes</span>[<span class="r9 r">paramTypes</span>.<span class="i">Length</span> - 1] = <span class="r7 r">method</span>.<span class="i">ReturnType</span>;
+            }
+ 
+            <span class="i">MethodInfo</span> <span id="r11 rd" class="r11 r">runMethod</span>;
+ 
+            <b>if</b> (<span class="r7 r">method</span>.<span class="i">ReturnType</span> == <b>typeof</b>(<b>void</b>) &amp;&amp; <span class="r9 r">paramTypes</span>.<span class="i">Length</span> == 2 &amp;&amp;
+                <span class="r8 r">paramInfos</span>[0].<span class="i">ParameterType</span>.<span class="i">IsByRef</span> &amp;&amp; <span class="r8 r">paramInfos</span>[1].<span class="i">ParameterType</span>.<span class="i">IsByRef</span>)
+            {
+                <span class="r11 r">runMethod</span> = <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>).<span class="i">GetMethod</span>(<span class="s">&quot;RunVoidRef2&quot;</span>, <span class="i">BindingFlags</span>.<span class="i">NonPublic</span> | <span class="i">BindingFlags</span>.<span class="i">Instance</span>);
+                <span class="r9 r">paramTypes</span>[0] = <span class="r8 r">paramInfos</span>[0].<span class="i">ParameterType</span>.<span class="i">GetElementType</span>();
+                <span class="r9 r">paramTypes</span>[1] = <span class="r8 r">paramInfos</span>[1].<span class="i">ParameterType</span>.<span class="i">GetElementType</span>();
+            }
+            <b>else</b> <b>if</b> (<span class="r7 r">method</span>.<span class="i">ReturnType</span> == <b>typeof</b>(<b>void</b>) &amp;&amp; <span class="r9 r">paramTypes</span>.<span class="i">Length</span> == 0)
+            {
+                <span class="r11 r">runMethod</span> = <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>).<span class="i">GetMethod</span>(<span class="s">&quot;RunVoid0&quot;</span>, <span class="i">BindingFlags</span>.<span class="i">NonPublic</span> | <span class="i">BindingFlags</span>.<span class="i">Instance</span>);
+            }
+            <b>else</b>
+            {
+                <b>for</b> (<b>int</b> <span id="r12 rd" class="r12 r">i</span> = 0; <span class="r12 r">i</span> &lt; <span class="r8 r">paramInfos</span>.<span class="i">Length</span>; <span class="r12 r">i</span>++)
+                {
+                    <span class="r9 r">paramTypes</span>[<span class="r12 r">i</span>] = <span class="r8 r">paramInfos</span>[<span class="r12 r">i</span>].<span class="i">ParameterType</span>;
+                    <b>if</b> (<span class="r9 r">paramTypes</span>[<span class="r12 r">i</span>].<span class="i">IsByRef</span>)
+                    {
+                        <b>return</b> <b>null</b>;
+                    }
+                }
+ 
+                <b>if</b> (<a href="Utilities.cs.html#942087c2bd4302ae" class="t t">DelegateHelpers</a>.<a href="Utilities.cs.html#4d8d67e3643ed222" class="i method">MakeDelegate</a>(<span class="r9 r">paramTypes</span>) == <span class="r6 r">delegateType</span>)
+                {
+                    <span class="r10 r">name</span> = <span class="s">&quot;Make&quot;</span> + <span class="r10 r">name</span> + <span class="r8 r">paramInfos</span>.<span class="i">Length</span>;
+ 
+                    <span class="i">MethodInfo</span> <span id="r13 rd" class="r13 r">ctorMethod</span> = <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>).<span class="i">GetMethod</span>(<span class="r10 r">name</span>, <span class="i">BindingFlags</span>.<span class="i">NonPublic</span> | <span class="i">BindingFlags</span>.<span class="i">Static</span>).<span class="i">MakeGenericMethod</span>(<span class="r9 r">paramTypes</span>);
+                    <b>return</b> <a href="#ed4a659ecd98983e" class="i field">s_runCache</a><a href="Utilities.cs.html#2a5b171a284cfc9c">[</a><span class="r6 r">delegateType</span>] = (<span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt;)<span class="r13 r">ctorMethod</span>.<span class="i">CreateDelegate</span>(<b>typeof</b>(<span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt;));
+                }
+ 
+                <span class="r11 r">runMethod</span> = <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>).<span class="i">GetMethod</span>(<span class="r10 r">name</span> + <span class="r8 r">paramInfos</span>.<span class="i">Length</span>, <span class="i">BindingFlags</span>.<span class="i">NonPublic</span> | <span class="i">BindingFlags</span>.<span class="i">Instance</span>);
+            }
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">SILVERLIGHT</span>
+            <b>try</b>
+            {
+                <span class="i">DynamicMethod</span> <span id="r14 rd" class="r14 r">dm</span> = <b>new</b> <span class="i">DynamicMethod</span>(<span class="s">&quot;FastCtor&quot;</span>, <b>typeof</b>(<span class="i">Delegate</span>), <b>new</b>[] { <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>) }, <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>), <b>true</b>);
+                <b>var</b> <span id="r15 rd" class="r15 r">ilgen</span> = <span class="r14 r">dm</span>.<span class="i">GetILGenerator</span>();
+                <span class="r15 r">ilgen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldarg_0</span>);
+                <span class="r15 r">ilgen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ldftn</span>, <span class="r11 r">runMethod</span>.<span class="i">IsGenericMethodDefinition</span> ? <span class="r11 r">runMethod</span>.<span class="i">MakeGenericMethod</span>(<span class="r9 r">paramTypes</span>) : <span class="r11 r">runMethod</span>);
+                <span class="r15 r">ilgen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Newobj</span>, <span class="r6 r">delegateType</span>.<span class="i">GetConstructor</span>(<b>new</b>[] { <b>typeof</b>(<b>object</b>), <b>typeof</b>(<span class="i">IntPtr</span>) }));
+                <span class="r15 r">ilgen</span>.<span class="i">Emit</span>(<span class="i">OpCodes</span>.<span class="i">Ret</span>);
+                <b>return</b> <a href="#ed4a659ecd98983e" class="i field">s_runCache</a><a href="Utilities.cs.html#2a5b171a284cfc9c">[</a><span class="r6 r">delegateType</span>] = (<span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt;)<span class="r14 r">dm</span>.<span class="i">CreateDelegate</span>(<b>typeof</b>(<span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt;));
+            }
+            <b>catch</b> (<span class="i">SecurityException</span>)
+            {
+            }
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+ 
+            <span class="c">// we don&#39;t have permission for restricted skip visibility dynamic methods, use the slower Delegate.CreateDelegate.</span>
+            <b>var</b> <span id="r16 rd" class="r16 r">targetMethod</span> = <span class="r11 r">runMethod</span>.<span class="i">IsGenericMethodDefinition</span> ? <span class="r11 r">runMethod</span>.<span class="i">MakeGenericMethod</span>(<span class="r9 r">paramTypes</span>) : <span class="r11 r">runMethod</span>;
+            <b>return</b> <a href="#ed4a659ecd98983e" class="i field">s_runCache</a><a href="Utilities.cs.html#2a5b171a284cfc9c">[</a><span class="r6 r">delegateType</span>] = <span id="r17 rd" class="r17 r">lambda</span> =&gt; <span class="r16 r">targetMethod</span>.<span class="i">CreateDelegate</span>(<span class="r6 r">delegateType</span>, <span class="r17 r">lambda</span>);
+        }
+ 
+        <span class="c">// TODO enable sharing of these custom delegates</span>
+        <b>private</b> <span class="i">Delegate</span> <a id="8c284d354d059f71" href="../../R/8c284d354d059f71.html" target="n" data-glyph="76,1" class="i method">CreateCustomDelegate</a>(<span class="i">Type</span> <span id="r18 rd" class="r18 r">delegateType</span>)
+        {
+            <span class="c">// PerfTrack.NoteEvent(PerfTrack.Categories.Compiler, &quot;Synchronously compiling a custom delegate&quot;);</span>
+ 
+            <b>var</b> <span id="r19 rd" class="r19 r">method</span> = <span class="r18 r">delegateType</span>.<span class="i">GetMethod</span>(<span class="s">&quot;Invoke&quot;</span>);
+            <b>var</b> <span id="r20 rd" class="r20 r">paramInfos</span> = <span class="r19 r">method</span>.<span class="i">GetParameters</span>();
+            <b>var</b> <span id="r21 rd" class="r21 r">parameters</span> = <b>new</b> <span class="i">ParameterExpression</span>[<span class="r20 r">paramInfos</span>.<span class="i">Length</span>];
+            <b>var</b> <span id="r22 rd" class="r22 r">parametersAsObject</span> = <b>new</b> <span class="i">Expression</span>[<span class="r20 r">paramInfos</span>.<span class="i">Length</span>];
+            <b>for</b> (<b>int</b> <span id="r23 rd" class="r23 r">i</span> = 0; <span class="r23 r">i</span> &lt; <span class="r20 r">paramInfos</span>.<span class="i">Length</span>; <span class="r23 r">i</span>++)
+            {
+                <span class="i">ParameterExpression</span> <span id="r24 rd" class="r24 r">parameter</span> = <span class="i">Expression</span>.<span class="i">Parameter</span>(<span class="r20 r">paramInfos</span>[<span class="r23 r">i</span>].<span class="i">ParameterType</span>, <span class="r20 r">paramInfos</span>[<span class="r23 r">i</span>].<span class="i">Name</span>);
+                <span class="r21 r">parameters</span>[<span class="r23 r">i</span>] = <span class="r24 r">parameter</span>;
+                <span class="r22 r">parametersAsObject</span>[<span class="r23 r">i</span>] = <span class="i">Expression</span>.<span class="i">Convert</span>(<span class="r24 r">parameter</span>, <b>typeof</b>(<b>object</b>));
+            }
+ 
+            <b>var</b> <span id="r25 rd" class="r25 r">data</span> = <span class="i">Expression</span>.<span class="i">NewArrayInit</span>(<b>typeof</b>(<b>object</b>), <span class="r22 r">parametersAsObject</span>);
+            <b>var</b> <span id="r26 rd" class="r26 r">self</span> = <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<a href="Utilities.cs.html#2eea3151334bc1dd" class="i method">Constant</a>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="k">this</a>);
+            <b>var</b> <span id="r27 rd" class="r27 r">runMethod</span> = <b>typeof</b>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>).<span class="i">GetMethod</span>(<span class="s">&quot;Run&quot;</span>);
+            <b>var</b> <span id="r28 rd" class="r28 r">body</span> = <span class="i">Expression</span>.<span class="i">Convert</span>(<span class="i">Expression</span>.<span class="i">Call</span>(<span class="r26 r">self</span>, <span class="r27 r">runMethod</span>, <span class="r25 r">data</span>), <span class="r19 r">method</span>.<span class="i">ReturnType</span>);
+            <b>var</b> <span id="r29 rd" class="r29 r">lambda</span> = <span class="i">Expression</span>.<span class="i">Lambda</span>(<span class="r18 r">delegateType</span>, <span class="r28 r">body</span>, <span class="r21 r">parameters</span>);
+            <b>return</b> <span class="r29 r">lambda</span>.<span class="i">Compile</span>();
+        }
+ 
+        <b>internal</b> <span class="i">Delegate</span> <a id="940a9c4cfaa25c72" href="../../R/940a9c4cfaa25c72.html" target="n" data-glyph="74,1" class="i method">MakeDelegate</a>(<span class="i">Type</span> <span id="r30 rd" class="r30 r">delegateType</span>)
+        {
+            <span class="i">Func</span>&lt;<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="t t">LightLambda</a>, <span class="i">Delegate</span>&gt; <span id="r31 rd" class="r31 r">fastCtor</span> = <a href="#347559ed477b0a5b" class="i method">GetRunDelegateCtor</a>(<span class="r30 r">delegateType</span>);
+            <b>if</b> (<span class="r31 r">fastCtor</span> != <b>null</b>)
+            {
+                <b>return</b> <span class="r31 r">fastCtor</span>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="k">this</a>);
+            }
+            <b>else</b>
+            {
+                <b>return</b> <a href="#8c284d354d059f71" class="i method">CreateCustomDelegate</a>(<span class="r30 r">delegateType</span>);
+            }
+        }
+ 
+        <b>private bool</b> <a id="8c64afb3b960175b" href="../../R/8c64afb3b960175b.html" target="n" data-glyph="76,1" class="i method">TryGetCompiled</a>()
+        {
+            <span class="c">// Use the compiled delegate if available.</span>
+            <b>if</b> (<a href="#91fc4e4df041eaf2" class="i field">_delegateCreator</a>.<a href="LightDelegateCreator.cs.html#d1e81153e287963b" class="i property">HasCompiled</a>)
+            {
+                <a href="#4075230dec8aa715" class="i field">_compiled</a> = <a href="#91fc4e4df041eaf2" class="i field">_delegateCreator</a>.<a href="LightDelegateCreator.cs.html#2a1f02eac5cc1562" class="i method">CreateCompiledDelegate</a>(<a href="#52d64119a97209c3" class="i field">_closure</a>);
+ 
+                <span class="c">// Send it to anyone who&#39;s interested.</span>
+                <b>var</b> <span id="r32 rd" class="r32 r">compileEvent</span> = <a href="#c8476d078f031168" class="i">Compile</a>;
+                <b>if</b> (<span class="r32 r">compileEvent</span> != <b>null</b> &amp;&amp; <a href="#91fc4e4df041eaf2" class="i field">_delegateCreator</a>.<a href="LightDelegateCreator.cs.html#165d82b610b584b3" class="i property">SameDelegateType</a>)
+                {
+                    <span class="r32 r">compileEvent</span>(<a href="../../P/9dfe607e31f04a73.html#9dfe607e31f04a73" class="k">this</a>, <b>new</b> <a href="#8843be4351b9d691" class="t constructor">LightLambdaCompileEventArgs</a>(<a href="#4075230dec8aa715" class="i field">_compiled</a>));
+                }
+ 
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <span class="c">// Don&#39;t lock here, it&#39;s a frequently hit path.</span>
+            <span class="c">//</span>
+            <span class="c">// There could be multiple threads racing, but that is okay.</span>
+            <span class="c">// Two bad things can happen:</span>
+            <span class="c">//   * We miss decrements (some thread sets the counter forward)</span>
+            <span class="c">//   * We might enter the &quot;if&quot; branch more than once.</span>
+            <span class="c">//</span>
+            <span class="c">// The first is okay, it just means we take longer to compile.</span>
+            <span class="c">// The second we explicitly guard against inside of Compile().</span>
+            <span class="c">//</span>
+            <span class="c">// We can&#39;t miss 0. The first thread that writes -1 must have read 0 and hence start compilation.</span>
+            <b>if</b> (<b>unchecked</b>(<a href="#93b6681c3f319315" class="i field">_compilationThreshold</a>--) == 0)
+            {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">SILVERLIGHT</span>
+<span class="e">                if (PlatformAdaptationLayer.IsCompactFramework) {
+                    _compilationThreshold = Int32.MaxValue;
+                    return false;
+                }
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+                <b>if</b> (<a href="#5a49b9f86af1f97e" class="i field">_interpreter</a>.<a href="Interpreter.cs.html#5ba37d6188b110ab" class="i property">CompileSynchronously</a>)
+                {
+                    <a href="#91fc4e4df041eaf2" class="i field">_delegateCreator</a>.<a href="LightDelegateCreator.cs.html#2ba253aebb8ad15b" class="i method">Compile</a>(<b>null</b>);
+                    <b>return</b> <a href="#8c64afb3b960175b" class="i method">TryGetCompiled</a>();
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Kick off the compile on another thread so this one can keep going</span>
+                    <span class="i">ThreadPool</span>.<span class="i">QueueUserWorkItem</span>(<a href="#91fc4e4df041eaf2" class="i field">_delegateCreator</a>.<span class="i">Compile</span>, <b>null</b>);
+                }
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>private</b> <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <a id="90a4b10ed8a3db66" href="../../R/90a4b10ed8a3db66.html" target="n" data-glyph="76,1" class="i method">MakeFrame</a>()
+        {
+            <b>return</b> <b>new</b> <a href="InterpretedFrame.cs.html#f3da0660d3d1742c" class="t constructor">InterpretedFrame</a>(<a href="#5a49b9f86af1f97e" class="i field">_interpreter</a>, <a href="#52d64119a97209c3" class="i field">_closure</a>);
+        }
+ 
+        <b>internal void</b> <a id="3bfc49ce769d4cdb" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">RunVoidRef2</a>&lt;<span id="r33 rd t" class="r33 r t">T0</span>, <span id="r34 rd t" class="r34 r t">T1</span>&gt;(<b>ref</b> <span class="r33 r t">T0</span> <span id="r35 rd" class="r35 r">arg0</span>, <b>ref</b> <span class="r34 r t">T1</span> <span id="r36 rd" class="r36 r">arg1</span>)
+        {
+            <span class="c">// if (_compiled != null || TryGetCompiled()) {</span>
+            <span class="c">//    ((ActionRef&lt;T0, T1&gt;)_compiled)(ref arg0, ref arg1);</span>
+            <span class="c">//    return;</span>
+            <span class="c">// }</span>
+ 
+            <span class="c">// copy in and copy out for today...</span>
+            <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="k">var</a> <span id="r37 rd" class="r37 r">frame</span> = <a href="#90a4b10ed8a3db66" class="i method">MakeFrame</a>();
+            <span class="r37 r">frame</span>.<a href="InterpretedFrame.cs.html#50fbc06c67e027bf" class="i field">Data</a>[0] = <span class="r35 r">arg0</span>;
+            <span class="r37 r">frame</span>.<a href="InterpretedFrame.cs.html#50fbc06c67e027bf" class="i field">Data</a>[1] = <span class="r36 r">arg1</span>;
+            <a href="Utilities.cs.html#5bda58d84d8eae37" class="k">var</a> <span id="r38 rd" class="r38 r">currentFrame</span> = <span class="r37 r">frame</span>.<a href="InterpretedFrame.cs.html#d673d9b452068bc2" class="i method">Enter</a>();
+            <b>try</b>
+            {
+                <a href="#5a49b9f86af1f97e" class="i field">_interpreter</a>.<a href="Interpreter.cs.html#efd5271ada9e1a54" class="i method">Run</a>(<span class="r37 r">frame</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="r37 r">frame</span>.<a href="InterpretedFrame.cs.html#71bed3afcf9cc9b7" class="i method">Leave</a>(<span class="r38 r">currentFrame</span>);
+                <span class="r35 r">arg0</span> = (<span class="r33 r t">T0</span>)<span class="r37 r">frame</span>.<a href="InterpretedFrame.cs.html#50fbc06c67e027bf" class="i field">Data</a>[0];
+                <span class="r36 r">arg1</span> = (<span class="r34 r t">T1</span>)<span class="r37 r">frame</span>.<a href="InterpretedFrame.cs.html#50fbc06c67e027bf" class="i field">Data</a>[1];
+            }
+        }
+ 
+        <b>public object</b> <a id="11475a64abd298b3" href="../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Run</a>(<b>params object</b>[] <span id="r39 rd" class="r39 r">arguments</span>)
+        {
+            <b>if</b> (<a href="#4075230dec8aa715" class="i field">_compiled</a> != <b>null</b> || <a href="#8c64afb3b960175b" class="i method">TryGetCompiled</a>())
+            {
+                <b>return</b> <a href="#4075230dec8aa715" class="i field">_compiled</a>.<span class="i">DynamicInvoke</span>(<span class="r39 r">arguments</span>);
+            }
+ 
+            <a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="k">var</a> <span id="r40 rd" class="r40 r">frame</span> = <a href="#90a4b10ed8a3db66" class="i method">MakeFrame</a>();
+            <b>for</b> (<b>int</b> <span id="r41 rd" class="r41 r">i</span> = 0; <span class="r41 r">i</span> &lt; <span class="r39 r">arguments</span>.<span class="i">Length</span>; <span class="r41 r">i</span>++)
+            {
+                <span class="r40 r">frame</span>.<a href="InterpretedFrame.cs.html#50fbc06c67e027bf" class="i field">Data</a>[<span class="r41 r">i</span>] = <span class="r39 r">arguments</span>[<span class="r41 r">i</span>];
+            }
+ 
+            <a href="Utilities.cs.html#5bda58d84d8eae37" class="k">var</a> <span id="r42 rd" class="r42 r">currentFrame</span> = <span class="r40 r">frame</span>.<a href="InterpretedFrame.cs.html#d673d9b452068bc2" class="i method">Enter</a>();
+            <b>try</b>
+            {
+                <a href="#5a49b9f86af1f97e" class="i field">_interpreter</a>.<a href="Interpreter.cs.html#efd5271ada9e1a54" class="i method">Run</a>(<span class="r40 r">frame</span>);
+            }
+            <b>finally</b>
+            {
+                <span class="r40 r">frame</span>.<a href="InterpretedFrame.cs.html#71bed3afcf9cc9b7" class="i method">Leave</a>(<span class="r42 r">currentFrame</span>);
+            }
+ 
+            <b>return</b> <span class="r40 r">frame</span>.<a href="InterpretedFrame.cs.html#85e9eceec0019a13" class="i method">Pop</a>();
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

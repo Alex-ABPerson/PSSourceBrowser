@@ -1,0 +1,314 @@
+﻿<!DOCTYPE html>
+<html><head><title>LightLambdaClosureVisitor.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(305);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/interpreter/LightLambdaClosureVisitor.cs" target="_top">engine\interpreter\LightLambdaClosureVisitor.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">/* ****************************************************************************
+ *
+ * Copyright (c) Microsoft Corporation.
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+ * by the terms of the Apache License, Version 2.0.
+ *
+ * You must not remove this notice, or any other, from this software.
+ *
+ *
+ * ***************************************************************************/</span>
+ 
+<span class="k preprocess">#</span><span class="k preprocess">if</span> !<span class="i">CLR2</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<span class="k preprocess">#</span><span class="k preprocess">else</span>
+<span class="e">using Microsoft.Scripting.Ast;
+</span><span class="k preprocess">#</span><span class="k preprocess">endif</span>
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+<b>using</b> <span class="t">AstUtils</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>.<a href="Utilities.cs.html#55b509010bbde4b3" class="t t">Utils</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Visits a LambdaExpression, replacing the constants with direct accesses</span>
+    <span class="c">///</span><span class="c"> to their StrongBox fields. This is very similar to what</span>
+    <span class="c">///</span><span class="c"> ExpressionQuoter does for LambdaCompiler.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Also inserts debug information tracking similar to what the interpreter</span>
+    <span class="c">///</span><span class="c"> would do.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="eba0a614563920a3" href="../../R/eba0a614563920a3.html" target="n" data-glyph="2,0" class="t t">LightLambdaClosureVisitor</a> : <span class="i">ExpressionVisitor</span>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Local variable mapping.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <a id="637f0d9dbfc4b38d" href="../../R/637f0d9dbfc4b38d.html" target="n" data-glyph="46,1" class="i field">_closureVars</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The variable that holds onto the StrongBox{object}[] closure from</span>
+        <span class="c">///</span><span class="c"> the interpreter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">ParameterExpression</span> <a id="06b9809e963715cf" href="../../R/06b9809e963715cf.html" target="n" data-glyph="46,1" class="i field">_closureArray</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A stack of variables that are defined in nested scopes. We search</span>
+        <span class="c">///</span><span class="c"> this first when resolving a variable in case a nested scope shadows</span>
+        <span class="c">///</span><span class="c"> one of our variable instances.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">Stack</span>&lt;<span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;&gt; <a id="dea13cb7a085cec9" href="../../R/dea13cb7a085cec9.html" target="n" data-glyph="46,1" class="i field">_shadowedVars</a> = <b>new</b> <span class="i">Stack</span>&lt;<span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;&gt;();
+ 
+        <b>private</b> <a id="1a52f35928d06a96" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t constructor">LightLambdaClosureVisitor</a>(<span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <span id="r0 rd" class="r0 r">closureVariables</span>, <span class="i">ParameterExpression</span> <span id="r1 rd" class="r1 r">closureArray</span>)
+        {
+            <a href="Utilities.cs.html#f760db0369027867" class="t t">Assert</a>.<span class="i">NotNull</span>(<span class="r0 r">closureVariables</span>, <span class="r1 r">closureArray</span>);
+            <a href="#06b9809e963715cf" class="i field">_closureArray</a> = <span class="r1 r">closureArray</span>;
+            <a href="#637f0d9dbfc4b38d" class="i field">_closureVars</a> = <span class="r0 r">closureVariables</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Walks the lambda and produces a higher order function, which can be</span>
+        <span class="c">///</span><span class="c"> used to bind the lambda to a closure array from the interpreter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">lambda</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The lambda to bind.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">closureVariables</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Variables which are being accessed defined in the outer scope.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A delegate that can be called to produce a delegate bound to the passed in closure array.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">Func</span>&lt;<span class="i">StrongBox</span>&lt;<b>object</b>&gt;[], <span class="i">Delegate</span>&gt; <a id="66c04cbb10413b28" href="../../R/66c04cbb10413b28.html" target="n" data-glyph="74,1" class="i method">BindLambda</a>(<span class="i">LambdaExpression</span> <span id="r2 rd" class="r2 r">lambda</span>, <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <span id="r3 rd" class="r3 r">closureVariables</span>)
+        {
+            <span class="c">// 1. Create rewriter</span>
+            <b>var</b> <span id="r4 rd" class="r4 r">closure</span> = <span class="i">Expression</span>.<span class="i">Parameter</span>(<b>typeof</b>(<span class="i">StrongBox</span>&lt;<b>object</b>&gt;[]), <span class="s">&quot;closure&quot;</span>);
+            <a href="#eba0a614563920a3" class="k">var</a> <span id="r5 rd" class="r5 r">visitor</span> = <b>new</b> <span class="t">LightLambdaClosureVisitor</span>(<span class="r3 r">closureVariables</span>, <span class="r4 r">closure</span>);
+ 
+            <span class="c">// 2. Visit the lambda</span>
+            <span class="r2 r">lambda</span> = (<span class="i">LambdaExpression</span>)<span class="r5 r">visitor</span>.<span class="i">Visit</span>(<span class="r2 r">lambda</span>);
+ 
+            <span class="c">// 3. Create a higher-order function which fills in the parameters</span>
+            <b>var</b> <span id="r6 rd" class="r6 r">result</span> = <span class="i">Expression</span>.<span class="i">Lambda</span>&lt;<span class="i">Func</span>&lt;<span class="i">StrongBox</span>&lt;<b>object</b>&gt;[], <span class="i">Delegate</span>&gt;&gt;(<span class="r2 r">lambda</span>, <span class="r4 r">closure</span>);
+ 
+            <span class="c">// 4. Compile it</span>
+            <b>return</b> <span class="r6 r">result</span>.<span class="i">Compile</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> closures
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="abc19a880324aee4" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitLambda</a>&lt;<span id="r7 rd t" class="r7 r t">T</span>&gt;(<span class="i">Expression</span>&lt;<span class="r7 r t">T</span>&gt; <span id="r8 rd" class="r8 r">node</span>)
+        {
+            <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>.<span class="i">Push</span>(<b>new</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;(<span class="r8 r">node</span>.<span class="i">Parameters</span>));
+            <span class="i">Expression</span> <span id="r9 rd" class="r9 r">b</span> = <span class="i">Visit</span>(<span class="r8 r">node</span>.<span class="i">Body</span>);
+            <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>.<span class="i">Pop</span>();
+            <b>if</b> (<span class="r9 r">b</span> == <span class="r8 r">node</span>.<span class="i">Body</span>)
+            {
+                <b>return</b> <span class="r8 r">node</span>;
+            }
+ 
+            <b>return</b> <span class="i">Expression</span>.<span class="i">Lambda</span>&lt;<span class="r7 r t">T</span>&gt;(<span class="r9 r">b</span>, <span class="r8 r">node</span>.<span class="i">Name</span>, <span class="r8 r">node</span>.<span class="i">TailCall</span>, <span class="r8 r">node</span>.<span class="i">Parameters</span>);
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="1d0ee8da2012b0eb" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitBlock</a>(<span class="i">BlockExpression</span> <span id="r10 rd" class="r10 r">node</span>)
+        {
+            <b>if</b> (<span class="r10 r">node</span>.<span class="i">Variables</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>.<span class="i">Push</span>(<b>new</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;(<span class="r10 r">node</span>.<span class="i">Variables</span>));
+            }
+ 
+            <b>var</b> <span id="r11 rd" class="r11 r">b</span> = <span class="i">Visit</span>(<span class="r10 r">node</span>.<span class="i">Expressions</span>);
+            <b>if</b> (<span class="r10 r">node</span>.<span class="i">Variables</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>.<span class="i">Pop</span>();
+            }
+ 
+            <b>if</b> (<span class="r11 r">b</span> == <span class="r10 r">node</span>.<span class="i">Expressions</span>)
+            {
+                <b>return</b> <span class="r10 r">node</span>;
+            }
+ 
+            <b>return</b> <span class="i">Expression</span>.<span class="i">Block</span>(<span class="r10 r">node</span>.<span class="i">Variables</span>, <span class="r11 r">b</span>);
+        }
+ 
+        <b>protected override</b> <span class="i">CatchBlock</span> <a id="38eb6adc11402969" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitCatchBlock</a>(<span class="i">CatchBlock</span> <span id="r12 rd" class="r12 r">node</span>)
+        {
+            <b>if</b> (<span class="r12 r">node</span>.<span class="i">Variable</span> != <b>null</b>)
+            {
+                <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>.<span class="i">Push</span>(<b>new</b> <span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt;(<b>new</b>[] { <span class="r12 r">node</span>.<span class="i">Variable</span> }));
+            }
+ 
+            <span class="i">Expression</span> <span id="r13 rd" class="r13 r">b</span> = <span class="i">Visit</span>(<span class="r12 r">node</span>.<span class="i">Body</span>);
+            <span class="i">Expression</span> <span id="r14 rd" class="r14 r">f</span> = <span class="i">Visit</span>(<span class="r12 r">node</span>.<span class="i">Filter</span>);
+            <b>if</b> (<span class="r12 r">node</span>.<span class="i">Variable</span> != <b>null</b>)
+            {
+                <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>.<span class="i">Pop</span>();
+            }
+ 
+            <b>if</b> (<span class="r13 r">b</span> == <span class="r12 r">node</span>.<span class="i">Body</span> &amp;&amp; <span class="r14 r">f</span> == <span class="r12 r">node</span>.<span class="i">Filter</span>)
+            {
+                <b>return</b> <span class="r12 r">node</span>;
+            }
+ 
+            <b>return</b> <span class="i">Expression</span>.<span class="i">MakeCatchBlock</span>(<span class="r12 r">node</span>.<span class="i">Test</span>, <span class="r12 r">node</span>.<span class="i">Variable</span>, <span class="r13 r">b</span>, <span class="r14 r">f</span>);
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="c7ea73120014cf45" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitRuntimeVariables</a>(<span class="i">RuntimeVariablesExpression</span> <span id="r15 rd" class="r15 r">node</span>)
+        {
+            <b>int</b> <span id="r16 rd" class="r16 r">count</span> = <span class="r15 r">node</span>.<span class="i">Variables</span>.<span class="i">Count</span>;
+            <b>var</b> <span id="r17 rd" class="r17 r">boxes</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Expression</span>&gt;();
+            <b>var</b> <span id="r18 rd" class="r18 r">vars</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">ParameterExpression</span>&gt;();
+            <b>var</b> <span id="r19 rd" class="r19 r">indexes</span> = <b>new</b> <b>int</b>[<span class="r16 r">count</span>];
+            <b>for</b> (<b>int</b> <span id="r20 rd" class="r20 r">i</span> = 0; <span class="r20 r">i</span> &lt; <span class="r16 r">count</span>; <span class="r20 r">i</span>++)
+            {
+                <span class="i">Expression</span> <span id="r21 rd" class="r21 r">box</span> = <span class="i">GetClosureItem</span>(<span class="r15 r">node</span>.<span class="i">Variables</span>[<span class="r20 r">i</span>], <b>false</b>);
+                <b>if</b> (<span class="r21 r">box</span> == <b>null</b>)
+                {
+                    <span class="r19 r">indexes</span>[<span class="r20 r">i</span>] = <span class="r18 r">vars</span>.<span class="i">Count</span>;
+                    <span class="r18 r">vars</span>.<span class="i">Add</span>(<span class="r15 r">node</span>.<span class="i">Variables</span>[<span class="r20 r">i</span>]);
+                }
+                <b>else</b>
+                {
+                    <span class="r19 r">indexes</span>[<span class="r20 r">i</span>] = -1 - <span class="r17 r">boxes</span>.<span class="i">Count</span>;
+                    <span class="r17 r">boxes</span>.<span class="i">Add</span>(<span class="r21 r">box</span>);
+                }
+            }
+ 
+            <span class="c">// No variables were rewritten. Just return the original node.</span>
+            <b>if</b> (<span class="r17 r">boxes</span>.<span class="i">Count</span> == 0)
+            {
+                <b>return</b> <span class="r15 r">node</span>;
+            }
+ 
+            <b>var</b> <span id="r22 rd" class="r22 r">boxesArray</span> = <span class="i">Expression</span>.<span class="i">NewArrayInit</span>(<b>typeof</b>(<span class="i">IStrongBox</span>), <span class="r17 r">boxes</span>);
+ 
+            <span class="c">// All of them were rewritten. Just return the array, wrapped in a</span>
+            <span class="c">// read-only collection.</span>
+            <b>if</b> (<span class="r18 r">vars</span>.<span class="i">Count</span> == 0)
+            {
+                <b>return</b> <span class="i">Expression</span>.<span class="i">Invoke</span>(
+                    <span class="i">Expression</span>.<span class="i">Constant</span>((<span class="i">Func</span>&lt;<span class="i">IStrongBox</span>[], <span class="i">IRuntimeVariables</span>&gt;)<a href="RuntimeVariables.cs.html#82ba0bc814d37445" class="t t">RuntimeVariables</a>.<span class="i">Create</span>),
+                    <span class="r22 r">boxesArray</span>
+                );
+            }
+ 
+            <span class="c">// Otherwise, we need to return an object that merges them</span>
+            <span class="i">Func</span>&lt;<span class="i">IRuntimeVariables</span>, <span class="i">IRuntimeVariables</span>, <b>int</b>[], <span class="i">IRuntimeVariables</span>&gt; <span id="r23 rd" class="r23 r">helper</span> = <a href="#7269734305b2a0cb" class="t t">MergedRuntimeVariables</a>.<span class="i">Create</span>;
+            <b>return</b> <span class="i">Expression</span>.<span class="i">Invoke</span>(<a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<span class="i">Constant</span>(<span class="r23 r">helper</span>), <span class="i">Expression</span>.<span class="i">RuntimeVariables</span>(<span class="r18 r">vars</span>), <span class="r22 r">boxesArray</span>, <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<a href="Utilities.cs.html#2eea3151334bc1dd" class="i method">Constant</a>(<span class="r19 r">indexes</span>));
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="ce399e7e0d15411c" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitParameter</a>(<span class="i">ParameterExpression</span> <span id="r24 rd" class="r24 r">node</span>)
+        {
+            <span class="i">Expression</span> <span id="r25 rd" class="r25 r">closureItem</span> = <a href="#79ada214b0fa5a8c" class="i method">GetClosureItem</a>(<span class="r24 r">node</span>, <b>true</b>);
+            <b>if</b> (<span class="r25 r">closureItem</span> == <b>null</b>)
+            {
+                <b>return</b> <span class="r24 r">node</span>;
+            }
+            <span class="c">// Convert can go away if we switch to strongly typed StrongBox</span>
+            <b>return</b> <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<span class="i">Convert</span>(<span class="r25 r">closureItem</span>, <span class="r24 r">node</span>.<span class="i">Type</span>);
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="967a8374ea2b5ca1" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitBinary</a>(<span class="i">BinaryExpression</span> <span id="r26 rd" class="r26 r">node</span>)
+        {
+            <b>if</b> (<span class="r26 r">node</span>.<span class="i">NodeType</span> == <span class="i">ExpressionType</span>.<span class="i">Assign</span> &amp;&amp;
+                <span class="r26 r">node</span>.<span class="i">Left</span>.<span class="i">NodeType</span> == <span class="i">ExpressionType</span>.<span class="i">Parameter</span>)
+            {
+                <b>var</b> <span id="r27 rd" class="r27 r">variable</span> = (<span class="i">ParameterExpression</span>)<span class="r26 r">node</span>.<span class="i">Left</span>;
+                <span class="i">Expression</span> <span id="r28 rd" class="r28 r">closureItem</span> = <a href="#79ada214b0fa5a8c" class="i method">GetClosureItem</a>(<span class="r27 r">variable</span>, <b>true</b>);
+                <b>if</b> (<span class="r28 r">closureItem</span> != <b>null</b>)
+                {
+                    <span class="c">// We need to convert to object to store the value in the box.</span>
+                    <b>return</b> <span class="i">Expression</span>.<span class="i">Block</span>(
+                        <b>new</b>[] { <span class="r27 r">variable</span> },
+                        <span class="i">Expression</span>.<span class="i">Assign</span>(<span class="r27 r">variable</span>, <span class="i">Visit</span>(<span class="r26 r">node</span>.<span class="i">Right</span>)),
+                        <span class="i">Expression</span>.<span class="i">Assign</span>(<span class="r28 r">closureItem</span>, <a href="Utilities.cs.html#55b509010bbde4b3" class="t t">AstUtils</a>.<span class="i">Convert</span>(<span class="r27 r">variable</span>, <b>typeof</b>(<b>object</b>))),
+                        <span class="r27 r">variable</span>
+                    );
+                }
+            }
+ 
+            <b>return</b> <b>base</b>.<span class="i">VisitBinary</span>(<span class="r26 r">node</span>);
+        }
+ 
+        <b>private</b> <span class="i">Expression</span> <a id="79ada214b0fa5a8c" href="../../R/79ada214b0fa5a8c.html" target="n" data-glyph="76,1" class="i method">GetClosureItem</a>(<span class="i">ParameterExpression</span> <span id="r29 rd" class="r29 r">variable</span>, <b>bool</b> <span id="r30 rd" class="r30 r">unbox</span>)
+        {
+            <span class="c">// Skip variables that are shadowed by a nested scope/lambda</span>
+            <b>foreach</b> (<span class="i">HashSet</span>&lt;<span class="i">ParameterExpression</span>&gt; <span id="r31 rd" class="r31 r">hidden</span> <b>in</b> <a href="#dea13cb7a085cec9" class="i field">_shadowedVars</a>)
+            {
+                <b>if</b> (<span class="r31 r">hidden</span>.<span class="i">Contains</span>(<span class="r29 r">variable</span>))
+                {
+                    <b>return</b> <b>null</b>;
+                }
+            }
+ 
+            <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a> <span id="r32 rd" class="r32 r">loc</span>;
+            <b>if</b> (!<a href="#637f0d9dbfc4b38d" class="i field">_closureVars</a>.<span class="i">TryGetValue</span>(<span class="r29 r">variable</span>, <b>out</b> <span class="r32 r">loc</span>))
+            {
+                <b>throw</b> <b>new</b> <span class="i">InvalidOperationException</span>(<span class="s">&quot;unbound variable: &quot;</span> + <span class="r29 r">variable</span>.<span class="i">Name</span>);
+            }
+ 
+            <b>var</b> <span id="r33 rd" class="r33 r">result</span> = <span class="r32 r">loc</span>.<span class="i">LoadFromArray</span>(<b>null</b>, <a href="#06b9809e963715cf" class="i field">_closureArray</a>);
+            <b>return</b> (<span class="r30 r">unbox</span>) ? <a href="LightCompiler.cs.html#bee3a40ad9cb3a51" class="t t">LightCompiler</a>.<a href="LightCompiler.cs.html#cbd70d0630bc623c" class="i method">Unbox</a>(<span class="r33 r">result</span>) : <span class="r33 r">result</span>;
+        }
+ 
+        <b>protected override</b> <span class="i">Expression</span> <a id="08134305a4ea43e7" href="../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">VisitExtension</a>(<span class="i">Expression</span> <span id="r34 rd" class="r34 r">node</span>)
+        {
+            <span class="c">// Reduce extensions now so we can find embedded variables</span>
+            <b>return</b> <span class="i">Visit</span>(<span class="r34 r">node</span>.<span class="i">ReduceExtensions</span>());
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> MergedRuntimeVariables
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Provides a list of variables, supporting read/write of the values.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private sealed class</b> <a id="7269734305b2a0cb" href="../../R/7269734305b2a0cb.html" target="n" data-glyph="4,1" class="t t">MergedRuntimeVariables</a> : <span class="i">IRuntimeVariables</span>
+        {
+            <b>private readonly</b> <span class="i">IRuntimeVariables</span> <a id="7f252a433513f10a" href="../../R/7f252a433513f10a.html" target="n" data-glyph="46,2" class="i field">_first</a>;
+            <b>private readonly</b> <span class="i">IRuntimeVariables</span> <a id="e33601dec2737c38" href="../../R/e33601dec2737c38.html" target="n" data-glyph="46,2" class="i field">_second</a>;
+ 
+            <span class="c">// For reach item, the index into the first or second list</span>
+            <span class="c">// Positive values mean the first array, negative means the second</span>
+            <b>private readonly int</b>[] <a id="7536d986cbb813e6" href="../../R/7536d986cbb813e6.html" target="n" data-glyph="46,2" class="i field">_indexes</a>;
+ 
+            <b>private</b> <a id="0e668ab37953c7d3" href="../../R/0e668ab37953c7d3.html" target="n" data-glyph="76,2" class="t constructor">MergedRuntimeVariables</a>(<span class="i">IRuntimeVariables</span> <span id="r35 rd" class="r35 r">first</span>, <span class="i">IRuntimeVariables</span> <span id="r36 rd" class="r36 r">second</span>, <b>int</b>[] <span id="r37 rd" class="r37 r">indexes</span>)
+            {
+                <a href="#7f252a433513f10a" class="i field">_first</a> = <span class="r35 r">first</span>;
+                <a href="#e33601dec2737c38" class="i field">_second</a> = <span class="r36 r">second</span>;
+                <a href="#7536d986cbb813e6" class="i field">_indexes</a> = <span class="r37 r">indexes</span>;
+            }
+ 
+            <b>internal static</b> <span class="i">IRuntimeVariables</span> <a id="e7d12214e0516a46" href="../../R/../../0000000000.html" target="n" data-glyph="74,2" class="i method">Create</a>(<span class="i">IRuntimeVariables</span> <span id="r38 rd" class="r38 r">first</span>, <span class="i">IRuntimeVariables</span> <span id="r39 rd" class="r39 r">second</span>, <b>int</b>[] <span id="r40 rd" class="r40 r">indexes</span>)
+            {
+                <b>return</b> <b>new</b> <a href="#0e668ab37953c7d3" class="t constructor">MergedRuntimeVariables</a>(<span class="r38 r">first</span>, <span class="r39 r">second</span>, <span class="r40 r">indexes</span>);
+            }
+ 
+            <b>int</b> <span class="i">IRuntimeVariables</span>.<a id="72851bc52b326219" href="../../R/../../0000000000.html" target="n" data-glyph="106,2" class="i property">Count</a>
+            {
+                <b>get</b> { <b>return</b> <a href="#7536d986cbb813e6" class="i field">_indexes</a>.<span class="i">Length</span>; }
+            }
+ 
+            <b>object</b> <span class="i">IRuntimeVariables</span>.<a id="0bd8ca803b0ea528" href="../../R/../../0000000000.html" target="n" data-glyph="106,2" class="k">this</a>[<b>int</b> <span id="r41 rd" class="r41 r">index</span>]
+            {
+                <b>get</b>
+                {
+                    <span class="r41 r">index</span> = <a href="#7536d986cbb813e6" class="i field">_indexes</a>[<span class="r41 r">index</span>];
+                    <b>return</b> (<span class="r41 r">index</span> &gt;= 0) ? <a href="#7f252a433513f10a" class="i field">_first</a>[<span class="r41 r">index</span>] : <a href="#e33601dec2737c38" class="i field">_second</a>[-1 - <span class="r41 r">index</span>];
+                }
+ 
+                <b>set</b>
+                {
+                    <span class="r41 r">index</span> = <a href="#7536d986cbb813e6" class="i field">_indexes</a>[<span class="r41 r">index</span>];
+                    <b>if</b> (<span class="r41 r">index</span> &gt;= 0)
+                    {
+                        <a href="#7f252a433513f10a" class="i field">_first</a>[<span class="r41 r">index</span>] = <b>value</b>;
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#e33601dec2737c38" class="i field">_second</a>[-1 - <span class="r41 r">index</span>] = <b>value</b>;
+                    }
+                }
+            }
+        }
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

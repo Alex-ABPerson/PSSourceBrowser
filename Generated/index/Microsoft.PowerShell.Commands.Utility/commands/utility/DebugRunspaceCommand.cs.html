@@ -1,0 +1,572 @@
+﻿<!DOCTYPE html>
+<html><head><title>DebugRunspaceCommand.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(563);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Utility/commands/utility/DebugRunspaceCommand.cs" target="_top">commands\utility\DebugRunspaceCommand.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.Commands.Utility" target="_top">src\Microsoft.PowerShell.Commands.Utility\Microsoft.PowerShell.Commands.Utility.csproj</a> (Microsoft.PowerShell.Commands.Utility)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This cmdlet takes a Runspace object and checks to see if it is debuggable (i.e, if</span>
+    <span class="c">///</span><span class="c"> it is running a script or is currently stopped in the debugger.</span>
+    <span class="c">///</span><span class="c"> If it is debuggable then it breaks into the Runspace debugger in step mode.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.PowerShell&quot;</span>, <span class="s">&quot;PS1012:CallShouldProcessOnlyIfDeclaringSupport&quot;</span>)]
+    [<span class="i">Cmdlet</span>(<a href="/System.Management.Automation/A.html#98a099bbeb57da8d" class="t t">VerbsDiagnostic</a>.<a href="/System.Management.Automation/A.html#0a499bacf9897f91" class="i field">Debug</a>, <span class="s">&quot;Runspace&quot;</span>, <span class="i">SupportsShouldProcess</span> = <b>true</b>, <span class="i">DefaultParameterSetName</span> = <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#0d2fc01c0817d7ed" class="i field">RunspaceParameterSet</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkId=2096917&quot;</span>)]
+    <b>public sealed class</b> <a id="61cf846df2e3577a" href="../../R/61cf846df2e3577a.html" target="n" data-glyph="0,0" class="t t"><span id="abb41d9746e24850">DebugRunspaceCommand</span></a> : <a href="/System.Management.Automation/A.html#30543a6971fed1fc" class="t t">PSCmdlet</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Strings
+ 
+        <b>private const string</b> <a id="0d2fc01c0817d7ed" href="../../R/0d2fc01c0817d7ed.html" target="n" data-glyph="10,1" class="i field">RunspaceParameterSet</a> = <span class="s">&quot;RunspaceParameterSet&quot;</span>;
+        <b>private const string</b> <a id="93a494bc72404d61" href="../../R/93a494bc72404d61.html" target="n" data-glyph="10,1" class="i field">NameParameterSet</a> = <span class="s">&quot;NameParameterSet&quot;</span>;
+        <b>private const string</b> <a id="f9d2284982b23d5f" href="../../R/f9d2284982b23d5f.html" target="n" data-glyph="10,1" class="i field">IdParameterSet</a> = <span class="s">&quot;IdParameterSet&quot;</span>;
+        <b>private const string</b> <a id="dc365314374ca366" href="../../R/dc365314374ca366.html" target="n" data-glyph="10,1" class="i field">InstanceIdParameterSet</a> = <span class="s">&quot;InstanceIdParameterSet&quot;</span>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private members
+ 
+        <b>private</b> <a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <a id="b29b5fb1d680d769" href="../../R/b29b5fb1d680d769.html" target="n" data-glyph="46,1" class="i field">_runspace</a>;
+        <b>private</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a> <a id="8db7c8fed84ac4d1" href="../../R/8db7c8fed84ac4d1.html" target="n" data-glyph="46,1" class="i field">_debugger</a>;
+        <b>private</b> <a href="/System.Management.Automation/A.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <a id="53f75d185a4e4a2e" href="../../R/53f75d185a4e4a2e.html" target="n" data-glyph="46,1" class="i field">_debugBlockingCollection</a>;
+        <b>private</b> <a href="/System.Management.Automation/A.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <a id="c318b7d124651352" href="../../R/c318b7d124651352.html" target="n" data-glyph="46,1" class="i field">_debugAccumulateCollection</a>;
+        <b>private</b> <a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <a id="6f333514e5ac7d44" href="../../R/6f333514e5ac7d44.html" target="n" data-glyph="46,1" class="i field">_runningPipeline</a>;
+        <b>private</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="/System.Management.Automation/A.html#3d1b346df3be574c" class="t t">PowerShell</a> <a id="d113e44987ee10b9" href="../../R/d113e44987ee10b9.html" target="n" data-glyph="46,1" class="i field">_runningPowerShell</a>;
+ 
+        <span class="c">// Debugging to persist until Ctrl+C or Debugger &#39;Exit&#39; stops cmdlet.</span>
+        <b>private bool</b> <a id="47bd3b3d7d5e6396" href="../../R/47bd3b3d7d5e6396.html" target="n" data-glyph="46,1" class="i field">_debugging</a>;
+        <b>private readonly</b> <span class="i">ManualResetEventSlim</span> <a id="4a82bdd039b5c598" href="../../R/4a82bdd039b5c598.html" target="n" data-glyph="46,1" class="i field">_newRunningScriptEvent</a> = <b>new</b>(<b>true</b>);
+        <b>private</b> <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a> <a id="04cf406063af70cd" href="../../R/04cf406063af70cd.html" target="n" data-glyph="46,1" class="i field">_previousRunspaceAvailability</a> = <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="/System.Management.Automation/A.html#a5172055c7a11352" class="i field">None</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Runspace to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="/System.Management.Automation/A.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="/System.Management.Automation/A.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+                   <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#0d2fc01c0817d7ed" class="i field">RunspaceParameterSet</a>)]
+        <b>public</b> <a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <a id="d0e7123cbe7380b2" href="../../R/d0e7123cbe7380b2.html" target="n" data-glyph="102,1" class="i property">Runspace</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The name of a Runspace to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#93a494bc72404d61" class="i field">NameParameterSet</a>)]
+        <b>public string</b> <a id="f8853519ff303ab5" href="../../R/f8853519ff303ab5.html" target="n" data-glyph="102,1" class="i property">Name</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Id of a Runspace to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#f9d2284982b23d5f" class="i field">IdParameterSet</a>)]
+        <b>public int</b> <a id="19e83a3da6166a62" href="../../R/19e83a3da6166a62.html" target="n" data-glyph="102,1" class="i property">Id</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The InstanceId of a Runspace to be debugged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="/System.Management.Automation/A.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="/System.Management.Automation/A.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="/System.Management.Automation/A.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#dc365314374ca366" class="i field">InstanceIdParameterSet</a>)]
+        <b>public</b> <span class="i">Guid</span> <a id="75e316e28cedb00d" href="../../R/75e316e28cedb00d.html" target="n" data-glyph="102,1" class="i property">InstanceId</a>
+        {
+            <b>get</b>;
+            <b>set</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets or sets a flag that tells PowerShell to automatically perform a BreakAll when the debugger is attached to the remote target.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>]
+        <b>public</b> <a href="/System.Management.Automation/A.html#8260026027378f6c" class="t t">SwitchParameter</a> <a id="9f99fca6bf3f4e19" href="../../R/9f99fca6bf3f4e19.html" target="n" data-glyph="102,1" class="i property">BreakAll</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> End processing.  Do work.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="c5ccdc26545d12ed" href="../../R/c5ccdc26545d12ed.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <b>if</b> (<a href="/System.Management.Automation/A.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#0d2fc01c0817d7ed" class="i field">RunspaceParameterSet</a>)
+            {
+                <a href="#b29b5fb1d680d769" class="i field">_runspace</a> = <a href="#d0e7123cbe7380b2" class="i property">Runspace</a>;
+            }
+            <b>else</b>
+            {
+                <span class="i">IReadOnlyList</span>&lt;<a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a>&gt; <span id="r0 rd" class="r0 r">runspaces</span> = <b>null</b>;
+ 
+                <b>switch</b> (<a href="/System.Management.Automation/A.html#f1ecb7c30328d049" class="i property">ParameterSetName</a>)
+                {
+                    <b>case</b> <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#93a494bc72404d61" class="i field">NameParameterSet</a>:
+                        <span class="r0 r">runspaces</span> = <a href="GetRunspaceCommand.cs.html#650252a3cdb5b2f4" class="t t">GetRunspaceUtils</a>.<a href="GetRunspaceCommand.cs.html#80609cc29f11c77e" class="i method">GetRunspacesByName</a>(<b>new</b> <b>string</b>[] { <a href="#f8853519ff303ab5" class="i property">Name</a> });
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#f9d2284982b23d5f" class="i field">IdParameterSet</a>:
+                        <span class="r0 r">runspaces</span> = <a href="GetRunspaceCommand.cs.html#650252a3cdb5b2f4" class="t t">GetRunspaceUtils</a>.<a href="GetRunspaceCommand.cs.html#9d4d488284e121d9" class="i method">GetRunspacesById</a>(<b>new</b> <b>int</b>[] { <a href="#19e83a3da6166a62" class="i property">Id</a> });
+                        <b>break</b>;
+ 
+                    <b>case</b> <a href="#61cf846df2e3577a" class="t t">DebugRunspaceCommand</a>.<a href="#dc365314374ca366" class="i field">InstanceIdParameterSet</a>:
+                        <span class="r0 r">runspaces</span> = <a href="GetRunspaceCommand.cs.html#650252a3cdb5b2f4" class="t t">GetRunspaceUtils</a>.<a href="GetRunspaceCommand.cs.html#3a26c6acab3f84a4" class="i method">GetRunspacesByInstanceId</a>(<b>new</b> <span class="i">Guid</span>[] { <a href="#75e316e28cedb00d" class="i property">InstanceId</a> });
+                        <b>break</b>;
+                }
+ 
+                <b>if</b> (<span class="r0 r">runspaces</span>.<span class="i">Count</span> &gt; 1)
+                {
+                    <span class="i">ThrowTerminatingError</span>(
+                        <b>new</b> <span class="t">ErrorRecord</span>(
+                            <b>new</b> <span class="t">PSArgumentException</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingTooManyRunspacesFound</span>),
+                            <span class="s">&quot;DebugRunspaceTooManyRunspaceFound&quot;</span>,
+                            <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                            <a href="#61cf846df2e3577a" class="k">this</a>)
+                        );
+                }
+ 
+                <b>if</b> (<span class="r0 r">runspaces</span>.<span class="i">Count</span> == 1)
+                {
+                    <a href="#b29b5fb1d680d769" class="i field">_runspace</a> = <span class="r0 r">runspaces</span>[0];
+                }
+            }
+ 
+            <b>if</b> (<a href="#b29b5fb1d680d769" class="i field">_runspace</a> == <b>null</b>)
+            {
+                <span class="i">ThrowTerminatingError</span>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSArgumentNullException</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingNoRunspaceFound</span>),
+                        <span class="s">&quot;DebugRunspaceNoRunspaceFound&quot;</span>,
+                        <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#61cf846df2e3577a" class="k">this</a>)
+                    );
+            }
+ 
+            <a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r1 rd" class="r1 r">defaultRunspace</span> = <span class="i">LocalRunspace</span>.<a href="/System.Management.Automation/A.html#efcd2ba43103de17" class="i property">DefaultRunspace</a>;
+            <b>if</b> (<span class="r1 r">defaultRunspace</span> == <b>null</b> || <span class="r1 r">defaultRunspace</span>.<a href="/System.Management.Automation/A.html#d6610640d00b19f5" class="i property">Debugger</a> == <b>null</b>)
+            {
+                <span class="i">ThrowTerminatingError</span>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingNoHostRunspaceOrDebugger</span>),
+                        <span class="s">&quot;DebugRunspaceNoHostDebugger&quot;</span>,
+                        <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#61cf846df2e3577a" class="k">this</a>)
+                    );
+            }
+ 
+            <b>if</b> (<a href="#b29b5fb1d680d769" class="i field">_runspace</a> == <span class="r1 r">defaultRunspace</span>)
+            {
+                <span class="i">ThrowTerminatingError</span>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingCannotDebugDefaultRunspace</span>),
+                        <span class="s">&quot;DebugRunspaceCannotDebugHostRunspace&quot;</span>,
+                        <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#61cf846df2e3577a" class="k">this</a>)
+                    );
+            }
+ 
+            <b>if</b> (<a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a> == <b>null</b> || <a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="/System.Management.Automation/A.html#f3c3c89a5e9dd42a" class="i property">UI</a> == <b>null</b>)
+            {
+                <span class="i">ThrowTerminatingError</span>(
+                    <b>new</b> <span class="t">ErrorRecord</span>(
+                        <b>new</b> <span class="t">PSInvalidOperationException</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingNoHost</span>),
+                        <span class="s">&quot;DebugRunspaceNoHostAvailable&quot;</span>,
+                        <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>,
+                        <a href="#61cf846df2e3577a" class="k">this</a>)
+                    );
+            }
+ 
+            <b>if</b> (!<span class="i">ShouldProcess</span>(<a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<a href="/System.Management.Automation/A.html#c40205e63f7ff911" class="i property">Name</a>, <a href="/System.Management.Automation/A.html#98a099bbeb57da8d" class="t t">VerbsDiagnostic</a>.<a href="/System.Management.Automation/A.html#0a499bacf9897f91" class="i field">Debug</a>))
+            {
+                <b>return</b>;
+            }
+ 
+            <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a> = <span class="r1 r">defaultRunspace</span>.<a href="/System.Management.Automation/A.html#d6610640d00b19f5" class="i property">Debugger</a>;
+ 
+            <b>try</b>
+            {
+                <a href="#6246b5b65d13133d" class="i method">PrepareRunspace</a>(<a href="#b29b5fb1d680d769" class="i field">_runspace</a>);
+ 
+                <span class="c">// Blocking call.  Send runspace/command output to host UI while debugging and wait for runspace/command completion.</span>
+                <a href="#92cebeb39c80b811" class="i method">WaitAndReceiveRunspaceOutput</a>();
+            }
+            <b>finally</b>
+            {
+                <a href="#5dcc2ea982aa3ba7" class="i method">RestoreRunspace</a>(<a href="#b29b5fb1d680d769" class="i field">_runspace</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Stop processing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="bb92c36acd33d303" href="../../R/bb92c36acd33d303.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <a href="#47bd3b3d7d5e6396" class="i field">_debugging</a> = <b>false</b>;
+ 
+            <span class="c">// Cancel runspace debugging.</span>
+            <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a> <span id="r2 rd" class="r2 r">debugger</span> = <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>;
+            <b>if</b> ((<span class="r2 r">debugger</span> != <b>null</b>) &amp;&amp; (<a href="#b29b5fb1d680d769" class="i field">_runspace</a> != <b>null</b>))
+            {
+                <span class="r2 r">debugger</span>.<span class="i">StopDebugRunspace</span>(<a href="#b29b5fb1d680d769" class="i field">_runspace</a>);
+            }
+ 
+            <span class="c">// Unblock the data collection.</span>
+            <a href="/System.Management.Automation/A.html#52e2b209c10ec0a4" class="t t">PSDataCollection</a>&lt;<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt; <span id="r3 rd" class="r3 r">debugCollection</span> = <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>;
+            <b>if</b> (<span class="r3 r">debugCollection</span> != <b>null</b>)
+            {
+                <span class="r3 r">debugCollection</span>.<span class="i">Complete</span>();
+            }
+ 
+            <span class="c">// Unblock any new command wait.</span>
+            <a href="#4a82bdd039b5c598" class="i field">_newRunningScriptEvent</a>.<span class="i">Set</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private methods
+ 
+        <b>private void</b> <a id="92cebeb39c80b811" href="../../R/92cebeb39c80b811.html" target="n" data-glyph="76,1" class="i method">WaitAndReceiveRunspaceOutput</a>()
+        {
+            <a href="#47bd3b3d7d5e6396" class="i field">_debugging</a> = <b>true</b>;
+ 
+            <b>try</b>
+            {
+                <span class="i">HostWriteLine</span>(<b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingStarted</span>, <a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<a href="/System.Management.Automation/A.html#c40205e63f7ff911" class="i property">Name</a>));
+                <span class="i">HostWriteLine</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingEndSession</span>);
+                <span class="i">HostWriteLine</span>(<b>string</b>.<span class="i">Empty</span>);
+ 
+                <a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<a href="/System.Management.Automation/A.html#3cd2a1e80935c2fb" class="i">AvailabilityChanged</a> += <span class="i">HandleRunspaceAvailabilityChanged</span>;
+                <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>.<span class="i">NestedDebuggingCancelledEvent</span> += <span class="i">HandleDebuggerNestedDebuggingCancelledEvent</span>;
+ 
+                <span class="c">// Make sure host debugger has debugging turned on.</span>
+                <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>.<span class="i">SetDebugMode</span>(<a href="/System.Management.Automation/A.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="/System.Management.Automation/A.html#8f7455ad81a2c081" class="i field">LocalScript</a> | <a href="/System.Management.Automation/A.html#7e71da719f103cfd" class="t t">DebugModes</a>.<a href="/System.Management.Automation/A.html#36492991f477f6e1" class="i field">RemoteScript</a>);
+ 
+                <span class="c">// Set up host script debugger to debug the runspace.</span>
+                <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>.<span class="i">DebugRunspace</span>(<a href="#b29b5fb1d680d769" class="i field">_runspace</a>, <span class="i">breakAll</span>: <a href="#9f99fca6bf3f4e19" class="i property">BreakAll</a>);
+ 
+                <b>while</b> (<a href="#47bd3b3d7d5e6396" class="i field">_debugging</a>)
+                {
+                    <span class="c">// Wait for running script.</span>
+                    <a href="#4a82bdd039b5c598" class="i field">_newRunningScriptEvent</a>.<span class="i">Wait</span>();
+ 
+                    <b>if</b> (!<a href="#47bd3b3d7d5e6396" class="i field">_debugging</a>) { <b>return</b>; }
+ 
+                    <a href="#f993a4926353da35" class="i method">AddDataEventHandlers</a>();
+ 
+                    <b>try</b>
+                    {
+                        <span class="c">// Block cmdlet during debugging until either the command finishes</span>
+                        <span class="c">// or the user terminates the debugging session.</span>
+                        <b>foreach</b> (<b>var</b> <span id="r4 rd" class="r4 r">streamItem</span> <b>in</b> <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>)
+                        {
+                            <span class="r4 r">streamItem</span>.<span class="i">WriteStreamObject</span>(<a href="#61cf846df2e3577a" class="k">this</a>);
+                        }
+                    }
+                    <b>finally</b>
+                    {
+                        <a href="#110f3c1ed073aa35" class="i method">RemoveDataEventHandlers</a>();
+                    }
+ 
+                    <b>if</b> (<a href="#47bd3b3d7d5e6396" class="i field">_debugging</a> &amp;&amp;
+                        (!<a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<span class="i">InNestedPrompt</span>))
+                    {
+                        <span class="i">HostWriteLine</span>(<b>string</b>.<span class="i">Empty</span>);
+                        <span class="i">HostWriteLine</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingScriptCompleted</span>);
+                        <span class="i">HostWriteLine</span>(<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a>.<span class="i">RunspaceDebuggingEndSession</span>);
+                        <span class="i">HostWriteLine</span>(<b>string</b>.<span class="i">Empty</span>);
+                    }
+ 
+                    <a href="#4a82bdd039b5c598" class="i field">_newRunningScriptEvent</a>.<span class="i">Reset</span>();
+                }
+            }
+            <b>finally</b>
+            {
+                <a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<a href="/System.Management.Automation/A.html#3cd2a1e80935c2fb" class="i">AvailabilityChanged</a> -= <span class="i">HandleRunspaceAvailabilityChanged</span>;
+                <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>.<span class="i">NestedDebuggingCancelledEvent</span> -= <span class="i">HandleDebuggerNestedDebuggingCancelledEvent</span>;
+                <a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>.<span class="i">StopDebugRunspace</span>(<a href="#b29b5fb1d680d769" class="i field">_runspace</a>);
+                <a href="#4a82bdd039b5c598" class="i field">_newRunningScriptEvent</a>.<span class="i">Dispose</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="17717d3b7177b84e" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HostWriteLine</a>(<b>string</b> <span id="r5 rd" class="r5 r">line</span>)
+        {
+            <b>if</b> ((<a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a> != <b>null</b>) &amp;&amp; (<a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="/System.Management.Automation/A.html#f3c3c89a5e9dd42a" class="i property">UI</a> != <b>null</b>))
+            {
+                <b>try</b>
+                {
+                    <b>if</b> (<a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="/System.Management.Automation/A.html#f3c3c89a5e9dd42a" class="i property">UI</a>.<a href="/System.Management.Automation/A.html#9f0fd1e53edb6283" class="i property">RawUI</a> != <b>null</b>)
+                    {
+                        <a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="/System.Management.Automation/A.html#f3c3c89a5e9dd42a" class="i property">UI</a>.<span class="i">WriteLine</span>(<span class="i">ConsoleColor</span>.<span class="i">Yellow</span>, <a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="/System.Management.Automation/A.html#f3c3c89a5e9dd42a" class="i property">UI</a>.<a href="/System.Management.Automation/A.html#9f0fd1e53edb6283" class="i property">RawUI</a>.<a href="/System.Management.Automation/A.html#e2891a44a8939f10" class="i property">BackgroundColor</a>, <span class="r5 r">line</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <a href="#61cf846df2e3577a" class="k">this</a>.<a href="/System.Management.Automation/A.html#01105ebe2065fe1b" class="i property">Host</a>.<a href="/System.Management.Automation/A.html#f3c3c89a5e9dd42a" class="i property">UI</a>.<span class="i">WriteLine</span>(<span class="r5 r">line</span>);
+                    }
+                }
+                <b>catch</b> (<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>.<a href="/System.Management.Automation/A.html#4b15a598e99c7dd9" class="t t">HostException</a>) { }
+            }
+        }
+ 
+        <b>private void</b> <a id="f993a4926353da35" href="../../R/f993a4926353da35.html" target="n" data-glyph="76,1" class="i method">AddDataEventHandlers</a>()
+        {
+            <span class="c">// Create new collection objects.</span>
+            <b>if</b> (<a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a> != <b>null</b>) { <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>.<span class="i">Dispose</span>(); }
+ 
+            <b>if</b> (<a href="#c318b7d124651352" class="i field">_debugAccumulateCollection</a> != <b>null</b>) { <a href="#c318b7d124651352" class="i field">_debugAccumulateCollection</a>.<span class="i">Dispose</span>(); }
+ 
+            <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a> = <b>new</b> <span class="t">PSDataCollection</span>&lt;<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;();
+            <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>.<a href="/System.Management.Automation/A.html#f0c555b53469e3b8" class="i property">BlockingEnumerator</a> = <b>true</b>;
+            <a href="#c318b7d124651352" class="i field">_debugAccumulateCollection</a> = <b>new</b> <span class="t">PSDataCollection</span>&lt;<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a>&gt;();
+ 
+            <a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a> = <a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<span class="i">GetCurrentBasePowerShell</span>();
+            <b>if</b> (<a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a> != <b>null</b>)
+            {
+                <b>if</b> (<a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">OutputBuffer</span> != <b>null</b>)
+                {
+                    <a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">OutputBuffer</span>.<span class="i">DataAdding</span> += <span class="i">HandlePowerShellOutputBufferDataAdding</span>;
+                }
+ 
+                <b>if</b> (<a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">ErrorBuffer</span> != <b>null</b>)
+                {
+                    <a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">ErrorBuffer</span>.<span class="i">DataAdding</span> += <span class="i">HandlePowerShellErrorBufferDataAdding</span>;
+                }
+            }
+            <b>else</b>
+            {
+                <a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a> = <a href="#b29b5fb1d680d769" class="i field">_runspace</a>.<span class="i">GetCurrentlyRunningPipeline</span>();
+                <b>if</b> (<a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a> != <b>null</b>)
+                {
+                    <b>if</b> (<a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#e61d6d76ceba7ad2" class="i property">Output</a> != <b>null</b>)
+                    {
+                        <a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#e61d6d76ceba7ad2" class="i property">Output</a>.<a href="/System.Management.Automation/A.html#ab790c5de0e4e578" class="i">DataReady</a> += <span class="i">HandlePipelineOutputDataReady</span>;
+                    }
+ 
+                    <b>if</b> (<a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#cc6ca02e9720dc4a" class="i property">Error</a> != <b>null</b>)
+                    {
+                        <a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#cc6ca02e9720dc4a" class="i property">Error</a>.<a href="/System.Management.Automation/A.html#ab790c5de0e4e578" class="i">DataReady</a> += <span class="i">HandlePipelineErrorDataReady</span>;
+                    }
+                }
+            }
+        }
+ 
+        <b>private void</b> <a id="110f3c1ed073aa35" href="../../R/110f3c1ed073aa35.html" target="n" data-glyph="76,1" class="i method">RemoveDataEventHandlers</a>()
+        {
+            <b>if</b> (<a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a> != <b>null</b>)
+            {
+                <b>if</b> (<a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">OutputBuffer</span> != <b>null</b>)
+                {
+                    <a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">OutputBuffer</span>.<span class="i">DataAdding</span> -= <span class="i">HandlePowerShellOutputBufferDataAdding</span>;
+                }
+ 
+                <b>if</b> (<a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">ErrorBuffer</span> != <b>null</b>)
+                {
+                    <a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a>.<span class="i">ErrorBuffer</span>.<span class="i">DataAdding</span> -= <span class="i">HandlePowerShellErrorBufferDataAdding</span>;
+                }
+ 
+                <a href="#d113e44987ee10b9" class="i field">_runningPowerShell</a> = <b>null</b>;
+            }
+            <b>else</b> <b>if</b> (<a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a> != <b>null</b>)
+            {
+                <b>if</b> (<a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#e61d6d76ceba7ad2" class="i property">Output</a> != <b>null</b>)
+                {
+                    <a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#e61d6d76ceba7ad2" class="i property">Output</a>.<a href="/System.Management.Automation/A.html#ab790c5de0e4e578" class="i">DataReady</a> -= <span class="i">HandlePipelineOutputDataReady</span>;
+                }
+ 
+                <b>if</b> (<a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#cc6ca02e9720dc4a" class="i property">Error</a> != <b>null</b>)
+                {
+                    <a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a>.<a href="/System.Management.Automation/A.html#cc6ca02e9720dc4a" class="i property">Error</a>.<a href="/System.Management.Automation/A.html#ab790c5de0e4e578" class="i">DataReady</a> -= <span class="i">HandlePipelineErrorDataReady</span>;
+                }
+ 
+                <a href="#6f333514e5ac7d44" class="i field">_runningPipeline</a> = <b>null</b>;
+            }
+        }
+ 
+        <b>private void</b> <a id="ef936b59190d31e4" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleRunspaceAvailabilityChanged</a>(<b>object</b> <span id="r6 rd" class="r6 r">sender</span>, <a href="/System.Management.Automation/A.html#cb349d0617c35bc7" class="t t">RunspaceAvailabilityEventArgs</a> <span id="r7 rd" class="r7 r">e</span>)
+        {
+            <span class="c">// Ignore nested commands.</span>
+            <span class="i">LocalRunspace</span> <span id="r8 rd" class="r8 r">localRunspace</span> = <span class="r6 r">sender</span> <b>as</b> <span class="i">LocalRunspace</span>;
+            <b>if</b> (<span class="r8 r">localRunspace</span> != <b>null</b>)
+            {
+                <a href="/System.Management.Automation/A.html#3d1b346df3be574c" class="k">var</a> <span id="r9 rd" class="r9 r">basePowerShell</span> = <span class="r8 r">localRunspace</span>.<span class="i">GetCurrentBasePowerShell</span>();
+                <b>if</b> ((<span class="r9 r">basePowerShell</span> != <b>null</b>) &amp;&amp; (<span class="r9 r">basePowerShell</span>.<a href="/System.Management.Automation/A.html#32c156c0cba25702" class="i property">IsNested</a>))
+                {
+                    <b>return</b>;
+                }
+            }
+ 
+            <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a> <span id="r10 rd" class="r10 r">prevAvailability</span> = <a href="#04cf406063af70cd" class="i field">_previousRunspaceAvailability</a>;
+            <a href="#04cf406063af70cd" class="i field">_previousRunspaceAvailability</a> = <span class="r7 r">e</span>.<a href="/System.Management.Automation/A.html#374d403c14f99b8f" class="i property">RunspaceAvailability</a>;
+ 
+            <b>if</b> ((<span class="r7 r">e</span>.<a href="/System.Management.Automation/A.html#374d403c14f99b8f" class="i property">RunspaceAvailability</a> == <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="/System.Management.Automation/A.html#64bc5c5290cfb16d" class="i field">Available</a>) || (<span class="r7 r">e</span>.<a href="/System.Management.Automation/A.html#374d403c14f99b8f" class="i property">RunspaceAvailability</a> == <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="/System.Management.Automation/A.html#a5172055c7a11352" class="i field">None</a>))
+            {
+                <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>.<span class="i">Complete</span>();
+            }
+            <b>else</b> <b>if</b> ((<span class="r7 r">e</span>.<a href="/System.Management.Automation/A.html#374d403c14f99b8f" class="i property">RunspaceAvailability</a> == <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="/System.Management.Automation/A.html#aed194b80737a544" class="i field">Busy</a>) &amp;&amp;
+                     ((<span class="r10 r">prevAvailability</span> == <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="/System.Management.Automation/A.html#64bc5c5290cfb16d" class="i field">Available</a>) || (<span class="r10 r">prevAvailability</span> == <a href="/System.Management.Automation/A.html#bd6944cab8dcc583" class="t t">RunspaceAvailability</a>.<a href="/System.Management.Automation/A.html#a5172055c7a11352" class="i field">None</a>)))
+            {
+                <a href="#4a82bdd039b5c598" class="i field">_newRunningScriptEvent</a>.<span class="i">Set</span>();
+            }
+        }
+ 
+        <b>private void</b> <a id="89dedc019e7610f0" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleDebuggerNestedDebuggingCancelledEvent</a>(<b>object</b> <span id="r11 rd" class="r11 r">sender</span>, <span class="i">EventArgs</span> <span id="r12 rd" class="r12 r">e</span>)
+        {
+            <a href="#bb92c36acd33d303" class="i method">StopProcessing</a>();
+        }
+ 
+        <b>private void</b> <a id="506d2a729ad9ba35" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandlePipelineOutputDataReady</a>(<b>object</b> <span id="r13 rd" class="r13 r">sender</span>, <span class="i">EventArgs</span> <span id="r14 rd" class="r14 r">e</span>)
+        {
+            <a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r15 rd" class="r15 r">reader</span> = <span class="r13 r">sender</span> <b>as</b> <a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;;
+            <b>if</b> (<span class="r15 r">reader</span> != <b>null</b> &amp;&amp; <span class="r15 r">reader</span>.<a href="/System.Management.Automation/A.html#c83722fe70fd6a2b" class="i property">IsOpen</a>)
+            {
+                <span class="i">WritePipelineCollection</span>(<span class="r15 r">reader</span>.<span class="i">NonBlockingRead</span>(), <a href="/System.Management.Automation/A.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="/System.Management.Automation/A.html#503ddb460914a8c9" class="i field">Output</a>);
+            }
+        }
+ 
+        <b>private void</b> <a id="4f2c5f0a6b23017c" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandlePipelineErrorDataReady</a>(<b>object</b> <span id="r16 rd" class="r16 r">sender</span>, <span class="i">EventArgs</span> <span id="r17 rd" class="r17 r">e</span>)
+        {
+            <a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<b>object</b>&gt; <span id="r18 rd" class="r18 r">reader</span> = <span class="r16 r">sender</span> <b>as</b> <a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<b>object</b>&gt;;
+            <b>if</b> (<span class="r18 r">reader</span> != <b>null</b> &amp;&amp; <span class="r18 r">reader</span>.<a href="/System.Management.Automation/A.html#c83722fe70fd6a2b" class="i property">IsOpen</a>)
+            {
+                <span class="i">WritePipelineCollection</span>(<span class="r18 r">reader</span>.<span class="i">NonBlockingRead</span>(), <a href="/System.Management.Automation/A.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="/System.Management.Automation/A.html#88738d1bbe207cf8" class="i field">Error</a>);
+            }
+        }
+ 
+        <b>private void</b> <a id="a05d2ec44df70e4e" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">WritePipelineCollection</a>&lt;<span id="r19 rd t" class="r19 r t">T</span>&gt;(<span class="i">Collection</span>&lt;<span class="r19 r t">T</span>&gt; <span id="r20 rd" class="r20 r">collection</span>, <a href="/System.Management.Automation/A.html#661e2c05b778accf" class="t t">PSStreamObjectType</a> <span id="r21 rd" class="r21 r">psStreamType</span>)
+        {
+            <b>foreach</b> (<b>var</b> <span id="r22 rd" class="r22 r">item</span> <b>in</b> <span class="r20 r">collection</span>)
+            {
+                <b>if</b> (<span class="r22 r">item</span> != <b>null</b>)
+                {
+                    <a href="#39ae88821d01e062" class="i method">AddToDebugBlockingCollection</a>(<b>new</b> <span class="t">PSStreamObject</span>(<span class="r21 r">psStreamType</span>, <span class="r22 r">item</span>));
+                }
+            }
+        }
+ 
+        <b>private void</b> <a id="e4a79b5ce371d5d4" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandlePowerShellOutputBufferDataAdding</a>(<b>object</b> <span id="r23 rd" class="r23 r">sender</span>, <a href="/System.Management.Automation/A.html#3298844a15d33a53" class="t t">DataAddingEventArgs</a> <span id="r24 rd" class="r24 r">e</span>)
+        {
+            <b>if</b> (<span class="r24 r">e</span>.<a href="/System.Management.Automation/A.html#0f4cac2293a87d1a" class="i property">ItemAdded</a> != <b>null</b>)
+            {
+                <a href="#301de154c2bc99d6" class="i method">HandlePowerShellPStreamItem</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="/System.Management.Automation/A.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="/System.Management.Automation/A.html#503ddb460914a8c9" class="i field">Output</a>, <span class="r24 r">e</span>.<a href="/System.Management.Automation/A.html#0f4cac2293a87d1a" class="i property">ItemAdded</a>));
+            }
+        }
+ 
+        <b>private void</b> <a id="a2592c4267cacef1" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandlePowerShellErrorBufferDataAdding</a>(<b>object</b> <span id="r25 rd" class="r25 r">sender</span>, <a href="/System.Management.Automation/A.html#3298844a15d33a53" class="t t">DataAddingEventArgs</a> <span id="r26 rd" class="r26 r">e</span>)
+        {
+            <b>if</b> (<span class="r26 r">e</span>.<a href="/System.Management.Automation/A.html#0f4cac2293a87d1a" class="i property">ItemAdded</a> != <b>null</b>)
+            {
+                <a href="#301de154c2bc99d6" class="i method">HandlePowerShellPStreamItem</a>(<b>new</b> <span class="t">PSStreamObject</span>(<a href="/System.Management.Automation/A.html#661e2c05b778accf" class="t t">PSStreamObjectType</a>.<a href="/System.Management.Automation/A.html#88738d1bbe207cf8" class="i field">Error</a>, <span class="r26 r">e</span>.<a href="/System.Management.Automation/A.html#0f4cac2293a87d1a" class="i property">ItemAdded</a>));
+            }
+        }
+ 
+        <b>private void</b> <a id="301de154c2bc99d6" href="../../R/301de154c2bc99d6.html" target="n" data-glyph="76,1" class="i method">HandlePowerShellPStreamItem</a>(<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r27 rd" class="r27 r">streamItem</span>)
+        {
+            <b>if</b> (!<a href="#8db7c8fed84ac4d1" class="i field">_debugger</a>.<a href="/System.Management.Automation/A.html#564232f4b51d11aa" class="i property">InBreakpoint</a>)
+            {
+                <span class="c">// First write any accumulated items.</span>
+                <b>foreach</b> (<b>var</b> <span id="r28 rd" class="r28 r">item</span> <b>in</b> <a href="#c318b7d124651352" class="i field">_debugAccumulateCollection</a>.<span class="i">ReadAll</span>())
+                {
+                    <span class="i">AddToDebugBlockingCollection</span>(<span class="r28 r">item</span>);
+                }
+ 
+                <span class="c">// Handle new item.</span>
+                <b>if</b> ((<a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a> != <b>null</b>) &amp;&amp; (<a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>.<a href="/System.Management.Automation/A.html#c160386455270a8f" class="i property">IsOpen</a>))
+                {
+                    <a href="#39ae88821d01e062" class="i method">AddToDebugBlockingCollection</a>(<span class="r27 r">streamItem</span>);
+                }
+            }
+            <b>else</b> <b>if</b> (<a href="#c318b7d124651352" class="i field">_debugAccumulateCollection</a>.<a href="/System.Management.Automation/A.html#c160386455270a8f" class="i property">IsOpen</a>)
+            {
+                <span class="c">// Add to accumulator if debugger is stopped in breakpoint.</span>
+                <a href="#c318b7d124651352" class="i field">_debugAccumulateCollection</a>.<span class="i">Add</span>(<span class="r27 r">streamItem</span>);
+            }
+        }
+ 
+        <b>private void</b> <a id="39ae88821d01e062" href="../../R/39ae88821d01e062.html" target="n" data-glyph="76,1" class="i method">AddToDebugBlockingCollection</a>(<a href="/System.Management.Automation/A.html#b7529596b91d1fc1" class="t t">PSStreamObject</a> <span id="r29 rd" class="r29 r">streamItem</span>)
+        {
+            <b>if</b> (!<a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>.<a href="/System.Management.Automation/A.html#c160386455270a8f" class="i property">IsOpen</a>) { <b>return</b>; }
+ 
+            <b>if</b> (<span class="r29 r">streamItem</span> != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <a href="#53f75d185a4e4a2e" class="i field">_debugBlockingCollection</a>.<span class="i">Add</span>(<span class="r29 r">streamItem</span>);
+                }
+                <b>catch</b> (<a href="/System.Management.Automation/A.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a>) { }
+            }
+        }
+ 
+        <b>private void</b> <a id="6246b5b65d13133d" href="../../R/6246b5b65d13133d.html" target="n" data-glyph="76,1" class="i method">PrepareRunspace</a>(<a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r30 rd" class="r30 r">runspace</span>)
+        {
+            <a href="#d0f19ef76d078d2f" class="i method">SetLocalMode</a>(<span class="r30 r">runspace</span>.<a href="/System.Management.Automation/A.html#d6610640d00b19f5" class="i property">Debugger</a>, <b>true</b>);
+            <a href="#c16e968fc5ab2314" class="i method">EnableHostDebugger</a>(<span class="r30 r">runspace</span>, <b>false</b>);
+        }
+ 
+        <b>private void</b> <a id="5dcc2ea982aa3ba7" href="../../R/5dcc2ea982aa3ba7.html" target="n" data-glyph="76,1" class="i method">RestoreRunspace</a>(<a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r31 rd" class="r31 r">runspace</span>)
+        {
+            <a href="#d0f19ef76d078d2f" class="i method">SetLocalMode</a>(<span class="r31 r">runspace</span>.<a href="/System.Management.Automation/A.html#d6610640d00b19f5" class="i property">Debugger</a>, <b>false</b>);
+            <a href="#c16e968fc5ab2314" class="i method">EnableHostDebugger</a>(<span class="r31 r">runspace</span>, <b>true</b>);
+        }
+ 
+        <b>private void</b> <a id="c16e968fc5ab2314" href="../../R/c16e968fc5ab2314.html" target="n" data-glyph="76,1" class="i method">EnableHostDebugger</a>(<a href="/System.Management.Automation/A.html#7e5b8eab1aa16fd7" class="t t">Runspace</a> <span id="r32 rd" class="r32 r">runspace</span>, <b>bool</b> <span id="r33 rd" class="r33 r">enabled</span>)
+        {
+            <span class="c">// Only enable and disable the host&#39;s runspace if we are in process attach mode.</span>
+            <b>if</b> (<a href="#8db7c8fed84ac4d1" class="i field">_debugger</a> <b>is</b> <span class="i">ServerRemoteDebugger</span>)
+            {
+                <span class="i">LocalRunspace</span> <span id="r34 rd" class="r34 r">localRunspace</span> = <span class="r32 r">runspace</span> <b>as</b> <span class="i">LocalRunspace</span>;
+                <b>if</b> ((<span class="r34 r">localRunspace</span> != <b>null</b>) &amp;&amp; (<span class="r34 r">localRunspace</span>.<span class="i">ExecutionContext</span> != <b>null</b>) &amp;&amp; (<span class="r34 r">localRunspace</span>.<span class="i">ExecutionContext</span>.<span class="i">EngineHostInterface</span> != <b>null</b>))
+                {
+                    <b>try</b>
+                    {
+                        <span class="r34 r">localRunspace</span>.<span class="i">ExecutionContext</span>.<span class="i">EngineHostInterface</span>.<span class="i">DebuggerEnabled</span> = <span class="r33 r">enabled</span>;
+                    }
+                    <b>catch</b> (<a href="/System.Management.Automation/A.html#ddab2b46a60907f3" class="t t">PSNotImplementedException</a>) { }
+                }
+            }
+        }
+ 
+        <b>private static void</b> <a id="d0f19ef76d078d2f" href="../../R/d0f19ef76d078d2f.html" target="n" data-glyph="76,1" class="i method">SetLocalMode</a>(<span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="/System.Management.Automation/A.html#9e8f0b396592e65c" class="t t">Debugger</a> <span id="r35 rd" class="r35 r">debugger</span>, <b>bool</b> <span id="r36 rd" class="r36 r">localMode</span>)
+        {
+            <span class="i">ServerRemoteDebugger</span> <span id="r37 rd" class="r37 r">remoteDebugger</span> = <span class="r35 r">debugger</span> <b>as</b> <span class="i">ServerRemoteDebugger</span>;
+            <b>if</b> (<span class="r37 r">remoteDebugger</span> != <b>null</b>)
+            {
+                <span class="r37 r">remoteDebugger</span>.<span class="i">LocalDebugMode</span> = <span class="r36 r">localMode</span>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,120 @@
+﻿<!DOCTYPE html>
+<html><head><title>Interpreter.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(111);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/interpreter/Interpreter.cs" target="_top">engine\interpreter\Interpreter.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">/* ****************************************************************************
+ *
+ * Copyright (c) Microsoft Corporation.
+ *
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the Apache License, Version 2.0, please send an email to
+ * dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+ * by the terms of the Apache License, Version 2.0.
+ *
+ * You must not remove this notice, or any other, from this software.
+ *
+ *
+ * ***************************************************************************/</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>.<span class="i">Expressions</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Runtime</span>.<span class="i">CompilerServices</span>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Interpreter</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A simple forth-style stack machine for executing Expression trees</span>
+    <span class="c">///</span><span class="c"> without the need to compile to IL and then invoke the JIT.  This trades</span>
+    <span class="c">///</span><span class="c"> off much faster compilation time for a slower execution performance.</span>
+    <span class="c">///</span><span class="c"> For code that is only run a small number of times this can be a</span>
+    <span class="c">///</span><span class="c"> sweet spot.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> The core loop in the interpreter is the RunInstructions method.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="2c0965030a4850cd" href="../../R/2c0965030a4850cd.html" target="n" data-glyph="2,0" class="t t">Interpreter</a>
+    {
+        <b>internal static readonly object</b> <a id="49f392cd9b38d650" href="../../R/49f392cd9b38d650.html" target="n" data-glyph="44,1" class="i field">NoValue</a> = <b>new</b> <b>object</b>();
+ 
+        <b>internal const int</b> <a id="3997365d8f1de9d7" href="../../R/3997365d8f1de9d7.html" target="n" data-glyph="8,1" class="i field">RethrowOnReturn</a> = <span class="i">Int32</span>.<span class="i">MaxValue</span>;
+ 
+        <span class="c">// zero: sync compilation</span>
+        <span class="c">// negative: default</span>
+        <b>internal readonly int</b> <a id="6d6b895f0d3c1058" href="../../R/6d6b895f0d3c1058.html" target="n" data-glyph="44,1" class="i field">_compilationThreshold</a>;
+ 
+        <b>internal readonly object</b>[] <a id="a1d4a980c4e99bad" href="../../R/a1d4a980c4e99bad.html" target="n" data-glyph="44,1" class="i field">_objects</a>;
+        <b>internal readonly</b> <a href="BranchLabel.cs.html#544039e103f60391" class="t t">RuntimeLabel</a>[] <a id="07b7b9928a80c8f9" href="../../R/07b7b9928a80c8f9.html" target="n" data-glyph="44,1" class="i field">_labels</a>;
+ 
+        <b>internal readonly string</b> <a id="81be8735bd7a4374" href="../../R/81be8735bd7a4374.html" target="n" data-glyph="44,1" class="i field">_name</a>;
+        <b>internal readonly</b> <a href="LightCompiler.cs.html#5695502ad1c2684d" class="t t">DebugInfo</a>[] <a id="5a678bf3ff239c1b" href="../../R/5a678bf3ff239c1b.html" target="n" data-glyph="44,1" class="i field">_debugInfos</a>;
+ 
+        <b>internal</b> <a id="303e1ff1ef210aaa" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">Interpreter</a>(<b>string</b> <span id="r0 rd" class="r0 r">name</span>, <a href="LocalVariables.cs.html#73129b416b625324" class="t t">LocalVariables</a> <span id="r1 rd" class="r1 r">locals</span>, <a href="Utilities.cs.html#600f1e648b51e109" class="t t">HybridReferenceDictionary</a>&lt;<span class="i">LabelTarget</span>, <a href="BranchLabel.cs.html#eddd89038e02be60" class="t t">BranchLabel</a>&gt; <span id="r2 rd" class="r2 r">labelMapping</span>,
+            <a href="InstructionList.cs.html#8d41f87c90279b16" class="t t">InstructionArray</a> <span id="r3 rd" class="r3 r">instructions</span>, <a href="LightCompiler.cs.html#5695502ad1c2684d" class="t t">DebugInfo</a>[] <span id="r4 rd" class="r4 r">debugInfos</span>, <b>int</b> <span id="r5 rd" class="r5 r">compilationThreshold</span>)
+        {
+            <a href="#81be8735bd7a4374" class="i field">_name</a> = <span class="r0 r">name</span>;
+            <a href="#fb3c52e0b2ff57f8" class="i property">LocalCount</a> = <span class="r1 r">locals</span>.<a href="LocalVariables.cs.html#218673f903d0cf99" class="i property">LocalCount</a>;
+            <a href="#3e6c89c0aa529e85" class="i property">ClosureVariables</a> = <span class="r1 r">locals</span>.<a href="LocalVariables.cs.html#09a00b6afebd5f94" class="i property">ClosureVariables</a>;
+ 
+            <a href="#2daea7c5858cb20b" class="i property">Instructions</a> = <span class="r3 r">instructions</span>;
+            <a href="#a1d4a980c4e99bad" class="i field">_objects</a> = <span class="r3 r">instructions</span>.<a href="InstructionList.cs.html#acef7abc1aab38b8" class="i field">Objects</a>;
+            <a href="#07b7b9928a80c8f9" class="i field">_labels</a> = <span class="r3 r">instructions</span>.<a href="InstructionList.cs.html#0b46d1841d4a1182" class="i field">Labels</a>;
+            <a href="#7fd565757f095c56" class="i property">LabelMapping</a> = <span class="r2 r">labelMapping</span>;
+ 
+            <a href="#5a678bf3ff239c1b" class="i field">_debugInfos</a> = <span class="r4 r">debugInfos</span>;
+            <a href="#6d6b895f0d3c1058" class="i field">_compilationThreshold</a> = <span class="r5 r">compilationThreshold</span>;
+        }
+ 
+        <b>internal int</b> <a id="6e4a7d5ce5ec6a9c" href="../../R/6e4a7d5ce5ec6a9c.html" target="n" data-glyph="104,1" class="i property">ClosureSize</a>
+        {
+            <b>get</b>
+            {
+                <b>if</b> (<a href="#3e6c89c0aa529e85" class="i property">ClosureVariables</a> == <b>null</b>)
+                {
+                    <b>return</b> 0;
+                }
+ 
+                <b>return</b> <a href="#3e6c89c0aa529e85" class="i property">ClosureVariables</a>.<span class="i">Count</span>;
+            }
+        }
+ 
+        <b>internal int</b> <a id="fb3c52e0b2ff57f8" href="../../R/fb3c52e0b2ff57f8.html" target="n" data-glyph="104,1" class="i property">LocalCount</a> { <b>get</b>; }
+ 
+        <b>internal bool</b> <a id="5ba37d6188b110ab" href="../../R/5ba37d6188b110ab.html" target="n" data-glyph="104,1" class="i property">CompileSynchronously</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#6d6b895f0d3c1058" class="i field">_compilationThreshold</a> &lt;= 1; }
+        }
+ 
+        <b>internal</b> <a href="InstructionList.cs.html#8d41f87c90279b16" class="t t">InstructionArray</a> <a id="2daea7c5858cb20b" href="../../R/2daea7c5858cb20b.html" target="n" data-glyph="104,1" class="i property">Instructions</a> { <b>get</b>; }
+ 
+        <b>internal</b> <span class="i">Dictionary</span>&lt;<span class="i">ParameterExpression</span>, <a href="LocalVariables.cs.html#0bca4d1c1dadd0c2" class="t t">LocalVariable</a>&gt; <a id="3e6c89c0aa529e85" href="../../R/3e6c89c0aa529e85.html" target="n" data-glyph="104,1" class="i property">ClosureVariables</a> { <b>get</b>; }
+ 
+        <b>internal</b> <a href="Utilities.cs.html#600f1e648b51e109" class="t t">HybridReferenceDictionary</a>&lt;<span class="i">LabelTarget</span>, <a href="BranchLabel.cs.html#eddd89038e02be60" class="t t">BranchLabel</a>&gt; <a id="7fd565757f095c56" href="../../R/7fd565757f095c56.html" target="n" data-glyph="104,1" class="i property">LabelMapping</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Runs instructions within the given frame.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Interpreted stack frames are linked via Parent reference so that each CLR frame of this method corresponds</span>
+        <span class="c">///</span><span class="c"> to an interpreted stack frame in the chain. It is therefore possible to combine CLR stack traces with</span>
+        <span class="c">///</span><span class="c"> interpreted stack traces by aligning interpreted frames to the frames of this method.</span>
+        <span class="c">///</span><span class="c"> Each group of subsequent frames of Run method corresponds to a single interpreted frame.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        [<span class="i">SpecialName</span>, <span class="i">MethodImpl</span>(<span class="i">MethodImplOptions</span>.<span class="i">NoInlining</span>)]
+        <b>public void</b> <a id="efd5271ada9e1a54" href="../../R/efd5271ada9e1a54.html" target="n" data-glyph="72,1" class="i method">Run</a>(<a href="InterpretedFrame.cs.html#48cb4583b6a7ca66" class="t t">InterpretedFrame</a> <span id="r6 rd" class="r6 r">frame</span>)
+        {
+            <b>var</b> <span id="r7 rd" class="r7 r">instructions</span> = <a href="#2daea7c5858cb20b" class="i property">Instructions</a>.<a href="InstructionList.cs.html#acc3ffb93deb3c3b" class="i field">Instructions</a>;
+            <b>int</b> <span id="r8 rd" class="r8 r">index</span> = <span class="r6 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a>;
+            <b>while</b> (<span class="r8 r">index</span> &lt; <span class="r7 r">instructions</span>.<span class="i">Length</span>)
+            {
+                <span class="r8 r">index</span> += <span class="r7 r">instructions</span>[<span class="r8 r">index</span>].<a href="Instruction.cs.html#b103d092b6cf44ed" class="i method">Run</a>(<span class="r6 r">frame</span>);
+                <span class="r6 r">frame</span>.<a href="InterpretedFrame.cs.html#dcb143819e8a5045" class="i field">InstructionIndex</a> = <span class="r8 r">index</span>;
+            }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

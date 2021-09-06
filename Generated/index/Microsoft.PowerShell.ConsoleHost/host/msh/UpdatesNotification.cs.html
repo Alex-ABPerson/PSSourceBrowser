@@ -1,0 +1,460 @@
+﻿<!DOCTYPE html>
+<html><head><title>UpdatesNotification.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(451);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost/host/msh/UpdatesNotification.cs" target="_top">host\msh\UpdatesNotification.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost" target="_top">src\Microsoft.PowerShell.ConsoleHost\Microsoft.PowerShell.ConsoleHost.csproj</a> (Microsoft.PowerShell.ConsoleHost)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>.<span class="i">Http</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>.<span class="i">Http</span>.<span class="i">Headers</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Net</span>.<span class="i">NetworkInformation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Tasks</span>;
+<b>using</b> <span class="i">Newtonsoft</span>.<span class="i">Json</span>;
+<b>using</b> <span class="i">Newtonsoft</span>.<span class="i">Json</span>.<span class="i">Linq</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A Helper class for printing notification on PowerShell startup when there is a new update.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> For the detailed design, please take a look at the corresponding RFC.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+    <b>internal static class</b> <a id="d4942265f85629c5" href="../../R/d4942265f85629c5.html" target="n" data-glyph="2,0" class="t t">UpdatesNotification</a>
+    {
+        <b>private const string</b> <a id="f2da19ead5d0ccce" href="../../R/f2da19ead5d0ccce.html" target="n" data-glyph="10,1" class="i field">UpdateCheckEnvVar</a> = <span class="s">&quot;POWERSHELL_UPDATECHECK&quot;</span>;
+        <b>private const string</b> <a id="4220910ccbd1ce3d" href="../../R/4220910ccbd1ce3d.html" target="n" data-glyph="10,1" class="i field">LTSBuildInfoURL</a> = <span class="s">&quot;https://aka.ms/pwsh-buildinfo-lts&quot;</span>;
+        <b>private const string</b> <a id="2e18db1236aca288" href="../../R/2e18db1236aca288.html" target="n" data-glyph="10,1" class="i field">StableBuildInfoURL</a> = <span class="s">&quot;https://aka.ms/pwsh-buildinfo-stable&quot;</span>;
+        <b>private const string</b> <a id="fa93836b23885b49" href="../../R/fa93836b23885b49.html" target="n" data-glyph="10,1" class="i field">PreviewBuildInfoURL</a> = <span class="s">&quot;https://aka.ms/pwsh-buildinfo-preview&quot;</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The version of new update is persisted using a file, not as the file content, but instead baked in the file name in the following template:</span>
+        <span class="c">///</span><span class="c">  `update{notification-type}_{version}_{publish-date}` -- held by &#39;s_updateFileNameTemplate&#39;,</span>
+        <span class="c">///</span><span class="c"> while &#39;s_updateFileNamePattern&#39; holds the pattern of this file name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static readonly string</b> <a id="ad8e503f1c5ef0f8" href="../../R/ad8e503f1c5ef0f8.html" target="n" data-glyph="46,1" class="i field">s_updateFileNameTemplate</a>, <a id="a918227de21ccb07" href="../../R/a918227de21ccb07.html" target="n" data-glyph="46,1" class="i field">s_updateFileNamePattern</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> For each notification type, we need two files to achieve the synchronization for the update check:</span>
+        <span class="c">///</span><span class="c">  `_sentinel{notification-type}_` -- held by &#39;s_sentinelFileName&#39;;</span>
+        <span class="c">///</span><span class="c">  `sentinel{notification-type}-{year}-{month}-{day}.done`</span>
+        <span class="c">///</span><span class="c">     -- held by &#39;s_doneFileNameTemplate&#39;, while &#39;s_doneFileNamePattern&#39; holds the pattern of this file name.</span>
+        <span class="c">///</span><span class="c"> The {notification-type} part will be the integer value of the corresponding `NotificationType` member.</span>
+        <span class="c">///</span><span class="c"> The {year}-{month}-{day} part will be filled with the date of current day when the update check runs.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static readonly string</b> <a id="9e3353738fea33fc" href="../../R/9e3353738fea33fc.html" target="n" data-glyph="46,1" class="i field">s_sentinelFileName</a>, <a id="e942770ca5e4d0e8" href="../../R/e942770ca5e4d0e8.html" target="n" data-glyph="46,1" class="i field">s_doneFileNameTemplate</a>, <a id="5d58e4c8833c6234" href="../../R/5d58e4c8833c6234.html" target="n" data-glyph="46,1" class="i field">s_doneFileNamePattern</a>;
+ 
+        <b>private static readonly string</b> <a id="1dc71cc036ce4e0c" href="../../R/1dc71cc036ce4e0c.html" target="n" data-glyph="46,1" class="i field">s_cacheDirectory</a>;
+        <b>private static readonly</b> <span class="i">EnumerationOptions</span> <a id="ea1148d8f944bc20" href="../../R/ea1148d8f944bc20.html" target="n" data-glyph="46,1" class="i field">s_enumOptions</a>;
+        <b>private static readonly</b> <a href="#f0b61f4f876615c0" class="t t">NotificationType</a> <a id="d9cf3826d5f5e1d4" href="../../R/d9cf3826d5f5e1d4.html" target="n" data-glyph="46,1" class="i field">s_notificationType</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets a value indicating whether update notification should be done.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static readonly bool</b> <a id="86b3923279114d5f" href="../../R/86b3923279114d5f.html" target="n" data-glyph="44,1" class="i field">CanNotifyUpdates</a>;
+ 
+        <b>static</b> <a id="47c4f66776aae057" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="t method">UpdatesNotification</a>()
+        {
+            <a href="#d9cf3826d5f5e1d4" class="i field">s_notificationType</a> = <a href="#fa1e0d14ebc7047b" class="i method">GetNotificationType</a>();
+            <a href="#86b3923279114d5f" class="i field">CanNotifyUpdates</a> = <a href="#d9cf3826d5f5e1d4" class="i field">s_notificationType</a> != <a href="#f0b61f4f876615c0" class="t t">NotificationType</a>.<a href="#b3919b8beda5f9a3" class="i field">Off</a>;
+ 
+            <b>if</b> (<a href="#86b3923279114d5f" class="i field">CanNotifyUpdates</a>)
+            {
+                <a href="#ea1148d8f944bc20" class="i field">s_enumOptions</a> = <b>new</b> <span class="i">EnumerationOptions</span>();
+                <a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a> = <span class="i">Path</span>.<span class="i">Combine</span>(<a href="/System.Management.Automation/A.html#693813241122eb45" class="t t">Platform</a>.<span class="i">CacheDirectory</span>, <a href="/System.Management.Automation/A.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<span class="i">GitCommitId</span>);
+ 
+                <span class="c">// Build the template/pattern strings for the configured notification type.</span>
+                <b>string</b> <span id="r0 rd" class="r0 r">typeNum</span> = ((<b>int</b>)<a href="#d9cf3826d5f5e1d4" class="i field">s_notificationType</a>).<span class="i">ToString</span>();
+                <a href="#9e3353738fea33fc" class="i field">s_sentinelFileName</a> = <span class="s">$&quot;</span><span class="s">_sentinel</span>{<span class="r0 r">typeNum</span>}<span class="s">_</span><span class="s">&quot;</span>;
+                <a href="#e942770ca5e4d0e8" class="i field">s_doneFileNameTemplate</a> = <span class="s">$&quot;</span><span class="s">sentinel</span>{<span class="r0 r">typeNum</span>}<span class="s">-{{0}}-{{1}}-{{2}}.done</span><span class="s">&quot;</span>;
+                <a href="#5d58e4c8833c6234" class="i field">s_doneFileNamePattern</a> = <span class="s">$&quot;</span><span class="s">sentinel</span>{<span class="r0 r">typeNum</span>}<span class="s">-*.done</span><span class="s">&quot;</span>;
+                <a href="#ad8e503f1c5ef0f8" class="i field">s_updateFileNameTemplate</a> = <span class="s">$&quot;</span><span class="s">update</span>{<span class="r0 r">typeNum</span>}<span class="s">_{{0}}_{{1}}</span><span class="s">&quot;</span>;
+                <a href="#a918227de21ccb07" class="i field">s_updateFileNamePattern</a> = <span class="s">$&quot;</span><span class="s">update</span>{<span class="r0 r">typeNum</span>}<span class="s">_v*.*.*_????-??-??</span><span class="s">&quot;</span>;
+            }
+        }
+ 
+        <span class="c">// Maybe we shouldn&#39;t do update check and show notification when it&#39;s from a mini-shell, meaning when</span>
+        <span class="c">// &#39;ConsoleShell.Start&#39; is not called by &#39;ManagedEntrance.Start&#39;.</span>
+        <span class="c">// But it seems so unusual that it&#39;s probably not worth bothering. Also, a mini-shell probably should</span>
+        <span class="c">// just disable the update notification feature by setting the opt-out environment variable.</span>
+ 
+        <b>internal static void</b> <a id="451181458583ce7b" href="../../R/451181458583ce7b.html" target="n" data-glyph="74,1" class="i method">ShowUpdateNotification</a>(<a href="/System.Management.Automation/A.html#3fd0cd9d58631820" class="t t">PSHostUserInterface</a> <span id="r1 rd" class="r1 r">hostUI</span>)
+        {
+            <b>if</b> (!<span class="i">Directory</span>.<span class="i">Exists</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>))
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<a href="#b6298d85965cbdbe" class="i method">TryParseUpdateFile</a>(
+                    <span class="r2 r">updateFilePath</span>: <b>out _</b>,
+                    <b>out</b> <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a> <span id="r3 rd" class="r3 r">lastUpdateVersion</span>,
+                    <span class="r4 r">lastUpdateDate</span>: <b>out _</b>)
+               &amp;&amp; <span class="r3 r">lastUpdateVersion</span> != <b>null</b>)
+            {
+                <b>string</b> <span id="r5 rd" class="r5 r">releaseTag</span> = <span class="r3 r">lastUpdateVersion</span>.<span class="i">ToString</span>();
+                <b>string</b> <span id="r6 rd" class="r6 r">notificationMsgTemplate</span> = <a href="#d9cf3826d5f5e1d4" class="i field">s_notificationType</a> == <a href="#f0b61f4f876615c0" class="t t">NotificationType</a>.<a href="#70fc83e1f88f3e93" class="i field">LTS</a>
+                    ? <span class="i">ManagedEntranceStrings</span>.<span class="i">LTSUpdateNotificationMessage</span>
+                    : <b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r3 r">lastUpdateVersion</span>.<a href="/System.Management.Automation/A.html#c0ce0234abbc6a8e" class="i property">PreReleaseLabel</a>)
+                        ? <span class="i">ManagedEntranceStrings</span>.<span class="i">StableUpdateNotificationMessage</span>
+                        : <span class="i">ManagedEntranceStrings</span>.<span class="i">PreviewUpdateNotificationMessage</span>;
+ 
+                <b>string</b> <span id="r7 rd" class="r7 r">notificationColor</span> = <b>string</b>.<span class="i">Empty</span>;
+                <b>string</b> <span id="r8 rd" class="r8 r">resetColor</span> = <b>string</b>.<span class="i">Empty</span>;
+ 
+                <b>string</b> <span id="r9 rd" class="r9 r">line2Padding</span> = <b>string</b>.<span class="i">Empty</span>;
+                <b>string</b> <span id="r10 rd" class="r10 r">line3Padding</span> = <b>string</b>.<span class="i">Empty</span>;
+ 
+                <span class="c">// We calculate how much whitespace we need to make it look nice</span>
+                <b>if</b> (<span class="r1 r">hostUI</span>.<a href="/System.Management.Automation/A.html#db1bed8dd5c8b0b2" class="i property">SupportsVirtualTerminal</a>)
+                {
+                    <span class="c">// Use Warning Color</span>
+                    <span class="r7 r">notificationColor</span> = <span class="s">&quot;\x1B[7m&quot;</span>;
+                    <span class="r8 r">resetColor</span> = <span class="s">&quot;\x1B[0m&quot;</span>;
+ 
+                    <span class="c">// The first line is longest, if the message changes, this needs to be updated</span>
+                    <b>int</b> <span id="r11 rd" class="r11 r">line1Length</span> = <span class="r6 r">notificationMsgTemplate</span>.<span class="i">IndexOf</span>(<span class="s">&#39;\n&#39;</span>);
+                    <b>int</b> <span id="r12 rd" class="r12 r">line2Length</span> = <span class="r6 r">notificationMsgTemplate</span>.<span class="i">IndexOf</span>(<span class="s">&#39;\n&#39;</span>, <span class="r11 r">line1Length</span> + 1);
+                    <b>int</b> <span id="r13 rd" class="r13 r">line3Length</span> = <span class="r6 r">notificationMsgTemplate</span>.<span class="i">IndexOf</span>(<span class="s">&#39;\n&#39;</span>, <span class="r12 r">line2Length</span> + 1);
+                    <span class="r13 r">line3Length</span> -= <span class="r12 r">line2Length</span> + 1;
+                    <span class="r12 r">line2Length</span> -= <span class="r11 r">line1Length</span> + 1;
+ 
+                    <span class="r9 r">line2Padding</span> = <span class="r9 r">line2Padding</span>.<span class="i">PadRight</span>(<span class="r11 r">line1Length</span> - <span class="r12 r">line2Length</span> + <span class="r5 r">releaseTag</span>.<span class="i">Length</span>);
+                    <span class="c">// 3 represents the extra placeholder in the template</span>
+                    <span class="r10 r">line3Padding</span> = <span class="r10 r">line3Padding</span>.<span class="i">PadRight</span>(<span class="r11 r">line1Length</span> - <span class="r13 r">line3Length</span> + 3);
+                }
+ 
+                <b>string</b> <span id="r14 rd" class="r14 r">notificationMsg</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">CurrentCulture</span>, <span class="r6 r">notificationMsgTemplate</span>, <span class="r5 r">releaseTag</span>, <span class="r7 r">notificationColor</span>, <span class="r8 r">resetColor</span>, <span class="r9 r">line2Padding</span>, <span class="r10 r">line3Padding</span>);
+ 
+                <span class="r1 r">hostUI</span>.<span class="i">WriteLine</span>(<span class="r14 r">notificationMsg</span>);
+            }
+        }
+ 
+        <b>internal static async</b> <span class="i">Task</span> <a id="fc398690c366c8c0" href="../../R/fc398690c366c8c0.html" target="n" data-glyph="74,1" class="i method">CheckForUpdates</a>()
+        {
+            <span class="c">// Delay the update check for 3 seconds so that it has the minimal impact on startup.</span>
+            <b>await</b> <span class="i">Task</span>.<span class="i">Delay</span>(3000);
+ 
+            <span class="c">// A self-built pwsh for development purpose has the SHA1 commit hash baked in &#39;GitCommitId&#39;,</span>
+            <span class="c">// which is 40 characters long. So we can quickly check the length of &#39;GitCommitId&#39; to tell</span>
+            <span class="c">// if this is a self-built pwsh, and skip the update check if so.</span>
+            <b>if</b> (<a href="/System.Management.Automation/A.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<span class="i">GitCommitId</span>.<span class="i">Length</span> &gt; 40)
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Daily builds do not support update notifications</span>
+            <b>string</b> <span id="r15 rd" class="r15 r">preReleaseLabel</span> = <a href="/System.Management.Automation/A.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<span class="i">PSCurrentVersion</span>.<a href="/System.Management.Automation/A.html#c0ce0234abbc6a8e" class="i property">PreReleaseLabel</a>;
+            <b>if</b> (<span class="r15 r">preReleaseLabel</span> != <b>null</b> &amp;&amp; <span class="r15 r">preReleaseLabel</span>.<span class="i">StartsWith</span>(<span class="s">&quot;daily&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// If the host is not connect to a network, skip the rest of the check.</span>
+            <b>if</b> (!<span class="i">NetworkInterface</span>.<span class="i">GetIsNetworkAvailable</span>())
+            {
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Create the update cache directory if it doesn&#39;t exists</span>
+            <b>if</b> (!<span class="i">Directory</span>.<span class="i">Exists</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>))
+            {
+                <span class="i">Directory</span>.<span class="i">CreateDirectory</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>);
+            }
+ 
+            <b>bool</b> <span id="r16 rd" class="r16 r">parseSuccess</span> = <a href="#b6298d85965cbdbe" class="i method">TryParseUpdateFile</a>(
+                <b>out string</b> <span id="r17 rd" class="r17 r">updateFilePath</span>,
+                <b>out</b> <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a> <span id="r18 rd" class="r18 r">lastUpdateVersion</span>,
+                <b>out</b> <span class="i">DateTime</span> <span id="r19 rd" class="r19 r">lastUpdateDate</span>);
+ 
+            <span class="i">DateTime</span> <span id="r20 rd" class="r20 r">today</span> = <span class="i">DateTime</span>.<span class="i">UtcNow</span>;
+            <b>if</b> (<span class="r16 r">parseSuccess</span> &amp;&amp; <span class="r17 r">updateFilePath</span> != <b>null</b> &amp;&amp; (<span class="r20 r">today</span> - <span class="r19 r">lastUpdateDate</span>).<span class="i">TotalDays</span> &lt; 7)
+            {
+                <span class="c">// There is an existing update file, and the last update was less than 1 week ago.</span>
+                <span class="c">// It&#39;s unlikely a new version is released within 1 week, so we can skip this check.</span>
+                <b>return</b>;
+            }
+ 
+            <span class="c">// Construct the sentinel file paths for today&#39;s check.</span>
+            <b>string</b> <span id="r21 rd" class="r21 r">todayDoneFileName</span> = <b>string</b>.<span class="i">Format</span>(
+                <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                <a href="#e942770ca5e4d0e8" class="i field">s_doneFileNameTemplate</a>,
+                <span class="r20 r">today</span>.<span class="i">Year</span>.<span class="i">ToString</span>(),
+                <span class="r20 r">today</span>.<span class="i">Month</span>.<span class="i">ToString</span>(),
+                <span class="r20 r">today</span>.<span class="i">Day</span>.<span class="i">ToString</span>());
+ 
+            <b>string</b> <span id="r22 rd" class="r22 r">todayDoneFilePath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>, <span class="r21 r">todayDoneFileName</span>);
+            <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r22 r">todayDoneFilePath</span>))
+            {
+                <span class="c">// A successful update check has been done today.</span>
+                <span class="c">// We can skip this update check.</span>
+                <b>return</b>;
+            }
+ 
+            <b>try</b>
+            {
+                <span class="c">// Use &#39;s_sentinelFileName&#39; as the file lock.</span>
+                <span class="c">// The update-check tasks started by every &#39;pwsh&#39; process of the same version will compete on holding this file.</span>
+                <b>string</b> <span id="r23 rd" class="r23 r">sentinelFilePath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>, <a href="#9e3353738fea33fc" class="i field">s_sentinelFileName</a>);
+                <b>using</b> (<b>new</b> <span class="i">FileStream</span>(<span class="r23 r">sentinelFilePath</span>, <span class="i">FileMode</span>.<span class="i">OpenOrCreate</span>, <span class="i">FileAccess</span>.<span class="i">Write</span>, <span class="i">FileShare</span>.<span class="i">None</span>, <span class="i">bufferSize</span>: 1, <span class="i">FileOptions</span>.<span class="i">DeleteOnClose</span>))
+                {
+                    <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r22 r">todayDoneFilePath</span>))
+                    {
+                        <span class="c">// After acquiring the file lock, it turns out a successful check has already been done for today.</span>
+                        <span class="c">// Then let&#39;s skip this update check.</span>
+                        <b>return</b>;
+                    }
+ 
+                    <span class="c">// Now it&#39;s guaranteed that this is the only process that reaches here.</span>
+                    <span class="c">// Clean up the old &#39;.done&#39; file, there should be only one of it.</span>
+                    <b>foreach</b> (<b>string</b> <span id="r24 rd" class="r24 r">oldFile</span> <b>in</b> <span class="i">Directory</span>.<span class="i">EnumerateFiles</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>, <a href="#5d58e4c8833c6234" class="i field">s_doneFileNamePattern</a>, <a href="#ea1148d8f944bc20" class="i field">s_enumOptions</a>))
+                    {
+                        <span class="i">File</span>.<span class="i">Delete</span>(<span class="r24 r">oldFile</span>);
+                    }
+ 
+                    <b>if</b> (!<span class="r16 r">parseSuccess</span>)
+                    {
+                        <span class="c">// The update file is corrupted, either because more than one update files were found unexpectedly,</span>
+                        <span class="c">// or because the update file name failed to be parsed into a release version and a publish date.</span>
+                        <span class="c">// This is **very unlikely** to happen unless the file is accidentally altered manually.</span>
+                        <span class="c">// We try to recover here by cleaning up all update files for the configured notification type.</span>
+                        <b>foreach</b> (<b>string</b> <span id="r25 rd" class="r25 r">file</span> <b>in</b> <span class="i">Directory</span>.<span class="i">EnumerateFiles</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>, <a href="#a918227de21ccb07" class="i field">s_updateFileNamePattern</a>, <a href="#ea1148d8f944bc20" class="i field">s_enumOptions</a>))
+                        {
+                            <span class="i">File</span>.<span class="i">Delete</span>(<span class="r25 r">file</span>);
+                        }
+                    }
+ 
+                    <span class="c">// Do the real update check:</span>
+                    <span class="c">//  - Send HTTP request to query for the new release/pre-release;</span>
+                    <span class="c">//  - If there is a valid new release that should be reported to the user,</span>
+                    <span class="c">//    create the file `update&lt;NotificationType&gt;_&lt;tag&gt;_&lt;publish-date&gt;` when no `update` file exists,</span>
+                    <span class="c">//    or rename the existing file to `update&lt;NotificationType&gt;_&lt;new-version&gt;_&lt;new-publish-date&gt;`.</span>
+                    <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a> <span id="r26 rd" class="r26 r">baselineVersion</span> = <span class="r18 r">lastUpdateVersion</span> ?? <a href="/System.Management.Automation/A.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<span class="i">PSCurrentVersion</span>;
+                    <a href="#bbdb912f3222fc65" class="t t">Release</a> <span id="r27 rd" class="r27 r">release</span> = <b>await</b> <a href="#aca21d96d80eef26" class="i method">QueryNewReleaseAsync</a>(<span class="r26 r">baselineVersion</span>);
+ 
+                    <b>if</b> (<span class="r27 r">release</span> != <b>null</b>)
+                    {
+                        <span class="c">// The date part of the string is &#39;YYYY-MM-DD&#39;.</span>
+                        <b>const int</b> <span id="r28 rd" class="r28 r">dateLength</span> = 10;
+                        <b>string</b> <span id="r29 rd" class="r29 r">newUpdateFileName</span> = <b>string</b>.<span class="i">Format</span>(
+                            <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                            <a href="#ad8e503f1c5ef0f8" class="i field">s_updateFileNameTemplate</a>,
+                            <span class="r27 r">release</span>.<a href="#9a150149ed510350" class="i property">TagName</a>,
+                            <span class="r27 r">release</span>.<a href="#2e5f476bb9c78bee" class="i property">PublishAt</a>.<span class="i">Substring</span>(0, <span class="r28 r">dateLength</span>));
+ 
+                        <b>string</b> <span id="r30 rd" class="r30 r">newUpdateFilePath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>, <span class="r29 r">newUpdateFileName</span>);
+ 
+                        <b>if</b> (<span class="r17 r">updateFilePath</span> == <b>null</b>)
+                        {
+                            <b>new</b> <span class="i">FileStream</span>(<span class="r30 r">newUpdateFilePath</span>, <span class="i">FileMode</span>.<span class="i">CreateNew</span>, <span class="i">FileAccess</span>.<span class="i">Write</span>, <span class="i">FileShare</span>.<span class="i">None</span>).<span class="i">Close</span>();
+                        }
+                        <b>else</b>
+                        {
+                            <span class="i">File</span>.<span class="i">Move</span>(<span class="r17 r">updateFilePath</span>, <span class="r30 r">newUpdateFilePath</span>);
+                        }
+                    }
+ 
+                    <span class="c">// Finally, create the `todayDoneFilePath` file as an indicator that a successful update check has finished today.</span>
+                    <b>new</b> <span class="i">FileStream</span>(<span class="r22 r">todayDoneFilePath</span>, <span class="i">FileMode</span>.<span class="i">CreateNew</span>, <span class="i">FileAccess</span>.<span class="i">Write</span>, <span class="i">FileShare</span>.<span class="i">None</span>).<span class="i">Close</span>();
+                }
+            }
+            <b>catch</b> (<span class="i">Exception</span>)
+            {
+                <span class="c">// There are 2 possible reason for the exception:</span>
+                <span class="c">// 1. An update check initiated from another `pwsh` process is in progress.</span>
+                <span class="c">//    It&#39;s OK to just return and let that update check to finish the work.</span>
+                <span class="c">// 2. The update check failed (ex. internet connectivity issue, GitHub service failure).</span>
+                <span class="c">//    It&#39;s OK to just return and let another `pwsh` do the check at later time.</span>
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check for the existence of the update file and parse the file name if it exists.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">updateFilePath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Get the exact update file path.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">lastUpdateVersion</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Get the version of the new release.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r4 r">lastUpdateDate</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Get the publish date of the new release.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> False, when</span>
+        <span class="c">///</span><span class="c">   1. found more than one update files that matched the pattern; OR</span>
+        <span class="c">///</span><span class="c">   2. found only one update file, but failed to parse its name for version and publish date.</span>
+        <span class="c">///</span><span class="c"> True, when</span>
+        <span class="c">///</span><span class="c">   1. no update file was found, namely no new updates yet;</span>
+        <span class="c">///</span><span class="c">   2. found only one update file, and succeeded to parse its name for version and publish date.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static bool</b> <a id="b6298d85965cbdbe" href="../../R/b6298d85965cbdbe.html" target="n" data-glyph="76,1" class="i method">TryParseUpdateFile</a>(
+            <b>out string</b> <span id="r2 rd" class="r2 r">updateFilePath</span>,
+            <b>out</b> <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a> <span id="r31 rd" class="r31 r">lastUpdateVersion</span>,
+            <b>out</b> <span class="i">DateTime</span> <span id="r4 rd" class="r4 r">lastUpdateDate</span>)
+        {
+            <span class="r2 r">updateFilePath</span> = <b>null</b>;
+            <span class="r31 r">lastUpdateVersion</span> = <b>null</b>;
+            <span class="r4 r">lastUpdateDate</span> = <b>default</b>;
+ 
+            <b>var</b> <span id="r32 rd" class="r32 r">files</span> = <span class="i">Directory</span>.<span class="i">EnumerateFiles</span>(<a href="#1dc71cc036ce4e0c" class="i field">s_cacheDirectory</a>, <a href="#a918227de21ccb07" class="i field">s_updateFileNamePattern</a>, <a href="#ea1148d8f944bc20" class="i field">s_enumOptions</a>);
+            <b>var</b> <span id="r33 rd" class="r33 r">enumerator</span> = <span class="r32 r">files</span>.<span class="i">GetEnumerator</span>();
+ 
+            <b>if</b> (!<span class="r33 r">enumerator</span>.<span class="i">MoveNext</span>())
+            {
+                <span class="c">// It&#39;s OK that an update file doesn&#39;t exist. This could happen when there is no new updates yet.</span>
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <span class="r2 r">updateFilePath</span> = <span class="r33 r">enumerator</span>.<span class="i">Current</span>;
+            <b>if</b> (<span class="r33 r">enumerator</span>.<span class="i">MoveNext</span>())
+            {
+                <span class="c">// More than 1 files were found that match the pattern. This is a corrupted state.</span>
+                <span class="c">// Theoretically, there should be only one update file at any point of time.</span>
+                <span class="r2 r">updateFilePath</span> = <b>null</b>;
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <span class="c">// OK, only found one update file for the configured notification type, which is expected.</span>
+            <span class="c">// Now let&#39;s parse the file name.</span>
+            <b>string</b> <span id="r34 rd" class="r34 r">updateFileName</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r2 r">updateFilePath</span>);
+            <b>int</b> <span id="r35 rd" class="r35 r">dateStartIndex</span> = <span class="r34 r">updateFileName</span>.<span class="i">LastIndexOf</span>(<span class="s">&#39;_&#39;</span>) + 1;
+ 
+            <b>if</b> (!<span class="i">DateTime</span>.<span class="i">TryParse</span>(
+                    <span class="r34 r">updateFileName</span>.<span class="i">AsSpan</span>(<span class="r35 r">dateStartIndex</span>),
+                    <span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                    <span class="i">DateTimeStyles</span>.<span class="i">AssumeLocal</span>,
+                    <b>out</b> <span class="r4 r">lastUpdateDate</span>))
+            {
+                <span class="r2 r">updateFilePath</span> = <b>null</b>;
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>int</b> <span id="r36 rd" class="r36 r">versionStartIndex</span> = <span class="r34 r">updateFileName</span>.<span class="i">IndexOf</span>(<span class="s">&#39;_&#39;</span>) + 2;
+            <b>int</b> <span id="r37 rd" class="r37 r">versionLength</span> = <span class="r35 r">dateStartIndex</span> - <span class="r36 r">versionStartIndex</span> - 1;
+            <b>string</b> <span id="r38 rd" class="r38 r">versionString</span> = <span class="r34 r">updateFileName</span>.<span class="i">Substring</span>(<span class="r36 r">versionStartIndex</span>, <span class="r37 r">versionLength</span>);
+ 
+            <b>if</b> (<a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a>.<span class="i">TryParse</span>(<span class="r38 r">versionString</span>, <b>out</b> <span class="r31 r">lastUpdateVersion</span>))
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <span class="r2 r">updateFilePath</span> = <b>null</b>;
+            <span class="r4 r">lastUpdateDate</span> = <b>default</b>;
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>private static async</b> <span class="i">Task</span>&lt;<a href="#bbdb912f3222fc65" class="t t">Release</a>&gt; <a id="aca21d96d80eef26" href="../../R/aca21d96d80eef26.html" target="n" data-glyph="76,1" class="i method">QueryNewReleaseAsync</a>(<a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a> <span id="r39 rd" class="r39 r">baselineVersion</span>)
+        {
+            <b>bool</b> <span id="r40 rd" class="r40 r">isStableRelease</span> = <b>string</b>.<span class="i">IsNullOrEmpty</span>(<a href="/System.Management.Automation/A.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<span class="i">PSCurrentVersion</span>.<a href="/System.Management.Automation/A.html#c0ce0234abbc6a8e" class="i property">PreReleaseLabel</a>);
+            <b>string</b>[] <span id="r41 rd" class="r41 r">queryUris</span> = <a href="#d9cf3826d5f5e1d4" class="i field">s_notificationType</a> <b>switch</b>
+            {
+                <a href="#f0b61f4f876615c0" class="t t">NotificationType</a>.<a href="#70fc83e1f88f3e93" class="i field">LTS</a> =&gt; <b>new</b>[] { <a href="#4220910ccbd1ce3d" class="i field">LTSBuildInfoURL</a> },
+                <a href="#f0b61f4f876615c0" class="t t">NotificationType</a>.<a href="#f9b28f0f7245ba4d" class="i field">Default</a> =&gt; <span class="r40 r">isStableRelease</span>
+                    ? <b>new</b>[] { <a href="#2e18db1236aca288" class="i field">StableBuildInfoURL</a> }
+                    : <b>new</b>[] { <a href="#2e18db1236aca288" class="i field">StableBuildInfoURL</a>, <a href="#fa93836b23885b49" class="i field">PreviewBuildInfoURL</a> },
+                <b>_</b> =&gt; <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>string</b>&gt;()
+            };
+ 
+            <b>using</b> <b>var</b> <span id="r42 rd" class="r42 r">client</span> = <b>new</b> <span class="i">HttpClient</span>();
+ 
+            <b>string</b> <span id="r43 rd" class="r43 r">userAgent</span> = <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="s">&quot;PowerShell {0}&quot;</span>, <a href="/System.Management.Automation/A.html#be287f9ea52b8d2f" class="t t">PSVersionInfo</a>.<span class="i">GitCommitId</span>);
+            <span class="r42 r">client</span>.<span class="i">DefaultRequestHeaders</span>.<span class="i">Add</span>(<span class="s">&quot;User-Agent&quot;</span>, <span class="r43 r">userAgent</span>);
+            <span class="r42 r">client</span>.<span class="i">DefaultRequestHeaders</span>.<span class="i">Accept</span>.<span class="i">Add</span>(<b>new</b> <span class="i">MediaTypeWithQualityHeaderValue</span>(<span class="s">&quot;application/json&quot;</span>));
+ 
+            <a href="#bbdb912f3222fc65" class="t t">Release</a> <span id="r44 rd" class="r44 r">releaseToReturn</span> = <b>null</b>;
+            <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a> <span id="r45 rd" class="r45 r">highestVersion</span> = <span class="r39 r">baselineVersion</span>;
+            <b>var</b> <span id="r46 rd" class="r46 r">settings</span> = <b>new</b> <span class="i">JsonSerializerSettings</span>() { <span class="i">DateParseHandling</span> = <span class="i">DateParseHandling</span>.<span class="i">None</span> };
+            <b>var</b> <span id="r47 rd" class="r47 r">serializer</span> = <span class="i">JsonSerializer</span>.<span class="i">Create</span>(<span class="r46 r">settings</span>);
+ 
+            <b>foreach</b> (<b>string</b> <span id="r48 rd" class="r48 r">queryUri</span> <b>in</b> <span class="r41 r">queryUris</span>)
+            {
+                <span class="c">// Query the GitHub Rest API and throw if the query fails.</span>
+                <span class="i">HttpResponseMessage</span> <span id="r49 rd" class="r49 r">response</span> = <b>await</b> <span class="r42 r">client</span>.<span class="i">GetAsync</span>(<span class="r48 r">queryUri</span>);
+                <span class="r49 r">response</span>.<span class="i">EnsureSuccessStatusCode</span>();
+ 
+                <b>using</b> <b>var</b> <span id="r50 rd" class="r50 r">stream</span> = <b>await</b> <span class="r49 r">response</span>.<span class="i">Content</span>.<span class="i">ReadAsStreamAsync</span>();
+                <b>using</b> <b>var</b> <span id="r51 rd" class="r51 r">reader</span> = <b>new</b> <span class="i">StreamReader</span>(<span class="r50 r">stream</span>);
+                <b>using</b> <b>var</b> <span id="r52 rd" class="r52 r">jsonReader</span> = <b>new</b> <span class="i">JsonTextReader</span>(<span class="r51 r">reader</span>);
+ 
+                <span class="i">JObject</span> <span id="r53 rd" class="r53 r">release</span> = <span class="r47 r">serializer</span>.<span class="i">Deserialize</span>&lt;<span class="i">JObject</span>&gt;(<span class="r52 r">jsonReader</span>);
+                <b>var</b> <span id="r54 rd" class="r54 r">tagName</span> = <span class="r53 r">release</span>[<span class="s">&quot;ReleaseTag&quot;</span>].<span class="i">ToString</span>();
+                <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="k">var</a> <span id="r55 rd" class="r55 r">version</span> = <a href="/System.Management.Automation/A.html#a57a3e81874a26c3" class="t t">SemanticVersion</a>.<span class="i">Parse</span>(<span class="r54 r">tagName</span>.<span class="i">Substring</span>(1));
+ 
+                <b>if</b> (<span class="r55 r">version</span> &gt; <span class="r45 r">highestVersion</span>)
+                {
+                    <span class="r45 r">highestVersion</span> = <span class="r55 r">version</span>;
+                    <b>var</b> <span id="r56 rd" class="r56 r">publishAt</span> = <span class="r53 r">release</span>[<span class="s">&quot;ReleaseDate&quot;</span>].<span class="i">ToString</span>();
+                    <span class="r44 r">releaseToReturn</span> = <b>new</b> <span class="t">Release</span>(<span class="r56 r">publishAt</span>, <span class="r54 r">tagName</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r44 r">releaseToReturn</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the notification type setting.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="#f0b61f4f876615c0" class="t t">NotificationType</a> <a id="fa1e0d14ebc7047b" href="../../R/fa1e0d14ebc7047b.html" target="n" data-glyph="76,1" class="i method">GetNotificationType</a>()
+        {
+            <b>string</b> <span id="r57 rd" class="r57 r">str</span> = <span class="i">Environment</span>.<span class="i">GetEnvironmentVariable</span>(<a href="#f2da19ead5d0ccce" class="i field">UpdateCheckEnvVar</a>);
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r57 r">str</span>))
+            {
+                <b>return</b> <a href="#f0b61f4f876615c0" class="t t">NotificationType</a>.<a href="#f9b28f0f7245ba4d" class="i field">Default</a>;
+            }
+ 
+            <b>if</b> (<span class="i">Enum</span>.<span class="i">TryParse</span>(<span class="r57 r">str</span>, <span class="i">ignoreCase</span>: <b>true</b>, <b>out</b> <a href="#f0b61f4f876615c0" class="t t">NotificationType</a> <span id="r58 rd" class="r58 r">type</span>))
+            {
+                <b>return</b> <span class="r58 r">type</span>;
+            }
+ 
+            <b>return</b> <a href="#f0b61f4f876615c0" class="t t">NotificationType</a>.<a href="#f9b28f0f7245ba4d" class="i field">Default</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Notification type that can be configured.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private enum</b> <a id="f0b61f4f876615c0" href="../../R/f0b61f4f876615c0.html" target="n" data-glyph="22,1" class="t t"><span id="4755e69a9a4dfa91">NotificationType</span></a>
+        {
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Turn off the update notification.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <a id="b3919b8beda5f9a3" href="../../R/b3919b8beda5f9a3.html" target="n" data-glyph="24,2" class="i field">Off</a> = 0,
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Give you the default behaviors:</span>
+            <span class="c">///</span><span class="c">  - the preview version &#39;pwsh&#39; checks for the new preview version and the new GA version.</span>
+            <span class="c">///</span><span class="c">  - the GA version &#39;pwsh&#39; checks for the new GA version only.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <a id="f9b28f0f7245ba4d" href="../../R/f9b28f0f7245ba4d.html" target="n" data-glyph="24,2" class="i field">Default</a> = 1,
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Both preview and GA version &#39;pwsh&#39; checks for the new LTS version only.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <a id="70fc83e1f88f3e93" href="../../R/70fc83e1f88f3e93.html" target="n" data-glyph="24,2" class="i field">LTS</a> = 2
+        }
+ 
+        <b>private sealed class</b> <a id="bbdb912f3222fc65" href="../../R/bbdb912f3222fc65.html" target="n" data-glyph="4,1" class="t t">Release</a>
+        {
+            <b>internal</b> <a id="452d74d8f8c5c68e" href="../../R/../../0000000000.html" target="n" data-glyph="74,2" class="t constructor">Release</a>(<b>string</b> <span id="r59 rd" class="r59 r">publishAt</span>, <b>string</b> <span id="r60 rd" class="r60 r">tagName</span>)
+            {
+                <a href="#2e5f476bb9c78bee" class="i property">PublishAt</a> = <span class="r59 r">publishAt</span>;
+                <a href="#9a150149ed510350" class="i property">TagName</a> = <span class="r60 r">tagName</span>;
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> The datetime stamp is in UTC. For example: 2019-03-28T18:42:02Z.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>internal string</b> <a id="2e5f476bb9c78bee" href="../../R/2e5f476bb9c78bee.html" target="n" data-glyph="104,2" class="i property">PublishAt</a> { <b>get</b>; }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> The release tag name.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>internal string</b> <a id="9a150149ed510350" href="../../R/9a150149ed510350.html" target="n" data-glyph="104,2" class="i property">TagName</a> { <b>get</b>; }
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

@@ -1,0 +1,574 @@
+﻿<!DOCTYPE html>
+<html><head><title>DisconnectPSSession.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(565);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/commands/DisconnectPSSession.cs" target="_top">engine\remoting\commands\DisconnectPSSession.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This cmdlet disconnects PS sessions (RemoteRunspaces) that are in the Opened state</span>
+    <span class="c">///</span><span class="c"> and returns the PS session objects in the Disconnected state.  While the PS</span>
+    <span class="c">///</span><span class="c"> sessions are in the disconnected state no commands can be invoked on them and</span>
+    <span class="c">///</span><span class="c"> any existing remote running commands will not return any data.</span>
+    <span class="c">///</span><span class="c"> The PS sessions can be reconnected by using the Connect-PSSession cmdlet.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> The cmdlet can be used in the following ways:</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Disconnect a PS session object:</span>
+    <span class="c">///</span><span class="c"> &gt; $session = New-PSSession serverName</span>
+    <span class="c">///</span><span class="c"> &gt; Disconnect-PSSession $session</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Disconnect a PS session by name:</span>
+    <span class="c">///</span><span class="c"> &gt; Disconnect-PSSession -Name $session.Name</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Disconnect a PS session by Id:</span>
+    <span class="c">///</span><span class="c"> &gt; Disconnect-PSSession -Id $session.Id</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Disconnect a collection of PS sessions:</span>
+    <span class="c">///</span><span class="c"> &gt; Get-PSSession | Disconnect-PSSession.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.PowerShell&quot;</span>, <span class="s">&quot;PS1012:CallShouldProcessOnlyIfDeclaringSupport&quot;</span>)]
+    [<span class="i">Cmdlet</span>(<a href="../../../utils/Verbs.cs.html#4b3c39661547d6b5" class="t t">VerbsCommunications</a>.<a href="../../../utils/Verbs.cs.html#49536ee9f6dd08e9" class="i field">Disconnect</a>, <span class="s">&quot;PSSession&quot;</span>, <span class="i">SupportsShouldProcess</span> = <b>true</b>, <span class="i">DefaultParameterSetName</span> = <a href="#ba1ee4b9df5c537f" class="t t">DisconnectPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>,
+        <span class="i">HelpUri</span> = <span class="s">&quot;https://go.microsoft.com/fwlink/?LinkID=2096576&quot;</span>, <span class="i">RemotingCapability</span> = <a href="../common/misc.cs.html#59e8ed9184274cab" class="t t">RemotingCapability</a>.<a href="../common/misc.cs.html#24fda4b6c5a6ee93" class="i field">OwnedByCommand</a>)]
+    [<span class="i">OutputType</span>(<b>typeof</b>(<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>))]
+    <b>public class</b> <a id="ba1ee4b9df5c537f" href="../../../R/ba1ee4b9df5c537f.html" target="n" data-glyph="0,0" class="t t"><span id="9acf2e6ce06fdfe0">DisconnectPSSessionCommand</span></a> : <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>, <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Parameters
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The PSSession object or objects to be disconnected.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#19ccfeb1cdbdb967" class="i property">Position</a> = 0,
+                   <a href="../../Attributes.cs.html#d5ad471518092731" class="i property">Mandatory</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#aded474eaec9cde8" class="i property">ValueFromPipelineByPropertyName</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#4afbf5921ff6e967" class="i property">ValueFromPipeline</a> = <b>true</b>,
+                   <a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#ba1ee4b9df5c537f" class="t t">DisconnectPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)]
+        [<span class="i">ValidateNotNullOrEmpty</span>]
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1819:PropertiesShouldNotReturnArrays&quot;</span>)]
+        <b>public</b> <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>[] <a id="688f1fbd3094e0c3" href="../../../R/688f1fbd3094e0c3.html" target="n" data-glyph="102,1" class="i property">Session</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Idle Timeout session option in seconds.  Used in this cmdlet to set server disconnect idletimeout option.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#ba1ee4b9df5c537f" class="t t">DisconnectPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#5ab4d540bcda3887" class="i field">NameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#2b4dfd6d547b0ef7" class="i field">IdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#bfd5cf9ba9156dcf" class="i field">InstanceIdParameterSet</a>)]
+        [<span class="i">ValidateRange</span>(0, <b>int</b>.<span class="i">MaxValue</span>)]
+        <b>public int</b> <a id="2e710c900067a16d" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">IdleTimeoutSec</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#ba1ee4b9df5c537f" class="k">this</a>.<a href="#3e31a17b4ba79062" class="i property">PSSessionOption</a>.<a href="PSRemotingCmdlet.cs.html#42111d69f31e90b0" class="i property">IdleTimeout</a>.<span class="i">Seconds</span>; }
+ 
+            <b>set</b> { <a href="#ba1ee4b9df5c537f" class="k">this</a>.<a href="#3e31a17b4ba79062" class="i property">PSSessionOption</a>.<a href="PSRemotingCmdlet.cs.html#42111d69f31e90b0" class="i property">IdleTimeout</a> = <span class="i">TimeSpan</span>.<span class="i">FromSeconds</span>(<b>value</b>); }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Output buffering mode session option.  Used in this cmdlet to set server disconnect OutputBufferingMode option.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#ba1ee4b9df5c537f" class="t t">DisconnectPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#5ab4d540bcda3887" class="i field">NameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#2b4dfd6d547b0ef7" class="i field">IdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#bfd5cf9ba9156dcf" class="i field">InstanceIdParameterSet</a>)]
+        <b>public</b> <a href="../common/RunspaceConnectionInfo.cs.html#9cb40ac520a09a1d" class="t t">OutputBufferingMode</a> <a id="6dd9c14caa67690e" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">OutputBufferingMode</a>
+        {
+            <b>get</b> { <b>return</b> <a href="#ba1ee4b9df5c537f" class="k">this</a>.<a href="#3e31a17b4ba79062" class="i property">PSSessionOption</a>.<a href="PSRemotingCmdlet.cs.html#0a36421122250739" class="i property">OutputBufferingMode</a>; }
+ 
+            <b>set</b> { <a href="#ba1ee4b9df5c537f" class="k">this</a>.<a href="#3e31a17b4ba79062" class="i property">PSSessionOption</a>.<a href="PSRemotingCmdlet.cs.html#0a36421122250739" class="i property">OutputBufferingMode</a> = <b>value</b>; }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Allows the user of the cmdlet to specify a throttling value</span>
+        <span class="c">///</span><span class="c"> for throttling the number of remote operations that can</span>
+        <span class="c">///</span><span class="c"> be executed simultaneously.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="#ba1ee4b9df5c537f" class="t t">DisconnectPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#5ab4d540bcda3887" class="i field">NameParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#2b4dfd6d547b0ef7" class="i field">IdParameterSet</a>)]
+        [<span class="i">Parameter</span>(<a href="../../Attributes.cs.html#91bee819daab0925" class="i property">ParameterSetName</a> = <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="t t">PSRunspaceCmdlet</a>.<a href="PSRemotingCmdlet.cs.html#bfd5cf9ba9156dcf" class="i field">InstanceIdParameterSet</a>)]
+        <b>public int</b> <a id="f37916349dc0167b" href="../../../R/f37916349dc0167b.html" target="n" data-glyph="102,1" class="i property">ThrottleLimit</a> { <b>get</b>; <b>set</b>; } = 0;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Disconnect-PSSession does not support ComputerName parameter set.</span>
+        <span class="c">///</span><span class="c"> This may change for later versions.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override string</b>[] <a id="95baf9c26f70e337" href="../../../R/95baf9c26f70e337.html" target="n" data-glyph="102,1" class="i property">ComputerName</a> { <b>get</b>; <b>set</b>; }
+ 
+        <b>private</b> <a href="PSRemotingCmdlet.cs.html#8626ee928362b305" class="t t">PSSessionOption</a> <a id="3e31a17b4ba79062" href="../../../R/3e31a17b4ba79062.html" target="n" data-glyph="106,1" class="i property">PSSessionOption</a>
+        {
+            <b>get</b>
+            {
+                <span class="c">// no need to lock as the cmdlet parameters will not be assigned</span>
+                <span class="c">// from multiple threads.</span>
+                <b>return</b> <a href="#62f0933c9c000743" class="i field">_sessionOption</a> ??= <b>new</b> <a href="PSRemotingCmdlet.cs.html#90c789cd47314cbe" class="t constructor">PSSessionOption</a>();
+            }
+        }
+ 
+        <b>private</b> <a href="PSRemotingCmdlet.cs.html#8626ee928362b305" class="t t">PSSessionOption</a> <a id="62f0933c9c000743" href="../../../R/62f0933c9c000743.html" target="n" data-glyph="46,1" class="i field">_sessionOption</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Overriding to suppress this parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override string</b>[] <a id="3b5e7a4ab813fe71" href="../../../R/3b5e7a4ab813fe71.html" target="n" data-glyph="102,1" class="i property">ContainerId</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Overriding to suppress this parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override</b> <span class="i">Guid</span>[] <a id="7d790fc520c26663" href="../../../R/7d790fc520c26663.html" target="n" data-glyph="102,1" class="i property">VMId</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Overriding to suppress this parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override string</b>[] <a id="4b25ff83dca6de66" href="../../../R/4b25ff83dca6de66.html" target="n" data-glyph="102,1" class="i property">VMName</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Cmdlet Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Set up the ThrottleManager for runspace disconnect processing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="7aa1b70d279bc5a7" href="../../../R/7aa1b70d279bc5a7.html" target="n" data-glyph="75,1" class="i method">BeginProcessing</a>()
+        {
+            <a href="PSRemotingCmdlet.cs.html#9f3c8073162f1fd6" class="k">base</a>.<a href="PSRemotingCmdlet.cs.html#3da6242f8109ce30" class="i method">BeginProcessing</a>();
+ 
+            <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#c88c6759bac73d6d" class="i property">ThrottleLimit</a> = <a href="#f37916349dc0167b" class="i property">ThrottleLimit</a>;
+            <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#dd885eab312c9a19" class="i">ThrottleComplete</a> += <span class="i">HandleThrottleDisconnectComplete</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Perform runspace disconnect processing on all input.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="d0d8558245c40c50" href="../../../R/d0d8558245c40c50.html" target="n" data-glyph="75,1" class="i method">ProcessRecord</a>()
+        {
+            <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>&gt; <span id="r0 rd" class="r0 r">psSessions</span>;
+            <span class="i">List</span>&lt;<a href="../common/throttlemanager.cs.html#1164666ea3964901" class="t t">IThrottleOperation</a>&gt; <span id="r1 rd" class="r1 r">disconnectOperations</span> = <b>new</b> <span class="i">List</span>&lt;<a href="../common/throttlemanager.cs.html#1164666ea3964901" class="t t">IThrottleOperation</a>&gt;();
+ 
+            <b>try</b>
+            {
+                <span class="c">// Get all remote runspaces to disconnect.</span>
+                <b>if</b> (<a href="../../MshCmdlet.cs.html#f1ecb7c30328d049" class="i property">ParameterSetName</a> == <a href="#ba1ee4b9df5c537f" class="t t">DisconnectPSSessionCommand</a>.<a href="PSRemotingCmdlet.cs.html#1e3c25790a1dc5ac" class="i field">SessionParameterSet</a>)
+                {
+                    <b>if</b> (<a href="#688f1fbd3094e0c3" class="i property">Session</a> == <b>null</b> || <a href="#688f1fbd3094e0c3" class="i property">Session</a>.<span class="i">Length</span> == 0)
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <span class="r0 r">psSessions</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>&gt;();
+                    <b>foreach</b> (<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r2 rd" class="r2 r">psSession</span> <b>in</b> <a href="#688f1fbd3094e0c3" class="i property">Session</a>)
+                    {
+                        <span class="r0 r">psSessions</span>.<span class="i">Add</span>(<span class="r2 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#efd181c61ecd05ff" class="i property">InstanceId</a>, <span class="r2 r">psSession</span>);
+                    }
+                }
+                <b>else</b>
+                {
+                    <span class="r0 r">psSessions</span> = <a href="PSRemotingCmdlet.cs.html#38d17b882da28e38" class="i method">GetMatchingRunspaces</a>(<b>false</b>, <b>true</b>);
+                }
+ 
+                <span class="c">// Look for local sessions that have the EnableNetworkAccess property set and</span>
+                <span class="c">// return a string containing all of the session names.  Emit a warning for</span>
+                <span class="c">// these sessions.</span>
+                <b>string</b> <span id="r3 rd" class="r3 r">cnNames</span> = <a href="#7808f1cf2d67b7c1" class="i method">GetLocalhostWithNetworkAccessEnabled</a>(<span class="r0 r">psSessions</span>);
+                <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r3 r">cnNames</span>))
+                {
+                    <a href="../../cmdlet.cs.html#dda5a07d1a8a6cba" class="i method">WriteWarning</a>(
+                        <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">EnableNetworkAccessWarning</span>, <span class="r3 r">cnNames</span>));
+                }
+ 
+                <span class="c">// Create a disconnect operation for each runspace to disconnect.</span>
+                <b>foreach</b> (<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r4 rd" class="r4 r">psSession</span> <b>in</b> <span class="r0 r">psSessions</span>.<span class="i">Values</span>)
+                {
+                    <b>if</b> (<a href="../../cmdlet.cs.html#5f125d2ab6d0970d" class="i method">ShouldProcess</a>(<span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#dcc034e330dc7781" class="i property">Name</a>, <a href="../../../utils/Verbs.cs.html#4b3c39661547d6b5" class="t t">VerbsCommunications</a>.<a href="../../../utils/Verbs.cs.html#49536ee9f6dd08e9" class="i field">Disconnect</a>))
+                    {
+                        <span class="c">// PS session disconnection is not supported for VM/Container sessions.</span>
+                        <b>if</b> (<span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#37303737eaf45092" class="i property">ComputerType</a> != <a href="../client/remoterunspaceinfo.cs.html#01e02e9170262f80" class="t t">TargetMachineType</a>.<a href="../client/remoterunspaceinfo.cs.html#5d3982d1dfc3da60" class="i field">RemoteMachine</a>)
+                        {
+                            <span class="c">// Write error record.</span>
+                            <b>string</b> <span id="r5 rd" class="r5 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RunspaceCannotBeDisconnectedForVMContainerSession</span>,
+                                <span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#dcc034e330dc7781" class="i property">Name</a>, <span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#4e8388b3861bf08b" class="i property">ComputerName</a>, <span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#37303737eaf45092" class="i property">ComputerType</a>);
+                            <span class="i">Exception</span> <span id="r6 rd" class="r6 r">reason</span> = <b>new</b> <a href="../../../utils/MshNotSupportedException.cs.html#021b4370ebdc2266" class="t constructor">PSNotSupportedException</a>(<span class="r5 r">msg</span>);
+                            <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r7 rd" class="r7 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r6 r">reason</span>, <span class="s">&quot;CannotDisconnectVMContainerSession&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <span class="r4 r">psSession</span>);
+                            <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r7 r">errorRecord</span>);
+                            <b>continue</b>;
+                        }
+ 
+                        <span class="c">// Can only disconnect an Opened runspace.</span>
+                        <b>if</b> (<span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#01b12fbdab6c561a" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#9a99efb0eaa3c3db" class="i field">Opened</a>)
+                        {
+                            <span class="c">// Update the connectionInfo object with passed in session options.</span>
+                            <b>if</b> (<a href="#62f0933c9c000743" class="i field">_sessionOption</a> != <b>null</b>)
+                            {
+                                <span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#7ff4c79fcb624bf1" class="i property">ConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#3dbde5e0af345257" class="i method">SetSessionOptions</a>(<a href="#62f0933c9c000743" class="i field">_sessionOption</a>);
+                            }
+ 
+                            <span class="c">// Validate the ConnectionInfo IdleTimeout value against the MaxIdleTimeout</span>
+                            <span class="c">// value returned by the server and the hard coded minimum allowed value.</span>
+                            <b>if</b> (!<a href="#ef270de6f014dad9" class="i method">ValidateIdleTimeout</a>(<span class="r4 r">psSession</span>))
+                            {
+                                <b>continue</b>;
+                            }
+ 
+                            <a href="#1ebb55b19d7914c1" class="t t">DisconnectRunspaceOperation</a> <span id="r8 rd" class="r8 r">disconnectOperation</span> = <b>new</b> <a href="#26962443ef36c8e7" class="t constructor">DisconnectRunspaceOperation</a>(<span class="r4 r">psSession</span>, <a href="#2ba2fd781e061059" class="i field">_stream</a>);
+                            <span class="r1 r">disconnectOperations</span>.<span class="i">Add</span>(<span class="r8 r">disconnectOperation</span>);
+                        }
+                        <b>else</b> <b>if</b> (<span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#01b12fbdab6c561a" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> != <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#0a8fc62a22d129a1" class="i field">Disconnected</a>)
+                        {
+                            <span class="c">// Write error record.</span>
+                            <b>string</b> <span id="r9 rd" class="r9 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RunspaceCannotBeDisconnected</span>, <span class="r4 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#dcc034e330dc7781" class="i property">Name</a>);
+                            <span class="i">Exception</span> <span id="r10 rd" class="r10 r">reason</span> = <b>new</b> <a href="../../../utils/RuntimeException.cs.html#e4538a388d78c143" class="t constructor">RuntimeException</a>(<span class="r9 r">msg</span>);
+                            <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r11 rd" class="r11 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r10 r">reason</span>, <span class="s">&quot;CannotDisconnectSessionWhenNotOpened&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <span class="r4 r">psSession</span>);
+                            <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r11 r">errorRecord</span>);
+                        }
+                        <b>else</b>
+                        {
+                            <span class="c">// Session is already disconnected.  Write to output.</span>
+                            <a href="../../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<span class="r4 r">psSession</span>);
+                        }
+                    }
+                }
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a>)
+            {
+                <span class="c">// Allow cmdlet to end and then re-throw exception.</span>
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Set</span>();
+                <b>throw</b>;
+            }
+            <b>catch</b> (<a href="../common/remotingexceptions.cs.html#0bb8687f97d91059" class="t t">PSRemotingTransportException</a>)
+            {
+                <span class="c">// Allow cmdlet to end and then re-throw exception.</span>
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Set</span>();
+                <b>throw</b>;
+            }
+            <b>catch</b> (<a href="../../NativeCommandProcessor.cs.html#d56edc1842249736" class="t t">RemoteException</a>)
+            {
+                <span class="c">// Allow cmdlet to end and then re-throw exception.</span>
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Set</span>();
+                <b>throw</b>;
+            }
+            <b>catch</b> (<a href="../../hostifaces/Connection.cs.html#340ccbbd1c6e8b87" class="t t">InvalidRunspaceStateException</a>)
+            {
+                <span class="c">// Allow cmdlet to end and then re-throw exception.</span>
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Set</span>();
+                <b>throw</b>;
+            }
+ 
+            <b>if</b> (<span class="r1 r">disconnectOperations</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <span class="c">// Make sure operations are not set as complete while processing input.</span>
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Reset</span>();
+ 
+                <span class="c">// Submit list of disconnect operations.</span>
+                <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#ee8f2ac038103ebc" class="i method">SubmitOperations</a>(<span class="r1 r">disconnectOperations</span>);
+ 
+                <span class="c">// Write any output now.</span>
+                <span class="i">Collection</span>&lt;<b>object</b>&gt; <span id="r12 rd" class="r12 r">streamObjects</span> = <a href="#2ba2fd781e061059" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#abc89c235e72527c" class="i property">ObjectReader</a>.<a href="../../../utils/IObjectReader.cs.html#eb2b4dcc329feb84" class="i method">NonBlockingRead</a>();
+                <b>foreach</b> (<b>object</b> <span id="r13 rd" class="r13 r">streamObject</span> <b>in</b> <span class="r12 r">streamObjects</span>)
+                {
+                    <a href="PSRemotingCmdlet.cs.html#8c7d6343604dfd87" class="i method">WriteStreamObject</a>((<span class="i">Action</span>&lt;<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt;)<span class="r13 r">streamObject</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> End processing clean up.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="39d0437bddf59a72" href="../../../R/39d0437bddf59a72.html" target="n" data-glyph="75,1" class="i method">EndProcessing</a>()
+        {
+            <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#75a1eec170a5d6bc" class="i method">EndSubmitOperations</a>();
+ 
+            <span class="c">// Wait for all disconnect operations to complete.</span>
+            <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">WaitOne</span>();
+ 
+            <span class="c">// Read all objects in the stream pipeline.</span>
+            <b>while</b> (!<a href="#2ba2fd781e061059" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#abc89c235e72527c" class="i property">ObjectReader</a>.<a href="../../../utils/IObjectReader.cs.html#427c991c7263cfda" class="i property">EndOfPipeline</a>)
+            {
+                <b>object</b> <span id="r14 rd" class="r14 r">streamObject</span> = <a href="#2ba2fd781e061059" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#abc89c235e72527c" class="i property">ObjectReader</a>.<a href="../../../utils/IObjectReader.cs.html#44674511beae23a4" class="i method">Read</a>();
+                <a href="PSRemotingCmdlet.cs.html#8c7d6343604dfd87" class="i method">WriteStreamObject</a>((<span class="i">Action</span>&lt;<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt;)<span class="r14 r">streamObject</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> User has signaled a stop for this cmdlet.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected override void</b> <a id="6e25f07481690404" href="../../../R/6e25f07481690404.html" target="n" data-glyph="75,1" class="i method">StopProcessing</a>()
+        {
+            <span class="c">// Close the output stream for any further writes.</span>
+            <a href="#2ba2fd781e061059" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<a href="../../../utils/IObjectWriter.cs.html#2c9b22a04af963c5" class="i method">Close</a>();
+ 
+            <span class="c">// Signal the ThrottleManager to stop any further processing</span>
+            <span class="c">// of PSSessions.</span>
+            <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#255a5e90af99543c" class="i method">StopAllOperations</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Methods
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Handles the connect throttling complete event from the ThrottleManager.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r15 r">sender</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Sender.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r16 r">eventArgs</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">EventArgs.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="2f2193e9dbbc6316" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">HandleThrottleDisconnectComplete</a>(<b>object</b> <span id="r15 rd" class="r15 r">sender</span>, <span class="i">EventArgs</span> <span id="r16 rd" class="r16 r">eventArgs</span>)
+        {
+            <a href="#2ba2fd781e061059" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<a href="../../../utils/IObjectWriter.cs.html#2c9b22a04af963c5" class="i method">Close</a>();
+            <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Set</span>();
+        }
+ 
+        <b>private bool</b> <a id="ef270de6f014dad9" href="../../../R/ef270de6f014dad9.html" target="n" data-glyph="76,1" class="i method">ValidateIdleTimeout</a>(<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r17 rd" class="r17 r">session</span>)
+        {
+            <b>int</b> <span id="r18 rd" class="r18 r">idleTimeout</span> = <span class="r17 r">session</span>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#7ff4c79fcb624bf1" class="i property">ConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#0c117c8cb5b1de8b" class="i property">IdleTimeout</a>;
+            <b>int</b> <span id="r19 rd" class="r19 r">maxIdleTimeout</span> = <span class="r17 r">session</span>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#7ff4c79fcb624bf1" class="i property">ConnectionInfo</a>.<a href="../common/RunspaceConnectionInfo.cs.html#8f5fff031b021f8b" class="i property">MaxIdleTimeout</a>;
+            <b>const int</b> <span id="r20 rd" class="r20 r">minIdleTimeout</span> = <a href="../fanin/BaseTransportManager.cs.html#9ccd7ea4a824f9d8" class="t t">BaseTransportManager</a>.<a href="../fanin/BaseTransportManager.cs.html#d8495a878f117cdd" class="i field">MinimumIdleTimeout</a>;
+ 
+            <b>if</b> (<span class="r18 r">idleTimeout</span> != <a href="../fanin/BaseTransportManager.cs.html#9ccd7ea4a824f9d8" class="t t">BaseTransportManager</a>.<a href="../fanin/BaseTransportManager.cs.html#1aeb21f2c249b1c1" class="i field">UseServerDefaultIdleTimeout</a> &amp;&amp;
+                (<span class="r18 r">idleTimeout</span> &gt; <span class="r19 r">maxIdleTimeout</span> || <span class="r18 r">idleTimeout</span> &lt; <span class="r20 r">minIdleTimeout</span>))
+            {
+                <b>string</b> <span id="r21 rd" class="r21 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">CannotDisconnectSessionWithInvalidIdleTimeout</span>,
+                    <span class="r17 r">session</span>.<a href="../client/remoterunspaceinfo.cs.html#dcc034e330dc7781" class="i property">Name</a>, <span class="r18 r">idleTimeout</span> / 1000, <span class="r19 r">maxIdleTimeout</span> / 1000, <span class="r20 r">minIdleTimeout</span> / 1000);
+                <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r22 rd" class="r22 r">errorRecord</span> = <b>new</b> <span class="t">ErrorRecord</span>(<b>new</b> <a href="../../../utils/RuntimeException.cs.html#e4538a388d78c143" class="t constructor">RuntimeException</a>(<span class="r21 r">msg</span>),
+                    <span class="s">&quot;CannotDisconnectSessionWithInvalidIdleTimeout&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#846d2b572f2c4820" class="i field">InvalidArgument</a>, <span class="r17 r">session</span>);
+                <a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r22 r">errorRecord</span>);
+ 
+                <b>return</b> <b>false</b>;
+            }
+ 
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>private static string</b> <a id="7808f1cf2d67b7c1" href="../../../R/7808f1cf2d67b7c1.html" target="n" data-glyph="76,1" class="i method">GetLocalhostWithNetworkAccessEnabled</a>(<span class="i">Dictionary</span>&lt;<span class="i">Guid</span>, <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a>&gt; <span id="r23 rd" class="r23 r">psSessions</span>)
+        {
+            <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">StringBuilder</span> <span id="r24 rd" class="r24 r">sb</span> = <b>new</b> <span class="i n">System</span>.<span class="i">Text</span>.<span class="i">StringBuilder</span>();
+ 
+            <b>foreach</b> (<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r25 rd" class="r25 r">psSession</span> <b>in</b> <span class="r23 r">psSessions</span>.<span class="i">Values</span>)
+            {
+                <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a> <span id="r26 rd" class="r26 r">wsManConnectionInfo</span> = <span class="r25 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#7ff4c79fcb624bf1" class="i property">ConnectionInfo</a> <b>as</b> <a href="../common/RunspaceConnectionInfo.cs.html#2d9d176ef419be5a" class="t t">WSManConnectionInfo</a>;
+ 
+                <b>if</b> ((<span class="r26 r">wsManConnectionInfo</span> != <b>null</b>) &amp;&amp; (<span class="r26 r">wsManConnectionInfo</span>.<a href="../common/RunspaceConnectionInfo.cs.html#4c971f0cb668c792" class="i property">IsLocalhostAndNetworkAccess</a>))
+                {
+                    <span class="r24 r">sb</span>.<span class="i">Append</span>(<span class="r25 r">psSession</span>.<a href="../client/remoterunspaceinfo.cs.html#dcc034e330dc7781" class="i property">Name</a> + <span class="s">&quot;, &quot;</span>);
+                }
+            }
+ 
+            <b>if</b> (<span class="r24 r">sb</span>.<span class="i">Length</span> &gt; 0)
+            {
+                <span class="r24 r">sb</span>.<span class="i">Remove</span>(<span class="r24 r">sb</span>.<span class="i">Length</span> - 2, 2);
+            }
+ 
+            <b>return</b> <span class="r24 r">sb</span>.<span class="i">ToString</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Classes
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Throttle class to perform a remoterunspace disconnect operation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private sealed class</b> <a id="1ebb55b19d7914c1" href="../../../R/1ebb55b19d7914c1.html" target="n" data-glyph="4,1" class="t t">DisconnectRunspaceOperation</a> : <a href="../common/throttlemanager.cs.html#1164666ea3964901" class="t t">IThrottleOperation</a>
+        {
+            <b>private readonly</b> <a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <a id="5c06b63f15939ef5" href="../../../R/5c06b63f15939ef5.html" target="n" data-glyph="46,2" class="i field">_remoteSession</a>;
+            <b>private readonly</b> <a href="../../../utils/ObjectStream.cs.html#247cf7c4c5dec5a4" class="t t">ObjectStream</a> <a id="c475081cf7491b1d" href="../../../R/c475081cf7491b1d.html" target="n" data-glyph="46,2" class="i field">_writeStream</a>;
+ 
+            <b>internal</b> <a id="26962443ef36c8e7" href="../../../R/26962443ef36c8e7.html" target="n" data-glyph="74,2" class="t constructor">DisconnectRunspaceOperation</a>(<a href="../client/remoterunspaceinfo.cs.html#84e3d9c13d0f2efc" class="t t">PSSession</a> <span id="r27 rd" class="r27 r">session</span>, <a href="../../../utils/ObjectStream.cs.html#247cf7c4c5dec5a4" class="t t">ObjectStream</a> <span id="r28 rd" class="r28 r">stream</span>)
+            {
+                <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a> = <span class="r27 r">session</span>;
+                <a href="#c475081cf7491b1d" class="i field">_writeStream</a> = <span class="r28 r">stream</span>;
+                <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#6866e88f64eb13d6" class="i">StateChanged</a> += <span class="i">StateCallBackHandler</span>;
+            }
+ 
+            <b>internal override void</b> <a id="4ad1959b64e3f36a" href="../../../R/4ad1959b64e3f36a.html" target="n" data-glyph="74,2" class="i method">StartOperation</a>()
+            {
+                <b>bool</b> <span id="r29 rd" class="r29 r">startedSuccessfully</span> = <b>true</b>;
+ 
+                <b>try</b>
+                {
+                    <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#a82aa053a9ec12b9" class="i method">DisconnectAsync</a>();
+                }
+                <b>catch</b> (<a href="../../hostifaces/RunspacePool.cs.html#741ffc1755303d69" class="t t">InvalidRunspacePoolStateException</a> <span id="r30 rd" class="r30 r">e</span>)
+                {
+                    <span class="r29 r">startedSuccessfully</span> = <b>false</b>;
+                    <span class="i">WriteDisconnectFailed</span>(<span class="r30 r">e</span>);
+                }
+                <b>catch</b> (<a href="../../../utils/MshInvalidOperationException.cs.html#259a38c8b594783c" class="t t">PSInvalidOperationException</a> <span id="r31 rd" class="r31 r">e</span>)
+                {
+                    <span class="r29 r">startedSuccessfully</span> = <b>false</b>;
+                    <span class="i">WriteDisconnectFailed</span>(<span class="r31 r">e</span>);
+                }
+ 
+                <b>if</b> (!<span class="r29 r">startedSuccessfully</span>)
+                {
+                    <span class="c">// We are done at this point.  Notify throttle manager.</span>
+                    <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#6866e88f64eb13d6" class="i">StateChanged</a> -= <span class="i">StateCallBackHandler</span>;
+                    <a href="#b215558f4a21f57c" class="i method">SendStartComplete</a>();
+                }
+            }
+ 
+            <b>internal override void</b> <a id="fa4046d357084c7b" href="../../../R/fa4046d357084c7b.html" target="n" data-glyph="74,2" class="i method">StopOperation</a>()
+            {
+                <span class="c">// Cannot stop a disconnect attempt.</span>
+                <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#6866e88f64eb13d6" class="i">StateChanged</a> -= <span class="i">StateCallBackHandler</span>;
+                <a href="#e610fbbd6fef51b8" class="i method">SendStopComplete</a>();
+            }
+ 
+            <b>internal override event</b> <span class="i">EventHandler</span>&lt;<a href="../common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a>&gt; <a id="107b148767c020ad" href="../../../R/107b148767c020ad.html" target="n" data-glyph="32,2" class="i">OperationComplete</a>;
+ 
+            <b>private void</b> <a id="ddff9d4f12f7592f" href="../../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">StateCallBackHandler</a>(<b>object</b> <span id="r32 rd" class="r32 r">sender</span>, <a href="../../hostifaces/Connection.cs.html#24ce8f9c69bf1c4a" class="t t">RunspaceStateEventArgs</a> <span id="r33 rd" class="r33 r">eArgs</span>)
+            {
+                <b>if</b> (<span class="r33 r">eArgs</span>.<a href="../../hostifaces/Connection.cs.html#efb5571439376cca" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#31c8fe83ad58dbdb" class="i field">Disconnecting</a>)
+                {
+                    <b>return</b>;
+                }
+ 
+                <b>if</b> (<span class="r33 r">eArgs</span>.<a href="../../hostifaces/Connection.cs.html#efb5571439376cca" class="i property">RunspaceStateInfo</a>.<a href="../../hostifaces/Connection.cs.html#41627f067662d11c" class="i property">State</a> == <a href="../../hostifaces/Connection.cs.html#5da9dc65e996a685" class="t t">RunspaceState</a>.<a href="../../hostifaces/Connection.cs.html#0a8fc62a22d129a1" class="i field">Disconnected</a>)
+                {
+                    <span class="c">// If disconnect succeeded then write the PSSession object.</span>
+                    <a href="#51aa1f0600510786" class="i method">WriteDisconnectedPSSession</a>();
+                }
+                <b>else</b>
+                {
+                    <span class="c">// Write error if disconnect did not succeed.</span>
+                    <a href="#3fe868448078c8e7" class="i method">WriteDisconnectFailed</a>();
+                }
+ 
+                <span class="c">// Notify throttle manager that the start is complete.</span>
+                <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#9c20236793fb308a" class="i property">Runspace</a>.<a href="../../hostifaces/Connection.cs.html#6866e88f64eb13d6" class="i">StateChanged</a> -= <span class="i">StateCallBackHandler</span>;
+                <a href="#b215558f4a21f57c" class="i method">SendStartComplete</a>();
+            }
+ 
+            <b>private void</b> <a id="b215558f4a21f57c" href="../../../R/b215558f4a21f57c.html" target="n" data-glyph="76,2" class="i method">SendStartComplete</a>()
+            {
+                <a href="../common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a> <span id="r34 rd" class="r34 r">operationStateEventArgs</span> = <b>new</b> <span class="t">OperationStateEventArgs</span>();
+                <span class="r34 r">operationStateEventArgs</span>.<a href="../common/throttlemanager.cs.html#8648129d937c33ce" class="i property">OperationState</a> = <a href="../common/throttlemanager.cs.html#6cf95059c5d2ad6e" class="t t">OperationState</a>.<a href="../common/throttlemanager.cs.html#bad569808247de6a" class="i field">StartComplete</a>;
+                <a href="#107b148767c020ad" class="i">OperationComplete</a>.<span class="i">SafeInvoke</span>(<a href="#1ebb55b19d7914c1" class="k">this</a>, <span class="r34 r">operationStateEventArgs</span>);
+            }
+ 
+            <b>private void</b> <a id="e610fbbd6fef51b8" href="../../../R/e610fbbd6fef51b8.html" target="n" data-glyph="76,2" class="i method">SendStopComplete</a>()
+            {
+                <a href="../common/throttlemanager.cs.html#ef7de7ace48bc7ae" class="t t">OperationStateEventArgs</a> <span id="r35 rd" class="r35 r">operationStateEventArgs</span> = <b>new</b> <span class="t">OperationStateEventArgs</span>();
+                <span class="r35 r">operationStateEventArgs</span>.<a href="../common/throttlemanager.cs.html#8648129d937c33ce" class="i property">OperationState</a> = <a href="../common/throttlemanager.cs.html#6cf95059c5d2ad6e" class="t t">OperationState</a>.<a href="../common/throttlemanager.cs.html#c2e1a69d3e84f187" class="i field">StopComplete</a>;
+                <a href="#107b148767c020ad" class="i">OperationComplete</a>.<span class="i">SafeInvoke</span>(<a href="#1ebb55b19d7914c1" class="k">this</a>, <span class="r35 r">operationStateEventArgs</span>);
+            }
+ 
+            <b>private void</b> <a id="51aa1f0600510786" href="../../../R/51aa1f0600510786.html" target="n" data-glyph="76,2" class="i method">WriteDisconnectedPSSession</a>()
+            {
+                <b>if</b> (<a href="#c475081cf7491b1d" class="i field">_writeStream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<a href="../../../utils/IObjectWriter.cs.html#37eb9b5d6b3e954a" class="i property">IsOpen</a>)
+                {
+                    <span class="i">Action</span>&lt;<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt; <span id="r36 rd" class="r36 r">outputWriter</span> = (<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r37 rd" class="r37 r">cmdlet</span>) =&gt; <span class="r37 r">cmdlet</span>.<a href="../../cmdlet.cs.html#d3cfb6f38afe5ee0" class="i method">WriteObject</a>(<a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>);
+                    <a href="#c475081cf7491b1d" class="i field">_writeStream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<span class="i">Write</span>(<span class="r36 r">outputWriter</span>);
+                }
+            }
+ 
+            <b>private void</b> <a id="3fe868448078c8e7" href="../../../R/3fe868448078c8e7.html" target="n" data-glyph="76,2" class="i method">WriteDisconnectFailed</a>(<span class="i">Exception</span> <span id="r38 rd" class="r38 r">e</span> = <b>null</b>)
+            {
+                <b>if</b> (<a href="#c475081cf7491b1d" class="i field">_writeStream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<a href="../../../utils/IObjectWriter.cs.html#37eb9b5d6b3e954a" class="i property">IsOpen</a>)
+                {
+                    <b>string</b> <span id="r39 rd" class="r39 r">msg</span>;
+ 
+                    <b>if</b> (<span class="r38 r">e</span> != <b>null</b> &amp;&amp; !<b>string</b>.<span class="i">IsNullOrWhiteSpace</span>(<span class="r38 r">e</span>.<span class="i">Message</span>))
+                    {
+                        <span class="r39 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RunspaceDisconnectFailedWithReason</span>, <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#efd181c61ecd05ff" class="i property">InstanceId</a>, <span class="r38 r">e</span>.<span class="i">Message</span>);
+                    }
+                    <b>else</b>
+                    {
+                        <span class="r39 r">msg</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">RunspaceDisconnectFailed</span>, <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>.<a href="../client/remoterunspaceinfo.cs.html#efd181c61ecd05ff" class="i property">InstanceId</a>);
+                    }
+ 
+                    <span class="i">Exception</span> <span id="r40 rd" class="r40 r">reason</span> = <b>new</b> <a href="../../../utils/RuntimeException.cs.html#e550883d468d8c30" class="t constructor">RuntimeException</a>(<span class="r39 r">msg</span>, <span class="r38 r">e</span>);
+                    <a href="../../ErrorPackage.cs.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r41 rd" class="r41 r">errorRecord</span> = <b>new</b> <a href="../../ErrorPackage.cs.html#e9334565e5136f43" class="t constructor">ErrorRecord</a>(<span class="r40 r">reason</span>, <span class="s">&quot;PSSessionDisconnectFailed&quot;</span>, <a href="../../ErrorPackage.cs.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="../../ErrorPackage.cs.html#b5cba3d51f976bb3" class="i field">InvalidOperation</a>, <a href="#5c06b63f15939ef5" class="i field">_remoteSession</a>);
+                    <span class="i">Action</span>&lt;<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a>&gt; <span id="r42 rd" class="r42 r">errorWriter</span> = (<a href="../../cmdlet.cs.html#b0d421ff1d7581f9" class="t t">Cmdlet</a> <span id="r43 rd" class="r43 r">cmdlet</span>) =&gt; <span class="r43 r">cmdlet</span>.<a href="../../cmdlet.cs.html#7746d1a8f41a36d5" class="i method">WriteError</a>(<span class="r41 r">errorRecord</span>);
+                    <a href="#c475081cf7491b1d" class="i field">_writeStream</a>.<a href="../../../utils/ObjectStream.cs.html#fc0d00ddb2d6ec0c" class="i property">ObjectWriter</a>.<span class="i">Write</span>(<span class="r42 r">errorWriter</span>);
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Dispose method of IDisposable. Gets called in the following cases:</span>
+        <span class="c">///</span><span class="c">     1. Pipeline explicitly calls dispose on cmdlets</span>
+        <span class="c">///</span><span class="c">     2. Called by the garbage collector.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="8de7b51a84a3f183" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#48819fb2321f85a4" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#ba1ee4b9df5c537f" class="k">this</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Internal dispose method which does the actual</span>
+        <span class="c">///</span><span class="c"> dispose operations and finalize suppressions.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">disposing</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Whether method is called</span>
+        <span class="c">///</span><span class="c"> from Dispose or destructor</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="48819fb2321f85a4" href="../../../R/48819fb2321f85a4.html" target="n" data-glyph="76,1" class="i method">Dispose</a>(<b>bool</b> <span id="r44 rd" class="r44 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r44 r">disposing</span>)
+            {
+                <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#dd620168185a530e" class="i method">Dispose</a>();
+ 
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">WaitOne</span>();
+                <a href="#0cb916d207cef817" class="i field">_operationsComplete</a>.<span class="i">Dispose</span>();
+ 
+                <a href="#101d09c421a22060" class="i field">_throttleManager</a>.<a href="../common/throttlemanager.cs.html#dd885eab312c9a19" class="i">ThrottleComplete</a> -= <span class="i">HandleThrottleDisconnectComplete</span>;
+                <a href="#2ba2fd781e061059" class="i field">_stream</a>.<a href="../../../utils/ObjectStream.cs.html#e609f46566bbc0e2" class="i method">Dispose</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> IDisposable Overrides
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Members
+ 
+        <span class="c">// Object used to perform network disconnect operations in a limited manner.</span>
+        <b>private readonly</b> <a href="../common/throttlemanager.cs.html#4aa32d51dd591ac8" class="t t">ThrottleManager</a> <a id="101d09c421a22060" href="../../../R/101d09c421a22060.html" target="n" data-glyph="46,1" class="i field">_throttleManager</a> = <b>new</b> <a href="../common/throttlemanager.cs.html#21c77408b36939a4" class="t constructor">ThrottleManager</a>();
+ 
+        <span class="c">// Event indicating that all disconnect operations through the ThrottleManager</span>
+        <span class="c">// are complete.</span>
+        <b>private readonly</b> <span class="i">ManualResetEvent</span> <a id="0cb916d207cef817" href="../../../R/0cb916d207cef817.html" target="n" data-glyph="46,1" class="i field">_operationsComplete</a> = <b>new</b> <span class="i">ManualResetEvent</span>(<b>true</b>);
+ 
+        <span class="c">// Output data stream.</span>
+        <b>private readonly</b> <a href="../../../utils/ObjectStream.cs.html#247cf7c4c5dec5a4" class="t t">ObjectStream</a> <a id="2ba2fd781e061059" href="../../../R/2ba2fd781e061059.html" target="n" data-glyph="46,1" class="i field">_stream</a> = <b>new</b> <a href="../../../utils/ObjectStream.cs.html#9f848b3587e1f797" class="t constructor">ObjectStream</a>();
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+}
+</pre></td></tr></table></div></body></html>

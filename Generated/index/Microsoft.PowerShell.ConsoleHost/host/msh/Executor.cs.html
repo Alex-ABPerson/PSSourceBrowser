@@ -1,0 +1,733 @@
+﻿<!DOCTYPE html>
+<html><head><title>Executor.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(724);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost/host/msh/Executor.cs" target="_top">host\msh\Executor.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#Microsoft.PowerShell.ConsoleHost" target="_top">src\Microsoft.PowerShell.ConsoleHost\Microsoft.PowerShell.ConsoleHost.csproj</a> (Microsoft.PowerShell.ConsoleHost)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Diagnostics</span>.<span class="i">CodeAnalysis</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Linq</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+ 
+<b>using</b> <span class="i">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i">Diagnostics</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Executor wraps a Pipeline instance, and provides helper methods for executing commands in that pipeline.  It is used to</span>
+    <span class="c">///</span><span class="c"> provide bookkeeping and structure to the use of pipeline in such a way that they can be interrupted and cancelled by a</span>
+    <span class="c">///</span><span class="c"> break event handler, and track nesting of pipelines (which happens with interrupted input loops (aka subshells) and use</span>
+    <span class="c">///</span><span class="c"> of tab-completion in prompts.  The bookkeeping is necessary because the break handler is static and global, and there is</span>
+    <span class="c">///</span><span class="c"> no means for tying a break handler to an instance of an object.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> The class&#39; instance methods manage a single pipeline.  The class&#39; static methods track the outstanding instances to</span>
+    <span class="c">///</span><span class="c"> ensure that only one instance is &#39;active&#39; (and therefore cancellable) at a time.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="c4a69b641f3e390e" href="../../R/c4a69b641f3e390e.html" target="n" data-glyph="2,0" class="t t">Executor</a>
+    {
+        [<span class="i">Flags</span>]
+        <b>internal enum</b> <a id="358f021732ebaa99" href="../../R/358f021732ebaa99.html" target="n" data-glyph="20,1" class="t t"><span id="f8f84729ad5ebd8c">ExecutionOptions</span></a>
+        {
+            <a id="f3d1d54669e6e184" href="../../R/f3d1d54669e6e184.html" target="n" data-glyph="24,2" class="i field">None</a> = 0x0,
+            <a id="8f28a9f5599c4384" href="../../R/8f28a9f5599c4384.html" target="n" data-glyph="24,2" class="i field">AddOutputter</a> = 0x01,
+            <a id="0ec3b21cc66e7d88" href="../../R/0ec3b21cc66e7d88.html" target="n" data-glyph="24,2" class="i field">AddToHistory</a> = 0x02,
+            <a id="052ca21a155ed613" href="../../R/052ca21a155ed613.html" target="n" data-glyph="24,2" class="i field">ReadInputObjects</a> = 0x04
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructs a new instance.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">parent</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> A reference to the parent ConsoleHost that created this instance.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">useNestedPipelines</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true if the executor is supposed to use nested pipelines; false if not.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">isPromptFunctionExecutor</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the instance will be used to execute the prompt function, which will delay stopping the pipeline by some</span>
+        <span class="c">///</span><span class="c"> milliseconds.  This we prevent us from stopping the pipeline so quickly that when the user leans on the ctrl-c key</span>
+        <span class="c">///</span><span class="c"> that the prompt &quot;stops working&quot; (because it is being stopped faster than it can run to completion).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="60b4a34d8fa00a39" href="../../R/60b4a34d8fa00a39.html" target="n" data-glyph="74,1" class="t constructor">Executor</a>(<a href="../../P/cda5e43a29a66e53.html#cda5e43a29a66e53" class="t t">ConsoleHost</a> <span id="r0 rd" class="r0 r">parent</span>, <b>bool</b> <span id="r1 rd" class="r1 r">useNestedPipelines</span>, <b>bool</b> <span id="r2 rd" class="r2 r">isPromptFunctionExecutor</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r0 r">parent</span> != <b>null</b>, <span class="s">&quot;parent should not be null&quot;</span>);
+ 
+            <a href="#1036fc99cbb33003" class="i field">_parent</a> = <span class="r0 r">parent</span>;
+            <a href="#c4a69b641f3e390e" class="k">this</a>.<a href="#3cf0852ca5a12802" class="i field">useNestedPipelines</a> = <span class="r1 r">useNestedPipelines</span>;
+            <a href="#d167bafaba120bc3" class="i field">_isPromptFunctionExecutor</a> = <span class="r2 r">isPromptFunctionExecutor</span>;
+            <a href="#68290db1044bb004" class="i method">Reset</a>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> async
+ 
+        <span class="c">// called on the pipeline thread</span>
+        <b>private void</b> <a id="4137fe30a39ea74c" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">OutputObjectStreamHandler</a>(<b>object</b> <span id="r3 rd" class="r3 r">sender</span>, <span class="i">EventArgs</span> <span id="r4 rd" class="r4 r">e</span>)
+        {
+            <span class="c">// e is just an empty instance of EventArgs, so we ignore it. sender is the PipelineReader that raised it&#39;s</span>
+            <span class="c">// DataReady event that calls this handler, which is the PipelineReader for the Output object stream.</span>
+ 
+            <a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r5 rd" class="r5 r">reader</span> = (<a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt;)<span class="r3 r">sender</span>;
+ 
+            <span class="c">// we use NonBlockingRead instead of Read, as Read would block if the reader has no objects.  While it would be</span>
+            <span class="c">// inconsistent for this method to be called when there are no objects, since it will be called synchronously on</span>
+            <span class="c">// the pipeline thread, blocking in this call until an object is streamed would deadlock the pipeline. So we</span>
+            <span class="c">// prefer to take no chance of blocking.</span>
+ 
+            <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r6 rd" class="r6 r">objects</span> = <span class="r5 r">reader</span>.<span class="i">NonBlockingRead</span>();
+            <b>foreach</b> (<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r7 rd" class="r7 r">obj</span> <b>in</b> <span class="r6 r">objects</span>)
+            {
+                <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#b73fdaa94687f263" class="i property">OutputSerializer</a>.<a href="Serialization.cs.html#0029de3a8b2e2b68" class="i method">Serialize</a>(<span class="r7 r">obj</span>);
+            }
+        }
+ 
+        <span class="c">// called on the pipeline thread</span>
+ 
+        <b>private void</b> <a id="3411ac1d59c6886a" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ErrorObjectStreamHandler</a>(<b>object</b> <span id="r8 rd" class="r8 r">sender</span>, <span class="i">EventArgs</span> <span id="r9 rd" class="r9 r">e</span>)
+        {
+            <span class="c">// e is just an empty instance of EventArgs, so we ignore it. sender is the PipelineReader that raised it&#39;s</span>
+            <span class="c">// DataReady event that calls this handler, which is the PipelineReader for the Error object stream.</span>
+ 
+            <a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<b>object</b>&gt; <span id="r10 rd" class="r10 r">reader</span> = (<a href="/System.Management.Automation/A.html#6b2221741902f9bd" class="t t">PipelineReader</a>&lt;<b>object</b>&gt;)<span class="r8 r">sender</span>;
+ 
+            <span class="c">// we use NonBlockingRead instead of Read, as Read would block if the reader has no objects.  While it would be</span>
+            <span class="c">// inconsistent for this method to be called when there are no objects, since it will be called synchronously on</span>
+            <span class="c">// the pipeline thread, blocking in this call until an object is streamed would deadlock the pipeline. So we</span>
+            <span class="c">// prefer to take no chance of blocking.</span>
+ 
+            <span class="i">Collection</span>&lt;<b>object</b>&gt; <span id="r11 rd" class="r11 r">objects</span> = <span class="r10 r">reader</span>.<span class="i">NonBlockingRead</span>();
+            <b>foreach</b> (<b>object</b> <span id="r12 rd" class="r12 r">obj</span> <b>in</b> <span class="r11 r">objects</span>)
+            {
+                <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#05a9e033aeedb67d" class="i property">ErrorSerializer</a>.<a href="Serialization.cs.html#0029de3a8b2e2b68" class="i method">Serialize</a>(<span class="r12 r">obj</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method handles the failure in executing pipeline asynchronously.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">ex</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="924392b3c819fa08" href="../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">AsyncPipelineFailureHandler</a>(<span class="i">Exception</span> <span id="r13 rd" class="r13 r">ex</span>)
+        {
+            <a href="/System.Management.Automation/A.html#fe2b46733a081db9" class="t t">ErrorRecord</a> <span id="r14 rd" class="r14 r">er</span> = <b>null</b>;
+            <a href="/System.Management.Automation/A.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a> <span id="r15 rd" class="r15 r">cer</span> = <span class="r13 r">ex</span> <b>as</b> <a href="/System.Management.Automation/A.html#2d342e12f9600886" class="t t">IContainsErrorRecord</a>;
+            <b>if</b> (<span class="r15 r">cer</span> != <b>null</b>)
+            {
+                <span class="r14 r">er</span> = <span class="r15 r">cer</span>.<a href="/System.Management.Automation/A.html#cef340f272a30c6b" class="i property">ErrorRecord</a>;
+                <span class="c">// Exception inside the error record is ParentContainsErrorRecordException which</span>
+                <span class="c">// doesn&#39;t have stack trace. Replace it with top level exception.</span>
+                <span class="r14 r">er</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r14 r">er</span>, <span class="r13 r">ex</span>);
+            }
+ 
+            <b>if</b> (<span class="r14 r">er</span> == <b>null</b>)
+            {
+                <span class="r14 r">er</span> = <b>new</b> <span class="t">ErrorRecord</span>(<span class="r13 r">ex</span>, <span class="s">&quot;ConsoleHostAsyncPipelineFailure&quot;</span>, <a href="/System.Management.Automation/A.html#0e80a9653d75dd2a" class="t t">ErrorCategory</a>.<a href="/System.Management.Automation/A.html#707bbec7a1bb5ead" class="i field">NotSpecified</a>, <b>null</b>);
+            }
+ 
+            <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#05a9e033aeedb67d" class="i property">ErrorSerializer</a>.<a href="Serialization.cs.html#0029de3a8b2e2b68" class="i method">Serialize</a>(<span class="r14 r">er</span>);
+        }
+ 
+        <b>private sealed class</b> <a id="c0ace576e2b63420" href="../../R/c0ace576e2b63420.html" target="n" data-glyph="4,1" class="t t">PipelineFinishedWaitHandle</a>
+        {
+            <b>internal</b> <a id="78e52fa14b04485a" href="../../R/78e52fa14b04485a.html" target="n" data-glyph="74,2" class="t constructor">PipelineFinishedWaitHandle</a>(<a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r16 rd" class="r16 r">p</span>)
+            {
+                <span class="r16 r">p</span>.<a href="/System.Management.Automation/A.html#c0baffefeaa75abd" class="i">StateChanged</a> += <span class="i">PipelineStateChangedHandler</span>;
+            }
+ 
+            <b>internal void</b> <a id="c5333ef4d095ae4b" href="../../R/c5333ef4d095ae4b.html" target="n" data-glyph="74,2" class="i method">Wait</a>()
+            {
+                <a href="#ebdb9280d3eb69f9" class="i field">_eventHandle</a>.<span class="i">WaitOne</span>();
+            }
+ 
+            <b>private void</b> <a id="64ace08b3f467360" href="../../R/../../0000000000.html" target="n" data-glyph="76,2" class="i method">PipelineStateChangedHandler</a>(<b>object</b> <span id="r17 rd" class="r17 r">sender</span>, <a href="/System.Management.Automation/A.html#f088a79047187694" class="t t">PipelineStateEventArgs</a> <span id="r18 rd" class="r18 r">e</span>)
+            {
+                <b>if</b> (
+                    <span class="r18 r">e</span>.<a href="/System.Management.Automation/A.html#90fde3748e993197" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#2589f8c7203969a0" class="i property">State</a> == <a href="/System.Management.Automation/A.html#03704abc5975cfc4" class="t t">PipelineState</a>.<a href="/System.Management.Automation/A.html#f5734941de01b098" class="i field">Completed</a>
+                    || <span class="r18 r">e</span>.<a href="/System.Management.Automation/A.html#90fde3748e993197" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#2589f8c7203969a0" class="i property">State</a> == <a href="/System.Management.Automation/A.html#03704abc5975cfc4" class="t t">PipelineState</a>.<a href="/System.Management.Automation/A.html#425f1d8027f15e68" class="i field">Failed</a>
+                    || <span class="r18 r">e</span>.<a href="/System.Management.Automation/A.html#90fde3748e993197" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#2589f8c7203969a0" class="i property">State</a> == <a href="/System.Management.Automation/A.html#03704abc5975cfc4" class="t t">PipelineState</a>.<a href="/System.Management.Automation/A.html#76cf7f3120e4f94d" class="i field">Stopped</a>)
+                {
+                    <a href="#ebdb9280d3eb69f9" class="i field">_eventHandle</a>.<span class="i">Set</span>();
+                }
+            }
+ 
+            <b>private readonly</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">ManualResetEvent</span> <a id="ebdb9280d3eb69f9" href="../../R/ebdb9280d3eb69f9.html" target="n" data-glyph="46,2" class="i field">_eventHandle</a> = <b>new</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">ManualResetEvent</span>(<b>false</b>);
+        }
+ 
+        <b>internal void</b> <a id="9b0c70493a8c714d" href="../../R/9b0c70493a8c714d.html" target="n" data-glyph="74,1" class="i method">ExecuteCommandAsync</a>(<b>string</b> <span id="r19 rd" class="r19 r">command</span>, <b>out</b> <span class="i">Exception</span> <span id="r20 rd" class="r20 r">exceptionThrown</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a> <span id="r21 rd" class="r21 r">options</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<a href="#3cf0852ca5a12802" class="i field">useNestedPipelines</a>, <span class="s">&quot;can&#39;t async invoke a nested pipeline&quot;</span>);
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r19 r">command</span>), <span class="s">&quot;command should have a value&quot;</span>);
+ 
+            <b>bool</b> <span id="r22 rd" class="r22 r">addToHistory</span> = (<span class="r21 r">options</span> &amp; <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#0ec3b21cc66e7d88" class="i field">AddToHistory</a>) &gt; 0;
+            <a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r23 rd" class="r23 r">tempPipeline</span> = <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#3b80b4197e85d182" class="i property">RunspaceRef</a>.<span class="i">CreatePipeline</span>(<span class="r19 r">command</span>, <span class="r22 r">addToHistory</span>, <b>false</b>);
+            <a href="#765418ab1ad41344" class="i method">ExecuteCommandAsyncHelper</a>(<span class="r23 r">tempPipeline</span>, <b>out</b> <span class="r20 r">exceptionThrown</span>, <span class="r21 r">options</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Executes a pipeline in the console when we are running asnyc.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">tempPipeline</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The pipeline to execute.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">exceptionThrown</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Any exception thrown trying to run the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">options</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The options to use to execute the pipeline.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="765418ab1ad41344" href="../../R/765418ab1ad41344.html" target="n" data-glyph="74,1" class="i method">ExecuteCommandAsyncHelper</a>(<a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r24 rd" class="r24 r">tempPipeline</span>, <b>out</b> <span class="i">Exception</span> <span id="r25 rd" class="r25 r">exceptionThrown</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a> <span id="r26 rd" class="r26 r">options</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<a href="#d167bafaba120bc3" class="i field">_isPromptFunctionExecutor</a>, <span class="s">&quot;should not async invoke the prompt&quot;</span>);
+ 
+            <span class="r25 r">exceptionThrown</span> = <b>null</b>;
+            <a href="#c4a69b641f3e390e" class="t t">Executor</a> <span id="r27 rd" class="r27 r">oldCurrent</span> = <a href="#ac525ce39121e57c" class="i property">CurrentExecutor</a>;
+            <a href="#ac525ce39121e57c" class="i property">CurrentExecutor</a> = <a href="#c4a69b641f3e390e" class="k">this</a>;
+ 
+            <b>lock</b> (<a href="#9bc068fb292833cc" class="i field">_instanceStateLock</a>)
+            {
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> == <b>null</b>, <span class="s">&quot;no other pipeline should exist&quot;</span>);
+                <a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> = <span class="r24 r">tempPipeline</span>;
+            }
+ 
+            <b>try</b>
+            {
+                <b>if</b> ((<span class="r26 r">options</span> &amp; <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#8f28a9f5599c4384" class="i field">AddOutputter</a>) &gt; 0 &amp;&amp; <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#e2b8ad929b0e9732" class="i property">OutputFormat</a> == <a href="Serialization.cs.html#48289f9b2c3628de" class="t t">Serialization</a>.<a href="Serialization.cs.html#bf09ed02271085ca" class="t t">DataFormat</a>.<a href="Serialization.cs.html#b9edeb2597b5e6a8" class="i field">Text</a>)
+                {
+                    <span class="c">// Tell the script command to merge it&#39;s output and error streams</span>
+ 
+                    <b>if</b> (<span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Count</span> == 1)
+                    {
+                        <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>[0].<span class="i">MergeMyResults</span>(<a href="/System.Management.Automation/A.html#b4c8a564cfb76454" class="t t">PipelineResultTypes</a>.<a href="/System.Management.Automation/A.html#4934ee6f6f8db020" class="i field">Error</a>, <a href="/System.Management.Automation/A.html#b4c8a564cfb76454" class="t t">PipelineResultTypes</a>.<a href="/System.Management.Automation/A.html#c8d2233323d43e84" class="i field">Output</a>);
+                    }
+ 
+                    <span class="c">// then add out-default to the pipeline to render everything...</span>
+                    <a href="/System.Management.Automation/A.html#b55b68a3bf75e612" class="t t">Command</a> <span id="r28 rd" class="r28 r">outDefault</span> = <b>new</b> <span class="t">Command</span>(<span class="s">&quot;Out-Default&quot;</span>, <span class="c">/* isScript */</span><b>false</b>, <span class="c">/* useLocalScope */</span> <b>true</b>);
+                    <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Add</span>(<span class="r28 r">outDefault</span>);
+                }
+ 
+                <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#e61d6d76ceba7ad2" class="i property">Output</a>.<a href="/System.Management.Automation/A.html#ab790c5de0e4e578" class="i">DataReady</a> += <span class="i">OutputObjectStreamHandler</span>;
+                <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#cc6ca02e9720dc4a" class="i property">Error</a>.<a href="/System.Management.Automation/A.html#ab790c5de0e4e578" class="i">DataReady</a> += <span class="i">ErrorObjectStreamHandler</span>;
+                <a href="#c0ace576e2b63420" class="t t">PipelineFinishedWaitHandle</a> <span id="r29 rd" class="r29 r">pipelineWaiter</span> = <b>new</b> <a href="#78e52fa14b04485a" class="t constructor">PipelineFinishedWaitHandle</a>(<span class="r24 r">tempPipeline</span>);
+ 
+                <span class="c">// close the input pipeline so the command will do something</span>
+                <span class="c">// if we are not reading input</span>
+                <b>if</b> ((<span class="r26 r">options</span> &amp; <a href="#c4a69b641f3e390e" class="t t">Executor</a>.<a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#052ca21a155ed613" class="i field">ReadInputObjects</a>) == 0)
+                {
+                    <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#fc605284c85d0dc9" class="i property">Input</a>.<span class="i">Close</span>();
+                }
+ 
+                <span class="r24 r">tempPipeline</span>.<span class="i">InvokeAsync</span>();
+                <b>if</b> ((<span class="r26 r">options</span> &amp; <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#052ca21a155ed613" class="i field">ReadInputObjects</a>) &gt; 0 &amp;&amp; <span class="i">Console</span>.<span class="i">IsInputRedirected</span>)
+                {
+                    <span class="c">// read input objects from stdin</span>
+                    <a href="Serialization.cs.html#0d69079b317fdfe2" class="t t">WrappedDeserializer</a> <span id="r30 rd" class="r30 r">des</span> = <b>new</b> <span class="t">WrappedDeserializer</span>(<a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#93875981d7aafca4" class="i property">InputFormat</a>, <span class="s">&quot;Input&quot;</span>, <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#9849256b9c8b3593" class="i property">ConsoleIn</a>.<span class="i">Value</span>);
+                    <b>while</b> (!<span class="r30 r">des</span>.<a href="Serialization.cs.html#ade7d6ace970cf06" class="i property">AtEnd</a>)
+                    {
+                        <b>object</b> <span id="r31 rd" class="r31 r">o</span> = <span class="r30 r">des</span>.<a href="Serialization.cs.html#f11f4572ba5c7e49" class="i method">Deserialize</a>();
+                        <b>if</b> (<span class="r31 r">o</span> == <b>null</b>)
+                        {
+                            <b>break</b>;
+                        }
+ 
+                        <b>try</b>
+                        {
+                            <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#fc605284c85d0dc9" class="i property">Input</a>.<span class="i">Write</span>(<span class="r31 r">o</span>);
+                        }
+                        <b>catch</b> (<a href="/System.Management.Automation/A.html#1496d52396952a52" class="t t">PipelineClosedException</a>)
+                        {
+                            <span class="c">// This exception can occurs when input is closed. This can happen</span>
+                            <span class="c">// for various reasons. For ex:Command in the pipeline is invalid and</span>
+                            <span class="c">// command discovery throws exception which closes the pipeline and</span>
+                            <span class="c">// hence the Input pipe.</span>
+                            <b>break</b>;
+                        }
+                    }
+                    <span class="r30 r">des</span>.<a href="Serialization.cs.html#6e5d90d8b524580b" class="i method">End</a>();
+                }
+ 
+                <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#fc605284c85d0dc9" class="i property">Input</a>.<span class="i">Close</span>();
+ 
+                <span class="r29 r">pipelineWaiter</span>.<a href="#c5333ef4d095ae4b" class="i method">Wait</a>();
+ 
+                <span class="c">// report error if pipeline failed</span>
+                <b>if</b> (<span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#443fd1d03c8335df" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#2589f8c7203969a0" class="i property">State</a> == <a href="/System.Management.Automation/A.html#03704abc5975cfc4" class="t t">PipelineState</a>.<a href="/System.Management.Automation/A.html#425f1d8027f15e68" class="i field">Failed</a> &amp;&amp; <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#443fd1d03c8335df" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#abf480477d10c9b4" class="i property">Reason</a> != <b>null</b>)
+                {
+                    <b>if</b> (<a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#e2b8ad929b0e9732" class="i property">OutputFormat</a> == <a href="Serialization.cs.html#48289f9b2c3628de" class="t t">Serialization</a>.<a href="Serialization.cs.html#bf09ed02271085ca" class="t t">DataFormat</a>.<a href="Serialization.cs.html#b9edeb2597b5e6a8" class="i field">Text</a>)
+                    {
+                        <span class="c">// Report the exception using normal error reporting</span>
+                        <span class="r25 r">exceptionThrown</span> = <span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#443fd1d03c8335df" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#abf480477d10c9b4" class="i property">Reason</a>;
+                    }
+                    <b>else</b>
+                    {
+                        <span class="c">// serialize the error record</span>
+                        <span class="i">AsyncPipelineFailureHandler</span>(<span class="r24 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#443fd1d03c8335df" class="i property">PipelineStateInfo</a>.<a href="/System.Management.Automation/A.html#abf480477d10c9b4" class="i property">Reason</a>);
+                    }
+                }
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r32 rd" class="r32 r">e</span>)
+            {
+                <span class="r25 r">exceptionThrown</span> = <span class="r32 r">e</span>;
+            }
+            <b>finally</b>
+            {
+                <span class="c">// Once we have the results, or an exception is thrown, we throw away the pipeline.</span>
+ 
+                <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#9579865b1d1857cb" class="i field">ui</a>.<a href="ConsoleHostUserInterfaceProgress.cs.html#fc935a2340899864" class="i method">ResetProgress</a>();
+                <a href="#ac525ce39121e57c" class="i property">CurrentExecutor</a> = <span class="r27 r">oldCurrent</span>;
+                <a href="#68290db1044bb004" class="i method">Reset</a>();
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> async
+ 
+        <b>internal</b> <a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <a id="d41c5d6e35a066b1" href="../../R/d41c5d6e35a066b1.html" target="n" data-glyph="74,1" class="i method">CreatePipeline</a>()
+        {
+            <b>if</b> (<a href="#3cf0852ca5a12802" class="i field">useNestedPipelines</a>)
+            {
+                <b>return</b> <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#3b80b4197e85d182" class="i property">RunspaceRef</a>.<span class="i">CreateNestedPipeline</span>();
+            }
+            <b>else</b>
+            {
+                <b>return</b> <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#3b80b4197e85d182" class="i property">RunspaceRef</a>.<span class="i">CreatePipeline</span>();
+            }
+        }
+ 
+        <b>internal</b> <a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <a id="17982cb03d3d9f6b" href="../../R/17982cb03d3d9f6b.html" target="n" data-glyph="74,1" class="i method">CreatePipeline</a>(<b>string</b> <span id="r33 rd" class="r33 r">command</span>, <b>bool</b> <span id="r34 rd" class="r34 r">addToHistory</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r33 r">command</span>), <span class="s">&quot;command should have a value&quot;</span>);
+            <b>return</b> <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#3b80b4197e85d182" class="i property">RunspaceRef</a>.<span class="i">CreatePipeline</span>(<span class="r33 r">command</span>, <span class="r34 r">addToHistory</span>, <a href="#3cf0852ca5a12802" class="i field">useNestedPipelines</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> All calls to the Runspace to execute a command line must be done with this function, which properly synchronizes</span>
+        <span class="c">///</span><span class="c"> access to the running pipeline between the main thread and the break handler thread.  This synchronization is</span>
+        <span class="c">///</span><span class="c"> necessary so that executions can be aborted with Ctrl-C (including evaluation of the prompt and collection of</span>
+        <span class="c">///</span><span class="c"> command-completion candidates.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> On any given Executor instance, ExecuteCommand should be called at most once at a time by any one thread. It is NOT</span>
+        <span class="c">///</span><span class="c"> reentrant.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The command line to be executed.  Must be non-null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">exceptionThrown</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Receives the Exception thrown by the execution of the command, if any. If no exception is thrown, then set to null.</span>
+        <span class="c">///</span><span class="c"> Can be tested to see if the execution was successful or not.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">options</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> options to govern the execution</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> the object stream resulting from the execution.  May be null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="48bc1dbfcd4f0d92" href="../../R/48bc1dbfcd4f0d92.html" target="n" data-glyph="74,1" class="i method">ExecuteCommand</a>(<b>string</b> <span id="r35 rd" class="r35 r">command</span>, <b>out</b> <span class="i">Exception</span> <span id="r36 rd" class="r36 r">exceptionThrown</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a> <span id="r37 rd" class="r37 r">options</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r35 r">command</span>), <span class="s">&quot;command should have a value&quot;</span>);
+ 
+            <a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r38 rd" class="r38 r">tempPipeline</span> = <a href="#17982cb03d3d9f6b" class="i method">CreatePipeline</a>(<span class="r35 r">command</span>, (<span class="r37 r">options</span> &amp; <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#0ec3b21cc66e7d88" class="i field">AddToHistory</a>) &gt; 0);
+ 
+            <b>return</b> <a href="#8252224d94665896" class="i method">ExecuteCommandHelper</a>(<span class="r38 r">tempPipeline</span>, <b>out</b> <span class="r36 r">exceptionThrown</span>, <span class="r37 r">options</span>);
+        }
+ 
+        <b>private static</b> <a href="/System.Management.Automation/A.html#b55b68a3bf75e612" class="t t">Command</a> <a id="dfae2bd69709a616" href="../../R/dfae2bd69709a616.html" target="n" data-glyph="76,1" class="i method">GetOutDefaultCommand</a>(<b>bool</b> <span id="r39 rd" class="r39 r">endOfStatement</span>)
+        {
+            <b>return</b> <b>new</b> <span class="t">Command</span>(<span class="i">command</span>: <span class="s">&quot;Out-Default&quot;</span>,
+                               <span class="i">isScript</span>: <b>false</b>,
+                               <span class="i">useLocalScope</span>: <b>true</b>,
+                               <span class="i">mergeUnclaimedPreviousErrorResults</span>: <b>true</b>)
+            {
+                <a href="/System.Management.Automation/A.html#02fce76b562e32ef" class="i property">IsEndOfStatement</a> = <span class="r39 r">endOfStatement</span>
+            };
+        }
+ 
+        <b>internal</b> <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="8252224d94665896" href="../../R/8252224d94665896.html" target="n" data-glyph="74,1" class="i method">ExecuteCommandHelper</a>(<a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <span id="r40 rd" class="r40 r">tempPipeline</span>, <b>out</b> <span class="i">Exception</span> <span id="r41 rd" class="r41 r">exceptionThrown</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a> <span id="r42 rd" class="r42 r">options</span>)
+        {
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<span class="r40 r">tempPipeline</span> != <b>null</b>, <span class="s">&quot;command should have a value&quot;</span>);
+ 
+            <span class="r41 r">exceptionThrown</span> = <b>null</b>;
+ 
+            <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r43 rd" class="r43 r">results</span> = <b>null</b>;
+ 
+            <b>if</b> ((<span class="r42 r">options</span> &amp; <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#8f28a9f5599c4384" class="i field">AddOutputter</a>) &gt; 0)
+            {
+                <b>if</b> (<span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Count</span> &lt; 2)
+                {
+                    <b>if</b> (<span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Count</span> == 1)
+                    {
+                        <span class="c">// Tell the script command to merge it&#39;s output and error streams.</span>
+                        <span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>[0].<span class="i">MergeMyResults</span>(<a href="/System.Management.Automation/A.html#b4c8a564cfb76454" class="t t">PipelineResultTypes</a>.<a href="/System.Management.Automation/A.html#4934ee6f6f8db020" class="i field">Error</a>, <a href="/System.Management.Automation/A.html#b4c8a564cfb76454" class="t t">PipelineResultTypes</a>.<a href="/System.Management.Automation/A.html#c8d2233323d43e84" class="i field">Output</a>);
+                    }
+ 
+                    <span class="c">// Add Out-Default to the pipeline to render.</span>
+                    <span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Add</span>(<a href="#dfae2bd69709a616" class="i method">GetOutDefaultCommand</a>(<span class="r39 r">endOfStatement</span>: <b>false</b>));
+                }
+                <b>else</b>
+                {
+                    <span class="c">// For multiple commands/scripts we need to insert Out-Default at the end of each statement.</span>
+                    <a href="/System.Management.Automation/A.html#8276f51c05ad2fa1" class="t t">CommandCollection</a> <span id="r44 rd" class="r44 r">executeCommands</span> = <b>new</b> <span class="t">CommandCollection</span>();
+                    <b>foreach</b> (<b>var</b> <span id="r45 rd" class="r45 r">cmd</span> <b>in</b> <span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>)
+                    {
+                        <span class="r44 r">executeCommands</span>.<span class="i">Add</span>(<span class="r45 r">cmd</span>);
+ 
+                        <b>if</b> (<span class="r45 r">cmd</span>.<span class="i">IsEndOfStatement</span>)
+                        {
+                            <span class="c">// End of statement needs to pipe to Out-Default.</span>
+                            <span class="r45 r">cmd</span>.<span class="i">IsEndOfStatement</span> = <b>false</b>;
+                            <span class="r44 r">executeCommands</span>.<span class="i">Add</span>(<a href="#dfae2bd69709a616" class="i method">GetOutDefaultCommand</a>(<span class="r39 r">endOfStatement</span>: <b>true</b>));
+                        }
+                    }
+ 
+                    <b>var</b> <span id="r46 rd" class="r46 r">lastCmd</span> = <span class="r44 r">executeCommands</span>.<span class="i">Last</span>();
+                    <b>if</b> (!((<span class="r46 r">lastCmd</span>.<span class="i">CommandText</span> != <b>null</b>) &amp;&amp;
+                          (<span class="r46 r">lastCmd</span>.<span class="i">CommandText</span>.<span class="i">Equals</span>(<span class="s">&quot;Out-Default&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>)))
+                       )
+                    {
+                        <span class="c">// Ensure pipeline output goes to Out-Default.</span>
+                        <span class="r44 r">executeCommands</span>.<span class="i">Add</span>(<a href="#dfae2bd69709a616" class="i method">GetOutDefaultCommand</a>(<span class="r39 r">endOfStatement</span>: <b>false</b>));
+                    }
+ 
+                    <span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Clear</span>();
+                    <b>foreach</b> (<b>var</b> <span id="r47 rd" class="r47 r">cmd</span> <b>in</b> <span class="r44 r">executeCommands</span>)
+                    {
+                        <span class="r40 r">tempPipeline</span>.<a href="/System.Management.Automation/A.html#55623b34b6a2a65a" class="i property">Commands</a>.<span class="i">Add</span>(<span class="r47 r">cmd</span>);
+                    }
+                }
+            }
+ 
+            <a href="#c4a69b641f3e390e" class="t t">Executor</a> <span id="r48 rd" class="r48 r">oldCurrent</span> = <a href="#ac525ce39121e57c" class="i property">CurrentExecutor</a>;
+            <a href="#ac525ce39121e57c" class="i property">CurrentExecutor</a> = <a href="#c4a69b641f3e390e" class="k">this</a>;
+ 
+            <b>lock</b> (<a href="#9bc068fb292833cc" class="i field">_instanceStateLock</a>)
+            {
+                <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(<a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> == <b>null</b>, <span class="s">&quot;no other pipeline should exist&quot;</span>);
+                <a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> = <span class="r40 r">tempPipeline</span>;
+            }
+ 
+            <b>try</b>
+            {
+                <span class="c">// blocks until all results are retrieved.</span>
+                <span class="r43 r">results</span> = <span class="r40 r">tempPipeline</span>.<span class="i">Invoke</span>();
+            }
+            <b>catch</b> (<span class="i">Exception</span> <span id="r49 rd" class="r49 r">e</span>)
+            {
+                <span class="r41 r">exceptionThrown</span> = <span class="r49 r">e</span>;
+            }
+            <b>finally</b>
+            {
+                <span class="c">// Once we have the results, or an exception is thrown, we throw away the pipeline.</span>
+ 
+                <a href="#1036fc99cbb33003" class="i field">_parent</a>.<a href="ConsoleHost.cs.html#9579865b1d1857cb" class="i field">ui</a>.<a href="ConsoleHostUserInterfaceProgress.cs.html#fc935a2340899864" class="i method">ResetProgress</a>();
+                <a href="#ac525ce39121e57c" class="i property">CurrentExecutor</a> = <span class="r48 r">oldCurrent</span>;
+                <a href="#68290db1044bb004" class="i method">Reset</a>();
+            }
+ 
+            <b>return</b> <span class="r43 r">results</span>;
+        }
+ 
+        [<span class="i">SuppressMessage</span>(<span class="s">&quot;Microsoft.Performance&quot;</span>, <span class="s">&quot;CA1811:AvoidUncalledPrivateCode&quot;</span>, <span class="i">Justification</span> = <span class="s">&quot;Needed by ProfileTests as mentioned in bug 140572&quot;</span>)]
+        <b>internal</b> <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <a id="850d7d1771999187" href="../../R/../../0000000000.html" target="n" data-glyph="74,1" class="i method">ExecuteCommand</a>(<b>string</b> <span id="r50 rd" class="r50 r">command</span>)
+        {
+            <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r51 rd" class="r51 r">result</span> = <b>null</b>;
+            <span class="i">Exception</span> <span id="r52 rd" class="r52 r">e</span> = <b>null</b>;
+ 
+            <b>do</b>
+            {
+                <span class="r51 r">result</span> = <a href="#48bc1dbfcd4f0d92" class="i method">ExecuteCommand</a>(<span class="r50 r">command</span>, <b>out</b> <span class="r52 r">e</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#f3d1d54669e6e184" class="i field">None</a>);
+                <b>if</b> (<span class="r52 r">e</span> != <b>null</b>)
+                {
+                    <b>break</b>;
+                }
+ 
+                <b>if</b> (<span class="r51 r">result</span> == <b>null</b>)
+                {
+                    <b>break</b>;
+                }
+            } <b>while</b> (<b>false</b>);
+ 
+            <b>return</b> <span class="r51 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Executes a command (by calling this.ExecuteCommand), and coerces the first result object to a string.  Any Exception</span>
+        <span class="c">///</span><span class="c"> thrown in the course of execution is returned thru the exceptionThrown parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r53 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The command to execute.  May be any valid monad command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r54 r">exceptionThrown</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Receives the Exception thrown by the execution of the command, if any. If no exception is thrown, then set to null.</span>
+        <span class="c">///</span><span class="c"> Can be tested to see if the execution was successful or not.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The string representation of the first result object returned, or null if an exception was thrown or no objects were</span>
+        <span class="c">///</span><span class="c"> returned by the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="48f21f3791ff6dc0" href="../../R/48f21f3791ff6dc0.html" target="n" data-glyph="74,1" class="i method">ExecuteCommandAndGetResultAsString</a>(<b>string</b> <span id="r53 rd" class="r53 r">command</span>, <b>out</b> <span class="i">Exception</span> <span id="r54 rd" class="r54 r">exceptionThrown</span>)
+        {
+            <span class="r54 r">exceptionThrown</span> = <b>null</b>;
+ 
+            <b>string</b> <span id="r55 rd" class="r55 r">result</span> = <b>null</b>;
+ 
+            <b>do</b>
+            {
+                <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r56 rd" class="r56 r">streamResults</span> = <a href="#48bc1dbfcd4f0d92" class="i method">ExecuteCommand</a>(<span class="r53 r">command</span>, <b>out</b> <span class="r54 r">exceptionThrown</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#f3d1d54669e6e184" class="i field">None</a>);
+ 
+                <b>if</b> (<span class="r54 r">exceptionThrown</span> != <b>null</b>)
+                {
+                    <b>break</b>;
+                }
+ 
+                <b>if</b> (<span class="r56 r">streamResults</span> == <b>null</b> || <span class="r56 r">streamResults</span>.<span class="i">Count</span> == 0)
+                {
+                    <b>break</b>;
+                }
+ 
+                <span class="c">// we got back one or more objects. Pick off the first result.</span>
+                <b>if</b> (<span class="r56 r">streamResults</span>[0] == <b>null</b>)
+                    <b>return</b> <b>string</b>.<span class="i">Empty</span>;
+ 
+                <span class="c">// And convert the base object into a string. We can&#39;t use the proxied</span>
+                <span class="c">// ToString() on the PSObject because there is no default runspace</span>
+                <span class="c">// available.</span>
+                <a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a> <span id="r57 rd" class="r57 r">msho</span> = <span class="r56 r">streamResults</span>[0] <b>as</b> <a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>;
+                <b>if</b> (<span class="r57 r">msho</span> != <b>null</b>)
+                    <span class="r55 r">result</span> = <span class="r57 r">msho</span>.<a href="/System.Management.Automation/A.html#d854d13536b70a12" class="i property">BaseObject</a>.<span class="i">ToString</span>();
+                <b>else</b>
+                    <span class="r55 r">result</span> = <span class="r56 r">streamResults</span>[0].<span class="i">ToString</span>();
+            }
+            <b>while</b> (<b>false</b>);
+ 
+            <b>return</b> <span class="r55 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Executes a command (by calling this.ExecuteCommand), and coerces the first result object to a bool.  Any Exception</span>
+        <span class="c">///</span><span class="c"> thrown in the course of execution is caught and ignored.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r58 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The command to execute.  May be any valid monad command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Nullable`bool representation of the first result object returned, or null if an exception was thrown or no</span>
+        <span class="c">///</span><span class="c"> objects were returned by the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal bool</b>? <a id="cb328fd2d481ab4c" href="../../R/cb328fd2d481ab4c.html" target="n" data-glyph="74,1" class="i method">ExecuteCommandAndGetResultAsBool</a>(<b>string</b> <span id="r58 rd" class="r58 r">command</span>)
+        {
+            <span class="i">Exception</span> <span id="r59 rd" class="r59 r">unused</span> = <b>null</b>;
+ 
+            <b>bool</b>? <span id="r60 rd" class="r60 r">result</span> = <a href="#1c612f1ca997b69d" class="i method">ExecuteCommandAndGetResultAsBool</a>(<span class="r58 r">command</span>, <b>out</b> <span class="r59 r">unused</span>);
+ 
+            <b>return</b> <span class="r60 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Executes a command (by calling this.ExecuteCommand), and coerces the first result object to a bool.  Any Exception</span>
+        <span class="c">///</span><span class="c"> thrown in the course of execution is returned thru the exceptionThrown parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">command</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The command to execute.  May be any valid monad command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">exceptionThrown</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Receives the Exception thrown by the execution of the command, if any. If no exception is thrown, then set to null.</span>
+        <span class="c">///</span><span class="c"> Can be tested to see if the execution was successful or not.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The Nullable`bool representation of the first result object returned, or null if an exception was thrown or no</span>
+        <span class="c">///</span><span class="c"> objects were returned by the command.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal bool</b>? <a id="1c612f1ca997b69d" href="../../R/1c612f1ca997b69d.html" target="n" data-glyph="74,1" class="i method">ExecuteCommandAndGetResultAsBool</a>(<b>string</b> <span id="r61 rd" class="r61 r">command</span>, <b>out</b> <span class="i">Exception</span> <span id="r62 rd" class="r62 r">exceptionThrown</span>)
+        {
+            <span class="r62 r">exceptionThrown</span> = <b>null</b>;
+ 
+            <a href="/System.Management.Automation/A.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r61 r">command</span>), <span class="s">&quot;command should have a value&quot;</span>);
+ 
+            <b>bool</b>? <span id="r63 rd" class="r63 r">result</span> = <b>null</b>;
+ 
+            <b>do</b>
+            {
+                <span class="i">Collection</span>&lt;<a href="/System.Management.Automation/A.html#a3c2513aa3da07fa" class="t t">PSObject</a>&gt; <span id="r64 rd" class="r64 r">streamResults</span> = <a href="#48bc1dbfcd4f0d92" class="i method">ExecuteCommand</a>(<span class="r61 r">command</span>, <b>out</b> <span class="r62 r">exceptionThrown</span>, <a href="#358f021732ebaa99" class="t t">ExecutionOptions</a>.<a href="#f3d1d54669e6e184" class="i field">None</a>);
+ 
+                <b>if</b> (<span class="r62 r">exceptionThrown</span> != <b>null</b>)
+                {
+                    <b>break</b>;
+                }
+ 
+                <b>if</b> (<span class="r64 r">streamResults</span> == <b>null</b> || <span class="r64 r">streamResults</span>.<span class="i">Count</span> == 0)
+                {
+                    <b>break</b>;
+                }
+ 
+                <span class="c">// we got back one or more objects.</span>
+ 
+                <span class="r63 r">result</span> = (<span class="r64 r">streamResults</span>.<span class="i">Count</span> &gt; 1) || (<a href="/System.Management.Automation/A.html#6dac09d64da9900c" class="t t">LanguagePrimitives</a>.<span class="i">IsTrue</span>(<span class="r64 r">streamResults</span>[0]));
+            }
+            <b>while</b> (<b>false</b>);
+ 
+            <b>return</b> <span class="r63 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Cancels execution of the current instance.  If the current instance is not running, then does nothing.  Called in</span>
+        <span class="c">///</span><span class="c"> response to a break handler, by the static Executor.Cancel method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="9001698e105faf7e" href="../../R/9001698e105faf7e.html" target="n" data-glyph="76,1" class="i method">Cancel</a>()
+        {
+            <span class="c">// if there&#39;s a pipeline running, stop it.</span>
+ 
+            <b>lock</b> (<a href="#9bc068fb292833cc" class="i field">_instanceStateLock</a>)
+            {
+                <b>if</b> (<a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> != <b>null</b> &amp;&amp; !<a href="#1469339fa71453f5" class="i field">_cancelled</a>)
+                {
+                    <a href="#1469339fa71453f5" class="i field">_cancelled</a> = <b>true</b>;
+ 
+                    <b>if</b> (<a href="#d167bafaba120bc3" class="i field">_isPromptFunctionExecutor</a>)
+                    {
+                        <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Thread</span>.<span class="i">Sleep</span>(100);
+                    }
+ 
+                    <a href="#85a2c2660b7d19e9" class="i field">_pipeline</a>.<span class="i">Stop</span>();
+                }
+            }
+        }
+ 
+        <b>internal void</b> <a id="6af679ffae197454" href="../../R/6af679ffae197454.html" target="n" data-glyph="74,1" class="i method">BlockCommandOutput</a>()
+        {
+            <span class="i">RemotePipeline</span> <span id="r65 rd" class="r65 r">remotePipeline</span> = <a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> <b>as</b> <span class="i">RemotePipeline</span>;
+            <b>if</b> (<span class="r65 r">remotePipeline</span> != <b>null</b>)
+            {
+                <span class="c">// Waits until queued data is handled.</span>
+                <span class="r65 r">remotePipeline</span>.<span class="i">DrainIncomingData</span>();
+ 
+                <span class="c">// Blocks any new data.</span>
+                <span class="r65 r">remotePipeline</span>.<span class="i">SuspendIncomingData</span>();
+            }
+        }
+ 
+        <b>internal void</b> <a id="ef12ea39b5c2c7dd" href="../../R/ef12ea39b5c2c7dd.html" target="n" data-glyph="74,1" class="i method">ResumeCommandOutput</a>()
+        {
+            <span class="i">RemotePipeline</span> <span id="r66 rd" class="r66 r">remotePipeline</span> = <a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> <b>as</b> <span class="i">RemotePipeline</span>;
+            <b>if</b> (<span class="r66 r">remotePipeline</span> != <b>null</b>)
+            {
+                <span class="c">// Resumes data flow.</span>
+                <span class="r66 r">remotePipeline</span>.<span class="i">ResumeIncomingData</span>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Resets the instance to its post-ctor state.  Does not cancel execution.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="68290db1044bb004" href="../../R/68290db1044bb004.html" target="n" data-glyph="76,1" class="i method">Reset</a>()
+        {
+            <b>lock</b> (<a href="#9bc068fb292833cc" class="i field">_instanceStateLock</a>)
+            {
+                <a href="#85a2c2660b7d19e9" class="i field">_pipeline</a> = <b>null</b>;
+                <a href="#1469339fa71453f5" class="i field">_cancelled</a> = <b>false</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Makes the given instance the &quot;current&quot; instance, that is, the instance that will receive a Cancel call if the break</span>
+        <span class="c">///</span><span class="c"> handler is triggered and calls the static Cancel method.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The instance to make current.  Null is allowed.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Here are some state-transition cases to illustrate the use of CurrentExecutor</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> null is current</span>
+        <span class="c">///</span><span class="c"> p1.ExecuteCommand</span>
+        <span class="c">///</span><span class="c">     set p1 as current</span>
+        <span class="c">///</span><span class="c">     promptforparams</span>
+        <span class="c">///</span><span class="c">         tab complete</span>
+        <span class="c">///</span><span class="c">             p2.ExecuteCommand</span>
+        <span class="c">///</span><span class="c">                 set p2 as current</span>
+        <span class="c">///</span><span class="c">                 p2.Execute completes</span>
+        <span class="c">///</span><span class="c">                 restore old current to p1</span>
+        <span class="c">///</span><span class="c">     p1.Execute completes</span>
+        <span class="c">///</span><span class="c">     restore null as current</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Here&#39;s another case:</span>
+        <span class="c">///</span><span class="c"> null is current</span>
+        <span class="c">///</span><span class="c"> p1.ExecuteCommand</span>
+        <span class="c">///</span><span class="c">     set p1 as current</span>
+        <span class="c">///</span><span class="c">     ShouldProcess - suspend</span>
+        <span class="c">///</span><span class="c">         EnterNestedPrompt</span>
+        <span class="c">///</span><span class="c">             set null as current so that break does not exit the subshell</span>
+        <span class="c">///</span><span class="c">             evaluate prompt</span>
+        <span class="c">///</span><span class="c">                 p2.ExecuteCommand</span>
+        <span class="c">///</span><span class="c">                    set p2 as current</span>
+        <span class="c">///</span><span class="c">                    Execute completes</span>
+        <span class="c">///</span><span class="c">                    restore null as current</span>
+        <span class="c">///</span><span class="c">            nested loop exit</span>
+        <span class="c">///</span><span class="c">            restore p1 as current</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c"> Summary:</span>
+        <span class="c">///</span><span class="c"> ExecuteCommand always saves/sets/restores CurrentExecutor</span>
+        <span class="c">///</span><span class="c"> Host.EnterNestedPrompt always saves/clears/restores CurrentExecutor</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>internal static</b> <a href="#c4a69b641f3e390e" class="t t">Executor</a> <a id="ac525ce39121e57c" href="../../R/ac525ce39121e57c.html" target="n" data-glyph="104,1" class="i property">CurrentExecutor</a>
+        {
+            <b>get</b>
+            {
+                <a href="#c4a69b641f3e390e" class="t t">Executor</a> <span id="r67 rd" class="r67 r">result</span> = <b>null</b>;
+ 
+                <b>lock</b> (<a href="#d74658fe105fd1af" class="i field">s_staticStateLock</a>)
+                {
+                    <span class="r67 r">result</span> = <a href="#e7319cc7da2f7a20" class="i field">s_currentExecutor</a>;
+                }
+ 
+                <b>return</b> <span class="r67 r">result</span>;
+            }
+ 
+            <b>set</b>
+            {
+                <b>lock</b> (<a href="#d74658fe105fd1af" class="i field">s_staticStateLock</a>)
+                {
+                    <span class="c">// null is acceptable.</span>
+ 
+                    <a href="#e7319cc7da2f7a20" class="i field">s_currentExecutor</a> = <b>value</b>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Cancels the execution of the current instance (the instance last passed to PushCurrentExecutor), if any.  If no</span>
+        <span class="c">///</span><span class="c"> instance is Current, then does nothing.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static void</b> <a id="6c1cc1690a616634" href="../../R/6c1cc1690a616634.html" target="n" data-glyph="74,1" class="i method">CancelCurrentExecutor</a>()
+        {
+            <a href="#c4a69b641f3e390e" class="t t">Executor</a> <span id="r68 rd" class="r68 r">temp</span> = <b>null</b>;
+ 
+            <b>lock</b> (<a href="#d74658fe105fd1af" class="i field">s_staticStateLock</a>)
+            {
+                <span class="r68 r">temp</span> = <a href="#e7319cc7da2f7a20" class="i field">s_currentExecutor</a>;
+            }
+ 
+            <b>if</b> (<span class="r68 r">temp</span> != <b>null</b>)
+            {
+                <span class="r68 r">temp</span>.<a href="#9001698e105faf7e" class="i method">Cancel</a>();
+            }
+        }
+ 
+        <span class="c">// These statics are threadsafe, as there can be only one instance of ConsoleHost in a process at a time, and access</span>
+        <span class="c">// to currentExecutor is guarded by staticStateLock, and static initializers are run by the CLR at program init time.</span>
+ 
+        <b>private static</b> <a href="#c4a69b641f3e390e" class="t t">Executor</a> <a id="e7319cc7da2f7a20" href="../../R/e7319cc7da2f7a20.html" target="n" data-glyph="46,1" class="i field">s_currentExecutor</a>;
+        <b>private static readonly object</b> <a id="d74658fe105fd1af" href="../../R/d74658fe105fd1af.html" target="n" data-glyph="46,1" class="i field">s_staticStateLock</a> = <b>new</b> <b>object</b>();
+ 
+        <b>private readonly</b> <a href="../../P/cda5e43a29a66e53.html#cda5e43a29a66e53" class="t t">ConsoleHost</a> <a id="1036fc99cbb33003" href="../../R/1036fc99cbb33003.html" target="n" data-glyph="46,1" class="i field">_parent</a>;
+        <b>private</b> <a href="/System.Management.Automation/A.html#c607964c20793ea5" class="t t">Pipeline</a> <a id="85a2c2660b7d19e9" href="../../R/85a2c2660b7d19e9.html" target="n" data-glyph="46,1" class="i field">_pipeline</a>;
+        <b>private bool</b> <a id="1469339fa71453f5" href="../../R/1469339fa71453f5.html" target="n" data-glyph="46,1" class="i field">_cancelled</a>;
+        <b>internal bool</b> <a id="3cf0852ca5a12802" href="../../R/3cf0852ca5a12802.html" target="n" data-glyph="44,1" class="i field">useNestedPipelines</a>;
+        <b>private readonly object</b> <a id="9bc068fb292833cc" href="../../R/9bc068fb292833cc.html" target="n" data-glyph="46,1" class="i field">_instanceStateLock</a> = <b>new</b> <b>object</b>();
+        <b>private readonly bool</b> <a id="d167bafaba120bc3" href="../../R/d167bafaba120bc3.html" target="n" data-glyph="46,1" class="i field">_isPromptFunctionExecutor</a>;
+    }
+}   <span class="c">// namespace</span>
+</pre></td></tr></table></div></body></html>

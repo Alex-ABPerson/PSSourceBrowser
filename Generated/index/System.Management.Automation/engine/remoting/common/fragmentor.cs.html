@@ -1,0 +1,1136 @@
+﻿<!DOCTYPE html>
+<html><head><title>fragmentor.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(1127);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/remoting/common/fragmentor.cs" target="_top">engine\remoting\common\fragmentor.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Tracing</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Xml</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+<b>using</b> <span class="t">TypeTable</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>.<a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Remoting</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class is used to hold a fragment of remoting PSObject for transporting to remote computer.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> A large remoting PSObject will be broken into fragments. Each fragment has a ObjectId and a FragmentId.</span>
+    <span class="c">///</span><span class="c"> The first fragment has a StartFragment marker. The last fragment also an EndFragment marker.</span>
+    <span class="c">///</span><span class="c"> These fragments can be reassembled on the receiving</span>
+    <span class="c">///</span><span class="c"> end by sequencing the fragment ids.</span>
+    <span class="c">///</span>
+    <span class="c">///</span><span class="c"> Currently control objects (Control-C for stopping a pipeline execution) is not</span>
+    <span class="c">///</span><span class="c"> really fragmented. These objects are small. They are just wrapped into a single</span>
+    <span class="c">///</span><span class="c"> fragment.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="caed06b144c40930" href="../../../R/caed06b144c40930.html" target="n" data-glyph="2,0" class="t t">FragmentedRemoteObject</a>
+    {
+        <b>private byte</b>[] <a id="e2cfbbe7346594e0" href="../../../R/e2cfbbe7346594e0.html" target="n" data-glyph="46,1" class="i field">_blob</a>;
+        <b>private int</b> <a id="5126705e3838dda2" href="../../../R/5126705e3838dda2.html" target="n" data-glyph="46,1" class="i field">_blobLength</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> SFlag stands for the IsStartFragment. It is the bit value in the binary encoding.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal const byte</b> <a id="3d57d1782ce837b9" href="../../../R/3d57d1782ce837b9.html" target="n" data-glyph="8,1" class="i field">SFlag</a> = 0x1;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> EFlag stands for the IsEndFragment. It is the bit value in the binary encoding.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal const byte</b> <a id="cc1e3898fe216213" href="../../../R/cc1e3898fe216213.html" target="n" data-glyph="8,1" class="i field">EFlag</a> = 0x2;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> HeaderLength is the total number of bytes in the binary encoding header.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal const int</b> <a id="69c9aa4057c52f43" href="../../../R/69c9aa4057c52f43.html" target="n" data-glyph="8,1" class="i field">HeaderLength</a> = 8 + 8 + 1 + 4;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> _objectIdOffset is the offset of the ObjectId in the binary encoding.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private const int</b> <a id="f21449b31f8bfc9e" href="../../../R/f21449b31f8bfc9e.html" target="n" data-glyph="10,1" class="i field">_objectIdOffset</a> = 0;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> _fragmentIdOffset is the offset of the FragmentId in the binary encoding.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private const int</b> <a id="8279f6ae702e7bb3" href="../../../R/8279f6ae702e7bb3.html" target="n" data-glyph="10,1" class="i field">_fragmentIdOffset</a> = 8;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> _flagsOffset is the offset of the byte in the binary encoding that contains the SFlag, EFlag and CFlag.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private const int</b> <a id="a2fc071d53a8f00d" href="../../../R/a2fc071d53a8f00d.html" target="n" data-glyph="10,1" class="i field">_flagsOffset</a> = 16;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> _blobLengthOffset is the offset of the BlobLength in the binary encoding.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private const int</b> <a id="9fe3fdcb310bc538" href="../../../R/9fe3fdcb310bc538.html" target="n" data-glyph="10,1" class="i field">_blobLengthOffset</a> = 17;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> _blobOffset is the offset of the Blob in the binary encoding.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private const int</b> <a id="91f1f1dc2a4fd2b9" href="../../../R/91f1f1dc2a4fd2b9.html" target="n" data-glyph="10,1" class="i field">_blobOffset</a> = 21;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Default Constructor.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="0c5c09484ac8d967" href="../../../R/0c5c09484ac8d967.html" target="n" data-glyph="74,1" class="t constructor">FragmentedRemoteObject</a>()
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Used to construct a fragment of PSObject to be sent to remote computer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">blob</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">objectId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> ObjectId of the fragment.</span>
+        <span class="c">///</span><span class="c"> Caller should make sure this is not less than 0.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">fragmentId</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> FragmentId within the object.</span>
+        <span class="c">///</span><span class="c"> Caller should make sure this is not less than 0.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">isEndFragment</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true if this is a EndFragment.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="aa7bd0094d1b50a9" href="../../../R/../../0000000000.html" target="n" data-glyph="74,1" class="t constructor">FragmentedRemoteObject</a>(<b>byte</b>[] <span id="r0 rd" class="r0 r">blob</span>, <b>long</b> <span id="r1 rd" class="r1 r">objectId</span>, <b>long</b> <span id="r2 rd" class="r2 r">fragmentId</span>,
+            <b>bool</b> <span id="r3 rd" class="r3 r">isEndFragment</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>((<span class="r0 r">blob</span> != <b>null</b>) &amp;&amp; (<span class="r0 r">blob</span>.<span class="i">Length</span> != 0), <span class="s">&quot;Cannot create a fragment for null or empty data.&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r1 r">objectId</span> &gt;= 0, <span class="s">&quot;Object Id cannot be &lt; 0&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r2 r">fragmentId</span> &gt;= 0, <span class="s">&quot;Fragment Id cannot be &lt; 0&quot;</span>);
+ 
+            <a href="#cb0613f742d04810" class="i property">ObjectId</a> = <span class="r1 r">objectId</span>;
+            <a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> = <span class="r2 r">fragmentId</span>;
+ 
+            <a href="#477dc7541bcccaf7" class="i property">IsStartFragment</a> = <span class="r2 r">fragmentId</span> == 0;
+            <a href="#f597353f35e56889" class="i property">IsEndFragment</a> = <span class="r3 r">isEndFragment</span>;
+ 
+            <a href="#e2cfbbe7346594e0" class="i field">_blob</a> = <span class="r0 r">blob</span>;
+            <a href="#5126705e3838dda2" class="i field">_blobLength</a> = <a href="#e2cfbbe7346594e0" class="i field">_blob</a>.<span class="i">Length</span>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Constructors
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Data Fields being sent
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> All fragments of the same PSObject have the same ObjectId.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal long</b> <a id="cb0613f742d04810" href="../../../R/cb0613f742d04810.html" target="n" data-glyph="104,1" class="i property">ObjectId</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> FragmentId starts from 0. It increases sequentially by an increment of 1.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal long</b> <a id="7a58cf5f10c265dc" href="../../../R/7a58cf5f10c265dc.html" target="n" data-glyph="104,1" class="i property">FragmentId</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The first fragment of a PSObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="477dc7541bcccaf7" href="../../../R/477dc7541bcccaf7.html" target="n" data-glyph="104,1" class="i property">IsStartFragment</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The last fragment of a PSObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="f597353f35e56889" href="../../../R/f597353f35e56889.html" target="n" data-glyph="104,1" class="i property">IsEndFragment</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Blob length. This enables scenarios where entire byte[] is</span>
+        <span class="c">///</span><span class="c"> not filled for the fragment.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal int</b> <a id="15df1737ef81f98e" href="../../../R/15df1737ef81f98e.html" target="n" data-glyph="104,1" class="i property">BlobLength</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#5126705e3838dda2" class="i field">_blobLength</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>value</b> &gt;= 0, <span class="s">&quot;BlobLength cannot be less than 0.&quot;</span>);
+                <a href="#5126705e3838dda2" class="i field">_blobLength</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is the actual data in bytes form.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal byte</b>[] <a id="16288f3370845c8c" href="../../../R/16288f3370845c8c.html" target="n" data-glyph="104,1" class="i property">Blob</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#e2cfbbe7346594e0" class="i field">_blob</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>value</b> != <b>null</b>, <span class="s">&quot;Blob cannot be null&quot;</span>);
+                <a href="#e2cfbbe7346594e0" class="i field">_blob</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> Data Fields being sent
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method generate a binary encoding of the FragmentedRemoteObject as follows:</span>
+        <span class="c">///</span><span class="c"> ObjectId: 8 bytes as long, byte order is big-endian. this value can only be non-negative.</span>
+        <span class="c">///</span><span class="c"> FragmentId: 8 bytes as long, byte order is big-endian. this value can only be non-negative.</span>
+        <span class="c">///</span><span class="c"> FlagsByte: 1 byte:</span>
+        <span class="c">///</span><span class="c">       0x1 if IsStartOfFragment is true: This is called S-flag.</span>
+        <span class="c">///</span><span class="c">       0x2 if IsEndOfFragment is true: This is called the E-flag.</span>
+        <span class="c">///</span><span class="c">       0x4 if IsControl is true: This is called the C-flag.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c">       The other bits are reserved for future use.</span>
+        <span class="c">///</span><span class="c">       Now they must be zero when sending,</span>
+        <span class="c">///</span><span class="c">       and they are ignored when receiving.</span>
+        <span class="c">///</span><span class="c"> BlobLength: 4 bytes as int, byte order is big-endian. this value can only be non-negative.</span>
+        <span class="c">///</span><span class="c"> Blob: BlobLength number of bytes.</span>
+        <span class="c">///</span>
+        <span class="c">///</span><span class="c">     0                   1                   2                   3</span>
+        <span class="c">///</span><span class="c">     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |                                                               |</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-         ObjectId               +-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |                                                               |</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |                                                               |</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-        FragmentId              +-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |                                                               |</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |reserved |C|E|S|</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |                        BlobLength                             |</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</span>
+        <span class="c">///</span><span class="c">     |     Blob ...</span>
+        <span class="c">///</span><span class="c">     +-+-+-+-+-+-+-+-</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The binary encoded FragmentedRemoteObject to be ready to pass to WinRS Send API.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal byte</b>[] <a id="422a9406db13745b" href="../../../R/422a9406db13745b.html" target="n" data-glyph="74,1" class="i method">GetBytes</a>()
+        {
+            <b>const int</b> <span id="r4 rd" class="r4 r">objectIdSize</span> = 8; <span class="c">// number of bytes of long</span>
+            <b>const int</b> <span id="r5 rd" class="r5 r">fragmentIdSize</span> = 8; <span class="c">// number of bytes of long</span>
+            <b>const int</b> <span id="r6 rd" class="r6 r">flagsSize</span> = 1; <span class="c">// 1 byte for IsEndOfFrag and IsControl</span>
+            <b>const int</b> <span id="r7 rd" class="r7 r">blobLengthSize</span> = 4; <span class="c">// number of bytes of int</span>
+ 
+            <b>int</b> <span id="r8 rd" class="r8 r">totalLength</span> = <span class="r4 r">objectIdSize</span> + <span class="r5 r">fragmentIdSize</span> + <span class="r6 r">flagsSize</span> + <span class="r7 r">blobLengthSize</span> + <a href="#15df1737ef81f98e" class="i property">BlobLength</a>;
+ 
+            <b>byte</b>[] <span id="r9 rd" class="r9 r">result</span> = <b>new</b> <b>byte</b>[<span class="r8 r">totalLength</span>];
+ 
+            <b>int</b> <span id="r10 rd" class="r10 r">idx</span> = 0;
+ 
+            <span class="c">// release build will optimize the calculation of the constants</span>
+ 
+            <span class="c">// ObjectId</span>
+            <span class="r10 r">idx</span> = <a href="#f21449b31f8bfc9e" class="i field">_objectIdOffset</a>;
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; (7 * 8)) &amp; 0x7F); <span class="c">// sign bit is 0</span>
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; (6 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; (5 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; (4 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; (3 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; (2 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#cb0613f742d04810" class="i property">ObjectId</a> &gt;&gt; 8) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)(<a href="#cb0613f742d04810" class="i property">ObjectId</a> &amp; 0xFF);
+ 
+            <span class="c">// FragmentId</span>
+            <span class="r10 r">idx</span> = <a href="#8279f6ae702e7bb3" class="i field">_fragmentIdOffset</a>;
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; (7 * 8)) &amp; 0x7F); <span class="c">// sign bit is 0</span>
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; (6 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; (5 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; (4 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; (3 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; (2 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &gt;&gt; 8) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)(<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> &amp; 0xFF);
+ 
+            <span class="c">// E-flag and S-Flag</span>
+            <span class="r10 r">idx</span> = <a href="#a2fc071d53a8f00d" class="i field">_flagsOffset</a>;
+            <b>byte</b> <span id="r11 rd" class="r11 r">s_flag</span> = <a href="#477dc7541bcccaf7" class="i property">IsStartFragment</a> ? <a href="#3d57d1782ce837b9" class="i field">SFlag</a> : (<b>byte</b>)0;
+            <b>byte</b> <span id="r12 rd" class="r12 r">e_flag</span> = <a href="#f597353f35e56889" class="i property">IsEndFragment</a> ? <a href="#cc1e3898fe216213" class="i field">EFlag</a> : (<b>byte</b>)0;
+ 
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)(<span class="r11 r">s_flag</span> | <span class="r12 r">e_flag</span>);
+ 
+            <span class="c">// BlobLength</span>
+            <span class="r10 r">idx</span> = <a href="#9fe3fdcb310bc538" class="i field">_blobLengthOffset</a>;
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#15df1737ef81f98e" class="i property">BlobLength</a> &gt;&gt; (3 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#15df1737ef81f98e" class="i property">BlobLength</a> &gt;&gt; (2 * 8)) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)((<a href="#15df1737ef81f98e" class="i property">BlobLength</a> &gt;&gt; 8) &amp; 0xFF);
+            <span class="r9 r">result</span>[<span class="r10 r">idx</span>++] = (<b>byte</b>)(<a href="#15df1737ef81f98e" class="i property">BlobLength</a> &amp; 0xFF);
+ 
+            <span class="i">Array</span>.<span class="i">Copy</span>(<a href="#e2cfbbe7346594e0" class="i field">_blob</a>, 0, <span class="r9 r">result</span>, <a href="#91f1f1dc2a4fd2b9" class="i field">_blobOffset</a>, <a href="#15df1737ef81f98e" class="i property">BlobLength</a>);
+ 
+            <b>return</b> <span class="r9 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Extract the objectId from a byte array, starting at the index indicated by</span>
+        <span class="c">///</span><span class="c"> startIndex parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">fragmentBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">startIndex</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The objectId.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If fragmentBytes is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If startIndex is negative or fragmentBytes is not large enough to hold the entire header of</span>
+        <span class="c">///</span><span class="c"> a binary encoded FragmentedRemoteObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static long</b> <a id="1c1b0abb4e58bbed" href="../../../R/1c1b0abb4e58bbed.html" target="n" data-glyph="74,1" class="i method">GetObjectId</a>(<b>byte</b>[] <span id="r13 rd" class="r13 r">fragmentBytes</span>, <b>int</b> <span id="r14 rd" class="r14 r">startIndex</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r13 r">fragmentBytes</span> != <b>null</b>, <span class="s">&quot;fragmentBytes cannot be null&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r13 r">fragmentBytes</span>.<span class="i">Length</span> &gt;= <a href="#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="s">&quot;not enough data to decode object id&quot;</span>);
+            <b>long</b> <span id="r15 rd" class="r15 r">objectId</span> = 0;
+ 
+            <b>int</b> <span id="r16 rd" class="r16 r">idx</span> = <span class="r14 r">startIndex</span> + <a href="#f21449b31f8bfc9e" class="i field">_objectIdOffset</a>;
+ 
+            <span class="r15 r">objectId</span> = (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; (7 * 8)) &amp; 0x7F00000000000000;
+            <span class="r15 r">objectId</span> += (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; (6 * 8)) &amp; 0xFF000000000000;
+            <span class="r15 r">objectId</span> += (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; (5 * 8)) &amp; 0xFF0000000000;
+            <span class="r15 r">objectId</span> += (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; (4 * 8)) &amp; 0xFF00000000;
+            <span class="r15 r">objectId</span> += (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; (3 * 8)) &amp; 0xFF000000;
+            <span class="r15 r">objectId</span> += (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; (2 * 8)) &amp; 0xFF0000;
+            <span class="r15 r">objectId</span> += (((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &lt;&lt; 8) &amp; 0xFF00;
+            <span class="r15 r">objectId</span> += ((<b>long</b>)<span class="r13 r">fragmentBytes</span>[<span class="r16 r">idx</span>++]) &amp; 0xFF;
+ 
+            <b>return</b> <span class="r15 r">objectId</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Extract the FragmentId from the byte array, starting at the index indicated by</span>
+        <span class="c">///</span><span class="c"> startIndex parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">fragmentBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">startIndex</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If fragmentBytes is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If startIndex is negative or fragmentBytes is not large enough to hold the entire header of</span>
+        <span class="c">///</span><span class="c"> a binary encoded FragmentedRemoteObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static long</b> <a id="5a6823c78b4710c8" href="../../../R/5a6823c78b4710c8.html" target="n" data-glyph="74,1" class="i method">GetFragmentId</a>(<b>byte</b>[] <span id="r17 rd" class="r17 r">fragmentBytes</span>, <b>int</b> <span id="r18 rd" class="r18 r">startIndex</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r17 r">fragmentBytes</span> != <b>null</b>, <span class="s">&quot;fragmentBytes cannot be null&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r17 r">fragmentBytes</span>.<span class="i">Length</span> &gt;= <a href="#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="s">&quot;not enough data to decode fragment id&quot;</span>);
+            <b>long</b> <span id="r19 rd" class="r19 r">fragmentId</span> = 0;
+            <b>int</b> <span id="r20 rd" class="r20 r">idx</span> = <span class="r18 r">startIndex</span> + <a href="#8279f6ae702e7bb3" class="i field">_fragmentIdOffset</a>;
+ 
+            <span class="r19 r">fragmentId</span> = (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; (7 * 8)) &amp; 0x7F00000000000000;
+            <span class="r19 r">fragmentId</span> += (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; (6 * 8)) &amp; 0xFF000000000000;
+            <span class="r19 r">fragmentId</span> += (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; (5 * 8)) &amp; 0xFF0000000000;
+            <span class="r19 r">fragmentId</span> += (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; (4 * 8)) &amp; 0xFF00000000;
+            <span class="r19 r">fragmentId</span> += (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; (3 * 8)) &amp; 0xFF000000;
+            <span class="r19 r">fragmentId</span> += (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; (2 * 8)) &amp; 0xFF0000;
+            <span class="r19 r">fragmentId</span> += (((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &lt;&lt; 8) &amp; 0xFF00;
+            <span class="r19 r">fragmentId</span> += ((<b>long</b>)<span class="r17 r">fragmentBytes</span>[<span class="r20 r">idx</span>++]) &amp; 0xFF;
+ 
+            <b>return</b> <span class="r19 r">fragmentId</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Extract the IsStartFragment value from the byte array, starting at the index indicated by</span>
+        <span class="c">///</span><span class="c"> startIndex parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r21 r">fragmentBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r22 r">startIndex</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True is the S-flag is set in the encoding. Otherwise false.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If fragmentBytes is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If startIndex is negative or fragmentBytes is not large enough to hold the entire header of</span>
+        <span class="c">///</span><span class="c"> a binary encoded FragmentedRemoteObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="7aac51626c016b38" href="../../../R/7aac51626c016b38.html" target="n" data-glyph="74,1" class="i method">GetIsStartFragment</a>(<b>byte</b>[] <span id="r21 rd" class="r21 r">fragmentBytes</span>, <b>int</b> <span id="r22 rd" class="r22 r">startIndex</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r21 r">fragmentBytes</span> != <b>null</b>, <span class="s">&quot;fragment cannot be null&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r21 r">fragmentBytes</span>.<span class="i">Length</span> &gt;= <a href="#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="s">&quot;not enough data to decode if it is a start fragment.&quot;</span>);
+ 
+            <b>if</b> ((<span class="r21 r">fragmentBytes</span>[<span class="r22 r">startIndex</span> + <a href="#a2fc071d53a8f00d" class="i field">_flagsOffset</a>] &amp; <a href="#3d57d1782ce837b9" class="i field">SFlag</a>) != 0)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Extract the IsEndFragment value from the byte array, starting at the index indicated by</span>
+        <span class="c">///</span><span class="c"> startIndex parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r23 r">fragmentBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r24 r">startIndex</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the E-flag is set in the encoding. Otherwise false.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If fragmentBytes is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If startIndex is negative or fragmentBytes is not large enough to hold the entire header of</span>
+        <span class="c">///</span><span class="c"> a binary encoded FragmentedRemoteObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="068641096a25e033" href="../../../R/068641096a25e033.html" target="n" data-glyph="74,1" class="i method">GetIsEndFragment</a>(<b>byte</b>[] <span id="r23 rd" class="r23 r">fragmentBytes</span>, <b>int</b> <span id="r24 rd" class="r24 r">startIndex</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r23 r">fragmentBytes</span> != <b>null</b>, <span class="s">&quot;fragment cannot be null&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r23 r">fragmentBytes</span>.<span class="i">Length</span> &gt;= <a href="#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="s">&quot;not enough data to decode if it is an end fragment.&quot;</span>);
+ 
+            <b>if</b> ((<span class="r23 r">fragmentBytes</span>[<span class="r24 r">startIndex</span> + <a href="#a2fc071d53a8f00d" class="i field">_flagsOffset</a>] &amp; <a href="#cc1e3898fe216213" class="i field">EFlag</a>) != 0)
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Extract the BlobLength value from the byte array, starting at the index indicated by</span>
+        <span class="c">///</span><span class="c"> startIndex parameter.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">fragmentBytes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">startIndex</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The BlobLength value.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If fragmentBytes is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If startIndex is negative or fragmentBytes is not large enough to hold the entire header of</span>
+        <span class="c">///</span><span class="c"> a binary encoded FragmentedRemoteObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal static int</b> <a id="c7ce00586675b83e" href="../../../R/c7ce00586675b83e.html" target="n" data-glyph="74,1" class="i method">GetBlobLength</a>(<b>byte</b>[] <span id="r25 rd" class="r25 r">fragmentBytes</span>, <b>int</b> <span id="r26 rd" class="r26 r">startIndex</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r25 r">fragmentBytes</span> != <b>null</b>, <span class="s">&quot;fragment cannot be null&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r25 r">fragmentBytes</span>.<span class="i">Length</span> &gt;= <a href="#69c9aa4057c52f43" class="i field">HeaderLength</a>, <span class="s">&quot;not enough data to decode blob length.&quot;</span>);
+ 
+            <b>int</b> <span id="r27 rd" class="r27 r">blobLength</span> = 0;
+            <b>int</b> <span id="r28 rd" class="r28 r">idx</span> = <span class="r26 r">startIndex</span> + <a href="#9fe3fdcb310bc538" class="i field">_blobLengthOffset</a>;
+ 
+            <span class="r27 r">blobLength</span> += (((<b>int</b>)<span class="r25 r">fragmentBytes</span>[<span class="r28 r">idx</span>++]) &lt;&lt; (3 * 8)) &amp; 0x7F000000;
+            <span class="r27 r">blobLength</span> += (((<b>int</b>)<span class="r25 r">fragmentBytes</span>[<span class="r28 r">idx</span>++]) &lt;&lt; (2 * 8)) &amp; 0xFF0000;
+            <span class="r27 r">blobLength</span> += (((<b>int</b>)<span class="r25 r">fragmentBytes</span>[<span class="r28 r">idx</span>++]) &lt;&lt; 8) &amp; 0xFF00;
+            <span class="r27 r">blobLength</span> += ((<b>int</b>)<span class="r25 r">fragmentBytes</span>[<span class="r28 r">idx</span>++]) &amp; 0xFF;
+ 
+            <b>return</b> <span class="r27 r">blobLength</span>;
+        }
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> A stream used to store serialized data. This stream holds serialized data in the</span>
+    <span class="c">///</span><span class="c"> form of fragments. Every &quot;fragment size&quot; data will hold a blob identifying the fragment.</span>
+    <span class="c">///</span><span class="c"> The blob has &quot;ObjectId&quot;,&quot;FragmentId&quot;,&quot;Properties like Start,End&quot;,&quot;BlobLength&quot;</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="d3a26c96b56add5c" href="../../../R/d3a26c96b56add5c.html" target="n" data-glyph="2,0" class="t t">SerializedDataStream</a> : <span class="i">Stream</span>, <span class="i">IDisposable</span>
+    {
+        [<span class="i">TraceSourceAttribute</span>(<span class="s">&quot;SerializedDataStream&quot;</span>, <span class="s">&quot;SerializedDataStream&quot;</span>)]
+        <b>private static readonly</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="8856a79a23879f48" href="../../../R/8856a79a23879f48.html" target="n" data-glyph="46,1" class="i field">s_trace</a> = <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#697b06ec70e3c537" class="i method">GetTracer</a>(<span class="s">&quot;SerializedDataStream&quot;</span>, <span class="s">&quot;SerializedDataStream&quot;</span>);
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Global Constants
+ 
+        <b>private static long</b> <a id="e8f6ea28853d4d37" href="../../../R/e8f6ea28853d4d37.html" target="n" data-glyph="46,1" class="i field">s_objectIdSequenceNumber</a> = 0;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <b>private bool</b> <a id="ede6c9f72017ded7" href="../../../R/ede6c9f72017ded7.html" target="n" data-glyph="46,1" class="i field">_isEntered</a>;
+        <b>private readonly</b> <a href="#caed06b144c40930" class="t t">FragmentedRemoteObject</a> <a id="0e903daaea8aacf1" href="../../../R/0e903daaea8aacf1.html" target="n" data-glyph="46,1" class="i field">_currentFragment</a>;
+        <b>private long</b> <a id="fe672ff7e50d12db" href="../../../R/fe672ff7e50d12db.html" target="n" data-glyph="46,1" class="i field">_fragmentId</a>;
+ 
+        <b>private readonly int</b> <a id="35e5e7705083e2ca" href="../../../R/35e5e7705083e2ca.html" target="n" data-glyph="46,1" class="i field">_fragmentSize</a>;
+        <b>private readonly object</b> <a id="0d666b26dda911b7" href="../../../R/0d666b26dda911b7.html" target="n" data-glyph="46,1" class="i field">_syncObject</a>;
+        <b>private bool</b> <a id="fe2b0f88cb009b10" href="../../../R/fe2b0f88cb009b10.html" target="n" data-glyph="46,1" class="i field">_isDisposed</a>;
+        <b>private readonly bool</b> <a id="3fc75df9a109750d" href="../../../R/3fc75df9a109750d.html" target="n" data-glyph="46,1" class="i field">_notifyOnWriteFragmentImmediately</a>;
+ 
+        <span class="c">// MemoryStream does not dynamically resize as data is read. This will waste</span>
+        <span class="c">// lot of memory as data sent on the network will still be there in memory.</span>
+        <span class="c">// To avoid this a queue of memory streams (each stream is of fragmentsize)</span>
+        <span class="c">// is created..so after data is sent the MemoryStream is disposed there by</span>
+        <span class="c">// clearing resources.</span>
+        <b>private readonly</b> <span class="i">Queue</span>&lt;<span class="i">MemoryStream</span>&gt; <a id="fec9fe37b80960ba" href="../../../R/fec9fe37b80960ba.html" target="n" data-glyph="46,1" class="i field">_queuedStreams</a>;
+        <b>private</b> <span class="i">MemoryStream</span> <a id="11b8bfe43a5b6afb" href="../../../R/11b8bfe43a5b6afb.html" target="n" data-glyph="46,1" class="i field">_writeStream</a>;
+        <b>private</b> <span class="i">MemoryStream</span> <a id="84c2f2906a3f529e" href="../../../R/84c2f2906a3f529e.html" target="n" data-glyph="46,1" class="i field">_readStream</a>;
+        <b>private int</b> <a id="26e4e59a0cdc4001" href="../../../R/26e4e59a0cdc4001.html" target="n" data-glyph="46,1" class="i field">_writeOffset</a>;
+        <b>private int</b> <a id="d9ce256fe6ae0fa3" href="../../../R/d9ce256fe6ae0fa3.html" target="n" data-glyph="46,1" class="i field">_readOffSet</a>;
+        <b>private long</b> <a id="1a601e5e7207b272" href="../../../R/1a601e5e7207b272.html" target="n" data-glyph="46,1" class="i field">_length</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Callback that is called once a fragmented data is available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r29 r">data</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Data that resulted in this callback.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">isEndFragment</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> true if data represents EndFragment of an object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal delegate void</b> <a id="6931116887ce476a" href="../../../R/6931116887ce476a.html" target="n" data-glyph="14,1" class="t t"><span id="ff243c11f660e1d7">OnDataAvailableCallback</span></a>(<b>byte</b>[] <span id="r29 rd" class="r29 r">data</span>, <b>bool</b> <span id="r30 rd" class="r30 r">isEndFragment</span>);
+ 
+        <b>private</b> <a href="#6931116887ce476a" class="t t">OnDataAvailableCallback</a> <a id="133eacbb956c6c6c" href="../../../R/133eacbb956c6c6c.html" target="n" data-glyph="46,1" class="i field">_onDataAvailableCallback</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Creates a stream to hold serialized data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">fragmentSize</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> fragmentSize to be used while creating fragment boundaries.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="b2d30b3f6669ee79" href="../../../R/b2d30b3f6669ee79.html" target="n" data-glyph="74,1" class="t constructor">SerializedDataStream</a>(<b>int</b> <span id="r31 rd" class="r31 r">fragmentSize</span>)
+        {
+            <a href="#8856a79a23879f48" class="i field">s_trace</a>.<a href="../../../utils/StructuredTraceSource.cs.html#70ee671c8687bfbd" class="i method">WriteLine</a>(<span class="s">&quot;Creating SerializedDataStream with fragmentsize : {0}&quot;</span>, <span class="r31 r">fragmentSize</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r31 r">fragmentSize</span> &gt; 0, <span class="s">&quot;fragmentsize should be greater than 0.&quot;</span>);
+            <a href="#0d666b26dda911b7" class="i field">_syncObject</a> = <b>new</b> <b>object</b>();
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a> = <b>new</b> <a href="#0c5c09484ac8d967" class="t constructor">FragmentedRemoteObject</a>();
+            <a href="#fec9fe37b80960ba" class="i field">_queuedStreams</a> = <b>new</b> <span class="i">Queue</span>&lt;<span class="i">MemoryStream</span>&gt;();
+            <a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a> = <span class="r31 r">fragmentSize</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Use this constructor carefully. This will not write data into internal</span>
+        <span class="c">///</span><span class="c"> streams. Instead this will make the SerializedDataStream call the</span>
+        <span class="c">///</span><span class="c"> callback whenever a fragmented data is available. It is upto the caller</span>
+        <span class="c">///</span><span class="c"> to figure out what to do with the data.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">fragmentSize</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> fragmentSize to be used while creating fragment boundaries.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">callbackToNotify</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If this is not null, then callback will get notified whenever fragmented</span>
+        <span class="c">///</span><span class="c"> data is available. Read() will return null in this case always.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="c4343f179bba8500" href="../../../R/c4343f179bba8500.html" target="n" data-glyph="74,1" class="t constructor">SerializedDataStream</a>(<b>int</b> <span id="r32 rd" class="r32 r">fragmentSize</span>,
+            <a href="#6931116887ce476a" class="t t">OnDataAvailableCallback</a> <span id="r33 rd" class="r33 r">callbackToNotify</span>) : <a href="#b2d30b3f6669ee79" class="k">this</a>(<span class="r32 r">fragmentSize</span>)
+        {
+            <b>if</b> (<span class="r33 r">callbackToNotify</span> != <b>null</b>)
+            {
+                <a href="#3fc75df9a109750d" class="i field">_notifyOnWriteFragmentImmediately</a> = <b>true</b>;
+                <a href="#133eacbb956c6c6c" class="i field">_onDataAvailableCallback</a> = <span class="r33 r">callbackToNotify</span>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Internal methods / Protected overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Start using the stream exclusively (to write data). The stream can be entered only once.</span>
+        <span class="c">///</span><span class="c"> If you want to Enter again, first Exit and then Enter.</span>
+        <span class="c">///</span><span class="c"> This method is not thread-safe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="17e95516c787a8e6" href="../../../R/17e95516c787a8e6.html" target="n" data-glyph="74,1" class="i method">Enter</a>()
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<a href="#ede6c9f72017ded7" class="i field">_isEntered</a>, <span class="s">&quot;Stream is already entered. You cannot enter into stream again.&quot;</span>);
+            <a href="#ede6c9f72017ded7" class="i field">_isEntered</a> = <b>true</b>;
+            <a href="#fe672ff7e50d12db" class="i field">_fragmentId</a> = 0;
+ 
+            <span class="c">// Initialize the current fragment</span>
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#cb0613f742d04810" class="i property">ObjectId</a> = <a href="#0086da8959e638e3" class="i method">GetObjectId</a>();
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> = <a href="#fe672ff7e50d12db" class="i field">_fragmentId</a>;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#477dc7541bcccaf7" class="i property">IsStartFragment</a> = <b>true</b>;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a> = 0;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#16288f3370845c8c" class="i property">Blob</a> = <b>new</b> <b>byte</b>[<a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a>];
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Notify that the stream is not used to write anymore.</span>
+        <span class="c">///</span><span class="c"> This method is not thread-safe.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="16d1058832f85660" href="../../../R/16d1058832f85660.html" target="n" data-glyph="74,1" class="i method">Exit</a>()
+        {
+            <a href="#ede6c9f72017ded7" class="i field">_isEntered</a> = <b>false</b>;
+            <span class="c">// write left over data</span>
+            <b>if</b> (<a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a> &gt; 0)
+            {
+                <span class="c">// this is endfragment...as we are in Exit</span>
+                <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#f597353f35e56889" class="i property">IsEndFragment</a> = <b>true</b>;
+                <a href="#a9d5012de171a8f9" class="i method">WriteCurrentFragmentAndReset</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Writes a block of bytes to the current stream using data read from buffer.</span>
+        <span class="c">///</span><span class="c"> The base MemoryStream is written to only if &quot;FragmentSize&quot; is reached.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r34 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The buffer to read data from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r35 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The byte offset in buffer at which to begin writing from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The maximum number of bytes to write.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="6241790efdf2bde6" href="../../../R/6241790efdf2bde6.html" target="n" data-glyph="72,1" class="i method">Write</a>(<b>byte</b>[] <span id="r34 rd" class="r34 r">buffer</span>, <b>int</b> <span id="r35 rd" class="r35 r">offset</span>, <b>int</b> <span id="r36 rd" class="r36 r">count</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#ede6c9f72017ded7" class="i field">_isEntered</a>, <span class="s">&quot;Stream should be Entered before writing into.&quot;</span>);
+ 
+            <b>int</b> <span id="r37 rd" class="r37 r">offsetToReadFrom</span> = <span class="r35 r">offset</span>;
+            <b>int</b> <span id="r38 rd" class="r38 r">amountLeft</span> = <span class="r36 r">count</span>;
+ 
+            <b>while</b> (<span class="r38 r">amountLeft</span> &gt; 0)
+            {
+                <b>int</b> <span id="r39 rd" class="r39 r">dataLeftInTheFragment</span> = <a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a> - <a href="#caed06b144c40930" class="t t">FragmentedRemoteObject</a>.<a href="#69c9aa4057c52f43" class="i field">HeaderLength</a> - <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a>;
+                <b>if</b> (<span class="r39 r">dataLeftInTheFragment</span> &gt; 0)
+                {
+                    <b>int</b> <span id="r40 rd" class="r40 r">amountToWriteIntoFragment</span> = (<span class="r38 r">amountLeft</span> &gt; <span class="r39 r">dataLeftInTheFragment</span>) ? <span class="r39 r">dataLeftInTheFragment</span> : <span class="r38 r">amountLeft</span>;
+                    <span class="r38 r">amountLeft</span> -= <span class="r40 r">amountToWriteIntoFragment</span>;
+ 
+                    <span class="c">// Write data into fragment</span>
+                    <span class="i">Array</span>.<span class="i">Copy</span>(<span class="r34 r">buffer</span>, <span class="r37 r">offsetToReadFrom</span>, <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#16288f3370845c8c" class="i property">Blob</a>, <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a>, <span class="r40 r">amountToWriteIntoFragment</span>);
+                    <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a> += <span class="r40 r">amountToWriteIntoFragment</span>;
+                    <span class="r37 r">offsetToReadFrom</span> += <span class="r40 r">amountToWriteIntoFragment</span>;
+ 
+                    <span class="c">// write only if amountLeft is more than 0. I dont write if amountLeft is 0 as we are not</span>
+                    <span class="c">// sure if the fragment is EndFragment..we will know this only in Exit.</span>
+                    <b>if</b> (<span class="r38 r">amountLeft</span> &gt; 0)
+                    {
+                        <a href="#a9d5012de171a8f9" class="i method">WriteCurrentFragmentAndReset</a>();
+                    }
+                }
+                <b>else</b>
+                {
+                    <a href="#a9d5012de171a8f9" class="i method">WriteCurrentFragmentAndReset</a>();
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Writes a byte to the current stream.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="6d3aab8e71301744" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">WriteByte</a>(<b>byte</b> <span id="r41 rd" class="r41 r">value</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#ede6c9f72017ded7" class="i field">_isEntered</a>, <span class="s">&quot;Stream should be Entered before writing into.&quot;</span>);
+            <b>byte</b>[] <span id="r42 rd" class="r42 r">buffer</span> = <b>new</b> <b>byte</b>[1];
+            <span class="r42 r">buffer</span>[0] = <span class="r41 r">value</span>;
+            <a href="#6241790efdf2bde6" class="i method">Write</a>(<span class="r42 r">buffer</span>, 0, 1);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns a byte[] which holds data of fragment size (or) serialized data of</span>
+        <span class="c">///</span><span class="c"> one object, which ever is greater. If data is not currently available, then</span>
+        <span class="c">///</span><span class="c"> the callback is registered and called whenever the data is available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">callback</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> callback to call once the data becomes available.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> a byte[] holding data read from the stream</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal byte</b>[] <a id="0020501682242305" href="../../../R/0020501682242305.html" target="n" data-glyph="74,1" class="i method">ReadOrRegisterCallback</a>(<a href="#6931116887ce476a" class="t t">OnDataAvailableCallback</a> <span id="r43 rd" class="r43 r">callback</span>)
+        {
+            <b>lock</b> (<a href="#0d666b26dda911b7" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#1a601e5e7207b272" class="i field">_length</a> &lt;= 0)
+                {
+                    <a href="#133eacbb956c6c6c" class="i field">_onDataAvailableCallback</a> = <span class="r43 r">callback</span>;
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>int</b> <span id="r44 rd" class="r44 r">bytesToRead</span> = <a href="#1a601e5e7207b272" class="i field">_length</a> &gt; <a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a> ? <a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a> : (<b>int</b>)<a href="#1a601e5e7207b272" class="i field">_length</a>;
+                <b>byte</b>[] <span id="r45 rd" class="r45 r">result</span> = <b>new</b> <b>byte</b>[<span class="r44 r">bytesToRead</span>];
+                <a href="#24f45ff2330cf4eb" class="i method">Read</a>(<span class="r45 r">result</span>, 0, <span class="r44 r">bytesToRead</span>);
+                <b>return</b> <span class="r45 r">result</span>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Read the currently accumulated data in queued memory streams.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal byte</b>[] <a id="6742b242d9687278" href="../../../R/6742b242d9687278.html" target="n" data-glyph="74,1" class="i method">Read</a>()
+        {
+            <b>lock</b> (<a href="#0d666b26dda911b7" class="i field">_syncObject</a>)
+            {
+                <b>if</b> (<a href="#fe2b0f88cb009b10" class="i field">_isDisposed</a>)
+                {
+                    <b>return</b> <b>null</b>;
+                }
+ 
+                <b>int</b> <span id="r46 rd" class="r46 r">bytesToRead</span> = <a href="#1a601e5e7207b272" class="i field">_length</a> &gt; <a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a> ? <a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a> : (<b>int</b>)<a href="#1a601e5e7207b272" class="i field">_length</a>;
+                <b>if</b> (<span class="r46 r">bytesToRead</span> &gt; 0)
+                {
+                    <b>byte</b>[] <span id="r47 rd" class="r47 r">result</span> = <b>new</b> <b>byte</b>[<span class="r46 r">bytesToRead</span>];
+                    <a href="#24f45ff2330cf4eb" class="i method">Read</a>(<span class="r47 r">result</span>, 0, <span class="r46 r">bytesToRead</span>);
+                    <b>return</b> <span class="r47 r">result</span>;
+                }
+                <b>else</b>
+                {
+                    <b>return</b> <b>null</b>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">buffer</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r50 r">count</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override int</b> <a id="24f45ff2330cf4eb" href="../../../R/24f45ff2330cf4eb.html" target="n" data-glyph="72,1" class="i method">Read</a>(<b>byte</b>[] <span id="r48 rd" class="r48 r">buffer</span>, <b>int</b> <span id="r49 rd" class="r49 r">offset</span>, <b>int</b> <span id="r50 rd" class="r50 r">count</span>)
+        {
+            <b>int</b> <span id="r51 rd" class="r51 r">offSetToWriteTo</span> = <span class="r49 r">offset</span>;
+            <b>int</b> <span id="r52 rd" class="r52 r">dataWritten</span> = 0;
+            <span class="i">Collection</span>&lt;<span class="i">MemoryStream</span>&gt; <span id="r53 rd" class="r53 r">memoryStreamsToDispose</span> = <b>new</b> <span class="i">Collection</span>&lt;<span class="i">MemoryStream</span>&gt;();
+            <span class="i">MemoryStream</span> <span id="r54 rd" class="r54 r">prevReadStream</span> = <b>null</b>;
+ 
+            <b>lock</b> (<a href="#0d666b26dda911b7" class="i field">_syncObject</a>)
+            {
+                <span class="c">// technically this should throw an exception..but remoting callstack</span>
+                <span class="c">// is optimized ie., we are not locking in every layer (in powershell)</span>
+                <span class="c">// to save on performance..as a result there may be cases where</span>
+                <span class="c">// upper layer is trying to add stuff and stream is disposed while</span>
+                <span class="c">// adding stuff.</span>
+                <b>if</b> (<a href="#fe2b0f88cb009b10" class="i field">_isDisposed</a>)
+                {
+                    <b>return</b> 0;
+                }
+ 
+                <b>while</b> (<span class="r52 r">dataWritten</span> &lt; <span class="r50 r">count</span>)
+                {
+                    <b>if</b> (<a href="#84c2f2906a3f529e" class="i field">_readStream</a> == <b>null</b>)
+                    {
+                        <b>if</b> (<a href="#fec9fe37b80960ba" class="i field">_queuedStreams</a>.<span class="i">Count</span> &gt; 0)
+                        {
+                            <a href="#84c2f2906a3f529e" class="i field">_readStream</a> = <a href="#fec9fe37b80960ba" class="i field">_queuedStreams</a>.<span class="i">Dequeue</span>();
+                            <b>if</b> ((!<a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">CanRead</span>) || (<span class="r54 r">prevReadStream</span> == <a href="#84c2f2906a3f529e" class="i field">_readStream</a>))
+                            {
+                                <span class="c">// if the stream is disposed CanRead returns false</span>
+                                <span class="c">// this will happen if a Write enqueues the stream</span>
+                                <span class="c">// and a Read reads the data without dequeuing</span>
+                                <a href="#84c2f2906a3f529e" class="i field">_readStream</a> = <b>null</b>;
+                                <b>continue</b>;
+                            }
+                        }
+                        <b>else</b>
+                        {
+                            <a href="#84c2f2906a3f529e" class="i field">_readStream</a> = <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>;
+                        }
+ 
+                        <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">Length</span> &gt; 0, <span class="s">&quot;Not enough data to read.&quot;</span>);
+                        <a href="#d9ce256fe6ae0fa3" class="i field">_readOffSet</a> = 0;
+                    }
+ 
+                    <a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">Position</span> = <a href="#d9ce256fe6ae0fa3" class="i field">_readOffSet</a>;
+                    <b>int</b> <span id="r55 rd" class="r55 r">result</span> = <a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">Read</span>(<span class="r48 r">buffer</span>, <span class="r51 r">offSetToWriteTo</span>, <span class="r50 r">count</span> - <span class="r52 r">dataWritten</span>);
+                    <a href="#8856a79a23879f48" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Read {0} data from readstream: {1}&quot;</span>, <span class="r55 r">result</span>, <a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">GetHashCode</span>());
+                    <span class="r52 r">dataWritten</span> += <span class="r55 r">result</span>;
+                    <span class="r51 r">offSetToWriteTo</span> += <span class="r55 r">result</span>;
+                    <a href="#d9ce256fe6ae0fa3" class="i field">_readOffSet</a> += <span class="r55 r">result</span>;
+                    <a href="#1a601e5e7207b272" class="i field">_length</a> -= <span class="r55 r">result</span>;
+ 
+                    <span class="c">// dispose only if we dont read from the current write stream.</span>
+                    <b>if</b> ((<a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">Capacity</span> == <a href="#d9ce256fe6ae0fa3" class="i field">_readOffSet</a>) &amp;&amp; (<a href="#84c2f2906a3f529e" class="i field">_readStream</a> != <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>))
+                    {
+                        <a href="#8856a79a23879f48" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Adding readstream {0} to dispose collection.&quot;</span>, <a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">GetHashCode</span>());
+                        <span class="r53 r">memoryStreamsToDispose</span>.<span class="i">Add</span>(<a href="#84c2f2906a3f529e" class="i field">_readStream</a>);
+                        <span class="r54 r">prevReadStream</span> = <a href="#84c2f2906a3f529e" class="i field">_readStream</a>;
+                        <a href="#84c2f2906a3f529e" class="i field">_readStream</a> = <b>null</b>;
+                    }
+                }
+            }
+ 
+            <span class="c">// Dispose the memory streams outside of the lock</span>
+            <b>foreach</b> (<span class="i">MemoryStream</span> <span id="r56 rd" class="r56 r">streamToDispose</span> <b>in</b> <span class="r53 r">memoryStreamsToDispose</span>)
+            {
+                <a href="#8856a79a23879f48" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Disposing stream: {0}&quot;</span>, <span class="r56 r">streamToDispose</span>.<span class="i">GetHashCode</span>());
+                <span class="r56 r">streamToDispose</span>.<span class="i">Dispose</span>();
+            }
+ 
+            <b>return</b> <span class="r52 r">dataWritten</span>;
+        }
+ 
+        <b>private void</b> <a id="a9d5012de171a8f9" href="../../../R/a9d5012de171a8f9.html" target="n" data-glyph="76,1" class="i method">WriteCurrentFragmentAndReset</a>()
+        {
+            <span class="c">// log trace of the fragment</span>
+            <a href="../../../utils/tracing/PSEtwLog.cs.html#749e795b3c087a72" class="t t">PSEtwLog</a>.<a href="../../../utils/tracing/PSEtwLog.cs.html#a0ee30cd6d9e6a9c" class="i method">LogAnalyticVerbose</a>(
+                <a href="PSETWTracer.cs.html#609c10dc18364c6e" class="t t">PSEventId</a>.<a href="PSETWTracer.cs.html#e5b1e0f0a57bdd4e" class="i field">SentRemotingFragment</a>, <a href="PSETWTracer.cs.html#2dd3393d77ef2dd0" class="t t">PSOpcode</a>.<a href="PSETWTracer.cs.html#10dc07d70da5e17a" class="i field">Send</a>, <a href="PSETWTracer.cs.html#6bc0e8b902470481" class="t t">PSTask</a>.<a href="PSETWTracer.cs.html#c682d415f6327c59" class="i field">None</a>,
+                <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#c5d4a73b62c859ab" class="i field">Transport</a> | <a href="PSETWTracer.cs.html#d4b75692e500e678" class="t t">PSKeyword</a>.<a href="PSETWTracer.cs.html#a3de02676385c3a4" class="i field">UseAlwaysAnalytic</a>,
+                (<span class="i">Int64</span>)(<a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#cb0613f742d04810" class="i property">ObjectId</a>),
+                (<span class="i">Int64</span>)(<a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a>),
+                <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#477dc7541bcccaf7" class="i property">IsStartFragment</a> ? 1 : 0,
+                <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#f597353f35e56889" class="i property">IsEndFragment</a> ? 1 : 0,
+                (<span class="i">UInt32</span>)(<a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a>),
+                <b>new</b> <a href="PSETWTracer.cs.html#725e56f85a320fea" class="t constructor">PSETWBinaryBlob</a>(<a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#16288f3370845c8c" class="i property">Blob</a>, 0, <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a>));
+ 
+            <span class="c">// finally write into memory stream</span>
+            <b>byte</b>[] <span id="r57 rd" class="r57 r">data</span> = <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#422a9406db13745b" class="i method">GetBytes</a>();
+            <b>int</b> <span id="r58 rd" class="r58 r">amountLeft</span> = <span class="r57 r">data</span>.<span class="i">Length</span>;
+            <b>int</b> <span id="r59 rd" class="r59 r">offSetToReadFrom</span> = 0;
+ 
+            <span class="c">// user asked us to notify immediately..so no need</span>
+            <span class="c">// to write into memory stream..instead give the</span>
+            <span class="c">// data directly to user and let him figure out what to do.</span>
+            <span class="c">// This will save write + read + dispose!!</span>
+            <b>if</b> (!<a href="#3fc75df9a109750d" class="i field">_notifyOnWriteFragmentImmediately</a>)
+            {
+                <b>lock</b> (<a href="#0d666b26dda911b7" class="i field">_syncObject</a>)
+                {
+                    <span class="c">// technically this should throw an exception..but remoting callstack</span>
+                    <span class="c">// is optimized ie., we are not locking in every layer (in powershell)</span>
+                    <span class="c">// to save on performance..as a result there may be cases where</span>
+                    <span class="c">// upper layer is trying to add stuff and stream is disposed while</span>
+                    <span class="c">// adding stuff.</span>
+                    <b>if</b> (<a href="#fe2b0f88cb009b10" class="i field">_isDisposed</a>)
+                    {
+                        <b>return</b>;
+                    }
+ 
+                    <b>if</b> (<a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a> == <b>null</b>)
+                    {
+                        <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a> = <b>new</b> <span class="i">MemoryStream</span>(<a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a>);
+                        <a href="#8856a79a23879f48" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Created write stream: {0}&quot;</span>, <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">GetHashCode</span>());
+                        <a href="#26e4e59a0cdc4001" class="i field">_writeOffset</a> = 0;
+                    }
+ 
+                    <b>while</b> (<span class="r58 r">amountLeft</span> &gt; 0)
+                    {
+                        <b>int</b> <span id="r60 rd" class="r60 r">dataLeftInWriteStream</span> = <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Capacity</span> - <a href="#26e4e59a0cdc4001" class="i field">_writeOffset</a>;
+                        <b>if</b> (<span class="r60 r">dataLeftInWriteStream</span> == 0)
+                        {
+                            <span class="c">// enqueue the current write stream and create a new one.</span>
+                            <a href="#ef3cee0193db7de8" class="i method">EnqueueWriteStream</a>();
+                            <span class="r60 r">dataLeftInWriteStream</span> = <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Capacity</span> - <a href="#26e4e59a0cdc4001" class="i field">_writeOffset</a>;
+                        }
+ 
+                        <b>int</b> <span id="r61 rd" class="r61 r">amountToWriteIntoStream</span> = (<span class="r58 r">amountLeft</span> &gt; <span class="r60 r">dataLeftInWriteStream</span>) ? <span class="r60 r">dataLeftInWriteStream</span> : <span class="r58 r">amountLeft</span>;
+                        <span class="r58 r">amountLeft</span> -= <span class="r61 r">amountToWriteIntoStream</span>;
+                        <span class="c">// write data</span>
+                        <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Position</span> = <a href="#26e4e59a0cdc4001" class="i field">_writeOffset</a>;
+                        <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Write</span>(<span class="r57 r">data</span>, <span class="r59 r">offSetToReadFrom</span>, <span class="r61 r">amountToWriteIntoStream</span>);
+                        <span class="r59 r">offSetToReadFrom</span> += <span class="r61 r">amountToWriteIntoStream</span>;
+                        <a href="#26e4e59a0cdc4001" class="i field">_writeOffset</a> += <span class="r61 r">amountToWriteIntoStream</span>;
+                        <a href="#1a601e5e7207b272" class="i field">_length</a> += <span class="r61 r">amountToWriteIntoStream</span>;
+                    }
+                }
+            }
+ 
+            <span class="c">// call the callback since we have data available</span>
+            <a href="#133eacbb956c6c6c" class="i field">_onDataAvailableCallback</a>?.<a href="#23acff62931fdc4f" class="i method">Invoke</a>(<span class="r57 r">data</span>, <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#f597353f35e56889" class="i property">IsEndFragment</a>);
+ 
+            <span class="c">// prepare a new fragment</span>
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#7a58cf5f10c265dc" class="i property">FragmentId</a> = ++<a href="#fe672ff7e50d12db" class="i field">_fragmentId</a>;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#477dc7541bcccaf7" class="i property">IsStartFragment</a> = <b>false</b>;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#f597353f35e56889" class="i property">IsEndFragment</a> = <b>false</b>;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#15df1737ef81f98e" class="i property">BlobLength</a> = 0;
+            <a href="#0e903daaea8aacf1" class="i field">_currentFragment</a>.<a href="#16288f3370845c8c" class="i property">Blob</a> = <b>new</b> <b>byte</b>[<a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a>];
+        }
+ 
+        <b>private void</b> <a id="ef3cee0193db7de8" href="../../../R/ef3cee0193db7de8.html" target="n" data-glyph="76,1" class="i method">EnqueueWriteStream</a>()
+        {
+            <a href="#8856a79a23879f48" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Queuing write stream: {0} Length: {1} Capacity: {2}&quot;</span>,
+                <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">GetHashCode</span>(), <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Length</span>, <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Capacity</span>);
+            <a href="#fec9fe37b80960ba" class="i field">_queuedStreams</a>.<span class="i">Enqueue</span>(<a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>);
+ 
+            <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a> = <b>new</b> <span class="i">MemoryStream</span>(<a href="#35e5e7705083e2ca" class="i field">_fragmentSize</a>);
+            <a href="#26e4e59a0cdc4001" class="i field">_writeOffset</a> = 0;
+            <a href="#8856a79a23879f48" class="i field">s_trace</a>.<span class="i">WriteLine</span>(<span class="s">&quot;Created write stream: {0}&quot;</span>, <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">GetHashCode</span>());
+        }
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This method provides a thread safe way to get an object id.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> An object Id in integer.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static long</b> <a id="0086da8959e638e3" href="../../../R/0086da8959e638e3.html" target="n" data-glyph="76,1" class="i method">GetObjectId</a>()
+        {
+            <b>return</b> <span class="i n">System</span>.<span class="i">Threading</span>.<span class="i">Interlocked</span>.<span class="i">Increment</span>(<b>ref</b> <a href="#e8f6ea28853d4d37" class="i field">s_objectIdSequenceNumber</a>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Disposable Overrides
+ 
+        <b>protected override void</b> <a id="8404e5adfc531cc9" href="../../../R/../../0000000000.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r62 rd" class="r62 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r62 r">disposing</span>)
+            {
+                <b>lock</b> (<a href="#0d666b26dda911b7" class="i field">_syncObject</a>)
+                {
+                    <b>foreach</b> (<span class="i">MemoryStream</span> <span id="r63 rd" class="r63 r">streamToDispose</span> <b>in</b> <a href="#fec9fe37b80960ba" class="i field">_queuedStreams</a>)
+                    {
+                        <span class="c">// make sure we dispose only once.</span>
+                        <b>if</b> (<span class="r63 r">streamToDispose</span>.<span class="i">CanRead</span>)
+                        {
+                            <span class="r63 r">streamToDispose</span>.<span class="i">Dispose</span>();
+                        }
+                    }
+ 
+                    <b>if</b> ((<a href="#84c2f2906a3f529e" class="i field">_readStream</a> != <b>null</b>) &amp;&amp; (<a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">CanRead</span>))
+                    {
+                        <a href="#84c2f2906a3f529e" class="i field">_readStream</a>.<span class="i">Dispose</span>();
+                    }
+ 
+                    <b>if</b> ((<a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a> != <b>null</b>) &amp;&amp; (<a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">CanRead</span>))
+                    {
+                        <a href="#11b8bfe43a5b6afb" class="i field">_writeStream</a>.<span class="i">Dispose</span>();
+                    }
+ 
+                    <a href="#fe2b0f88cb009b10" class="i field">_isDisposed</a> = <b>true</b>;
+                }
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Stream Overrides
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="24f0d0a7b702c7ec" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanRead</a> { <b>get</b> { <b>return</b> <b>true</b>; } }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="0dc33c7c9c8904fb" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanSeek</a> { <b>get</b> { <b>return</b> <b>false</b>; } }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override bool</b> <a id="706cd4de0bcaaba3" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">CanWrite</a> { <b>get</b> { <b>return</b> <b>true</b>; } }
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the length of the stream in bytes.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override long</b> <a id="d22c9d5a8be2214d" href="../../../R/d22c9d5a8be2214d.html" target="n" data-glyph="102,1" class="i property">Length</a> { <b>get</b> { <b>return</b> <a href="#1a601e5e7207b272" class="i field">_length</a>; } }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override long</b> <a id="10825601d9ec892f" href="../../../R/../../0000000000.html" target="n" data-glyph="102,1" class="i property">Position</a>
+        {
+            <b>get</b> { <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>(); }
+ 
+            <b>set</b> { <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>(); }
+        }
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> This is a No-Op intentionally as there is nothing</span>
+        <span class="c">///</span><span class="c"> to flush.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="2a8652d119e02fdd" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Flush</a>()
+        {
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r64 r">offset</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">origin</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>public override long</b> <a id="1e019187cb484879" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Seek</a>(<b>long</b> <span id="r64 rd" class="r64 r">offset</span>, <span class="i">SeekOrigin</span> <span id="r65 rd" class="r65 r">origin</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r66 r">value</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>public override void</b> <a id="870415ed7c5e4133" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">SetLength</a>(<b>long</b> <span id="r66 rd" class="r66 r">value</span>)
+        {
+            <b>throw</b> <b>new</b> <span class="i">NotSupportedException</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> IDisposable Members
+ 
+        <b>private bool</b> <a id="abbd258f86ab5569" href="../../../R/abbd258f86ab5569.html" target="n" data-glyph="46,1" class="i field">_disposed</a> = <b>false</b>;
+ 
+        <b>public</b> <b>new</b> <b>void</b> <a id="a30a841d301fa560" href="../../../R/a30a841d301fa560.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <b>if</b> (!<a href="#abbd258f86ab5569" class="i field">_disposed</a>)
+            {
+                <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#d3a26c96b56add5c" class="k">this</a>);
+                <a href="#abbd258f86ab5569" class="i field">_disposed</a> = <b>true</b>;
+            }
+ 
+            <b>base</b>.<span class="i">Dispose</span>();
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> This class performs the fragmentation as well as defragmentation operations of large objects to be sent</span>
+    <span class="c">///</span><span class="c"> to the other side. A large remoting PSObject will be broken into fragments. Each fragment has a ObjectId</span>
+    <span class="c">///</span><span class="c"> and a FragmentId. The last fragment also has an end of fragment marker. These fragments can be reassembled</span>
+    <span class="c">///</span><span class="c"> on the receiving end by sequencing the fragment ids.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="a24f4ee2533d5c38" href="../../../R/a24f4ee2533d5c38.html" target="n" data-glyph="2,0" class="t t">Fragmentor</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Global Constants
+        <b>private static readonly</b> <span class="i">UTF8Encoding</span> <a id="878eac4e8d96605c" href="../../../R/../../0000000000.html" target="n" data-glyph="46,1" class="i field">s_utf8Encoding</a> = <b>new</b> <span class="i">UTF8Encoding</span>();
+        <span class="c">// This const defines the default depth to be used for serializing objects for remoting.</span>
+        <b>private const int</b> <a id="65dcca28b37b5a5e" href="../../../R/65dcca28b37b5a5e.html" target="n" data-glyph="10,1" class="i field">SerializationDepthForRemoting</a> = 1;
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <b>private int</b> <a id="4030d1fad03539af" href="../../../R/4030d1fad03539af.html" target="n" data-glyph="46,1" class="i field">_fragmentSize</a>;
+        <b>private readonly</b> <a href="../../serialization.cs.html#79c883e3ce596f80" class="t t">SerializationContext</a> <a id="3b09106a130bdfd4" href="../../../R/3b09106a130bdfd4.html" target="n" data-glyph="46,1" class="i field">_serializationContext</a>;
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructor
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Constructor which initializes fragmentor with FragmentSize.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">fragmentSize</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> size of each fragment</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r68 r">cryptoHelper</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="87c9a08087894441" href="../../../R/87c9a08087894441.html" target="n" data-glyph="74,1" class="t constructor">Fragmentor</a>(<b>int</b> <span id="r67 rd" class="r67 r">fragmentSize</span>, <a href="../../../utils/CryptoUtils.cs.html#1999dfb2439af5a0" class="t t">PSRemotingCryptoHelper</a> <span id="r68 rd" class="r68 r">cryptoHelper</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r67 r">fragmentSize</span> &gt; 0, <span class="s">&quot;fragment size cannot be less than 0.&quot;</span>);
+            <a href="#4030d1fad03539af" class="i field">_fragmentSize</a> = <span class="r67 r">fragmentSize</span>;
+            <a href="#3b09106a130bdfd4" class="i field">_serializationContext</a> = <b>new</b> <a href="../../serialization.cs.html#3f60ac24e99dea52" class="t constructor">SerializationContext</a>(
+                <a href="#65dcca28b37b5a5e" class="i field">SerializationDepthForRemoting</a>,
+                <a href="../../serialization.cs.html#5b149bd0ceeb6fb3" class="t t">SerializationOptions</a>.<a href="../../serialization.cs.html#3c76428c57bf784c" class="i field">RemotingOptions</a>,
+                <span class="r68 r">cryptoHelper</span>);
+            <a href="#713480b4ba325c66" class="i property">DeserializationContext</a> = <b>new</b> <a href="../../serialization.cs.html#46080f485c381413" class="t constructor">DeserializationContext</a>(
+                <a href="../../serialization.cs.html#86f09565e15eea0d" class="t t">DeserializationOptions</a>.<a href="../../serialization.cs.html#a1ad9dfbc869055b" class="i field">RemotingOptions</a>,
+                <span class="r68 r">cryptoHelper</span>);
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The method performs the fragmentation operation.</span>
+        <span class="c">///</span><span class="c"> All fragments of the same object have the same ObjectId.</span>
+        <span class="c">///</span><span class="c"> All fragments of the same object have the same ObjectId.</span>
+        <span class="c">///</span><span class="c"> Each fragment has its own Fragment Id. Fragment Id always starts from zero (0),</span>
+        <span class="c">///</span><span class="c"> and increments sequentially with an increment of 1.</span>
+        <span class="c">///</span><span class="c"> The last fragment is indicated by an End of Fragment marker.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">obj</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The object to be fragmented. Caller should make sure this is not null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">dataToBeSent</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Caller specified dataToStore to which the fragments are added</span>
+        <span class="c">///</span><span class="c"> one-by-one</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="a97b5918de0a99cf" href="../../../R/a97b5918de0a99cf.html" target="n" data-glyph="74,1" class="i method">Fragment</a>&lt;<span id="r71 rd t" class="r71 r t">T</span>&gt;(<a href="WireDataFormat/RemotingDataObject.cs.html#ca4629603c976aab" class="t t">RemoteDataObject</a>&lt;<span class="r71 r t">T</span>&gt; <span id="r69 rd" class="r69 r">obj</span>, <a href="#d3a26c96b56add5c" class="t t">SerializedDataStream</a> <span id="r70 rd" class="r70 r">dataToBeSent</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r69 r">obj</span> != <b>null</b>, <span class="s">&quot;Cannot fragment a null object&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r70 r">dataToBeSent</span> != <b>null</b>, <span class="s">&quot;SendDataCollection cannot be null&quot;</span>);
+ 
+            <span class="r70 r">dataToBeSent</span>.<a href="#17e95516c787a8e6" class="i method">Enter</a>();
+            <b>try</b>
+            {
+                <span class="r69 r">obj</span>.<span class="i">Serialize</span>(<span class="r70 r">dataToBeSent</span>, <a href="#a24f4ee2533d5c38" class="k">this</a>);
+            }
+            <b>finally</b>
+            {
+                <span class="r70 r">dataToBeSent</span>.<a href="#16d1058832f85660" class="i method">Exit</a>();
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The deserialization context used by this fragmentor. DeserializationContext</span>
+        <span class="c">///</span><span class="c"> controls the amount of memory a deserializer can use and other things.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../serialization.cs.html#37cfb1b61ebb243c" class="t t">DeserializationContext</a> <a id="713480b4ba325c66" href="../../../R/713480b4ba325c66.html" target="n" data-glyph="104,1" class="i property">DeserializationContext</a> { <b>get</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The size limit of the fragmented object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal int</b> <a id="a4fa6a799e0782de" href="../../../R/a4fa6a799e0782de.html" target="n" data-glyph="104,1" class="i property">FragmentSize</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#4030d1fad03539af" class="i field">_fragmentSize</a>;
+            }
+ 
+            <b>set</b>
+            {
+                <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>value</b> &gt; 0, <span class="s">&quot;FragmentSize cannot be less than 0.&quot;</span>);
+                <a href="#4030d1fad03539af" class="i field">_fragmentSize</a> = <b>value</b>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> TypeTable used for Serialization/Deserialization.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../../P/a09d9b2cb7b1f0db.html#a09d9b2cb7b1f0db" class="t t">TypeTable</a> <a id="68368520cad75c32" href="../../../R/68368520cad75c32.html" target="n" data-glyph="104,1" class="i property">TypeTable</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Serialize an PSObject into a byte array.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="4665e8788ab9d9c6" href="../../../R/4665e8788ab9d9c6.html" target="n" data-glyph="74,1" class="i method">SerializeToBytes</a>(<b>object</b> <span id="r72 rd" class="r72 r">obj</span>, <span class="i">Stream</span> <span id="r73 rd" class="r73 r">streamToWriteTo</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r72 r">obj</span> != <b>null</b>, <span class="s">&quot;Cannot serialize a null object&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r73 r">streamToWriteTo</span> != <b>null</b>, <span class="s">&quot;Stream to write to cannot be null&quot;</span>);
+ 
+            <span class="i">XmlWriterSettings</span> <span id="r74 rd" class="r74 r">xmlSettings</span> = <b>new</b> <span class="i">XmlWriterSettings</span>();
+            <span class="r74 r">xmlSettings</span>.<span class="i">CheckCharacters</span> = <b>false</b>;
+            <span class="r74 r">xmlSettings</span>.<span class="i">Indent</span> = <b>false</b>;
+            <span class="c">// we dont want the underlying stream to be closed as we expect</span>
+            <span class="c">// the stream to be usable after this call.</span>
+            <span class="r74 r">xmlSettings</span>.<span class="i">CloseOutput</span> = <b>false</b>;
+            <span class="r74 r">xmlSettings</span>.<span class="i">Encoding</span> = <span class="i">UTF8Encoding</span>.<span class="i">UTF8</span>;
+            <span class="r74 r">xmlSettings</span>.<span class="i">NewLineHandling</span> = <span class="i">NewLineHandling</span>.<span class="i">None</span>;
+ 
+            <span class="r74 r">xmlSettings</span>.<span class="i">OmitXmlDeclaration</span> = <b>true</b>;
+            <span class="r74 r">xmlSettings</span>.<span class="i">ConformanceLevel</span> = <span class="i">ConformanceLevel</span>.<span class="i">Fragment</span>;
+ 
+            <b>using</b> (<span class="i">XmlWriter</span> <span id="r75 rd" class="r75 r">xmlWriter</span> = <span class="i">XmlWriter</span>.<span class="i">Create</span>(<span class="r73 r">streamToWriteTo</span>, <span class="r74 r">xmlSettings</span>))
+            {
+                <a href="../../serialization.cs.html#13699f4bba06caeb" class="t t">Serializer</a> <span id="r76 rd" class="r76 r">serializer</span> = <b>new</b> <a href="../../serialization.cs.html#376bd173af9e5a9e" class="t constructor">Serializer</a>(<span class="r75 r">xmlWriter</span>, <a href="#3b09106a130bdfd4" class="i field">_serializationContext</a>);
+                <span class="r76 r">serializer</span>.<a href="../../serialization.cs.html#0473f77f694bec48" class="i property">TypeTable</a> = <a href="#68368520cad75c32" class="i property">TypeTable</a>;
+                <span class="r76 r">serializer</span>.<a href="../../serialization.cs.html#cc6dbb8452db3a50" class="i method">Serialize</a>(<span class="r72 r">obj</span>);
+                <span class="r76 r">serializer</span>.<a href="../../serialization.cs.html#bba68ce5b6414f8d" class="i method">Done</a>();
+                <span class="r75 r">xmlWriter</span>.<span class="i">Flush</span>();
+            }
+ 
+            <b>return</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Converts the bytes back to PSObject.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r77 r">serializedDataStream</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The bytes to be deserialized.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The deserialized object.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="remotingexceptions.cs.html#553740d8dd522b58" class="t t">PSRemotingDataStructureException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If the deserialized object is null.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a> <a id="e7dd32f465f75daa" href="../../../R/e7dd32f465f75daa.html" target="n" data-glyph="74,1" class="i method">DeserializeToPSObject</a>(<span class="i">Stream</span> <span id="r77 rd" class="r77 r">serializedDataStream</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r77 r">serializedDataStream</span> != <b>null</b>, <span class="s">&quot;Cannot Deserialize null data&quot;</span>);
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r77 r">serializedDataStream</span>.<span class="i">Length</span> != 0, <span class="s">&quot;Cannot Deserialize empty data&quot;</span>);
+ 
+            <b>object</b> <span id="r78 rd" class="r78 r">result</span> = <b>null</b>;
+            <b>using</b> (<span class="i">XmlReader</span> <span id="r79 rd" class="r79 r">xmlReader</span> = <span class="i">XmlReader</span>.<span class="i">Create</span>(<span class="r77 r">serializedDataStream</span>, <a href="../../serialization.cs.html#758c46d6a86d6840" class="t t">InternalDeserializer</a>.<a href="../../serialization.cs.html#68d86b2b9f57584d" class="i property">XmlReaderSettingsForCliXml</a>))
+            {
+                <a href="../../serialization.cs.html#27835b221aec7524" class="t t">Deserializer</a> <span id="r80 rd" class="r80 r">deserializer</span> = <b>new</b> <a href="../../serialization.cs.html#5e9778c61a3e1718" class="t constructor">Deserializer</a>(<span class="r79 r">xmlReader</span>, <a href="#713480b4ba325c66" class="i property">DeserializationContext</a>);
+                <span class="r80 r">deserializer</span>.<a href="../../serialization.cs.html#abf98a1b60c17b76" class="i property">TypeTable</a> = <a href="#68368520cad75c32" class="i property">TypeTable</a>;
+                <span class="r78 r">result</span> = <span class="r80 r">deserializer</span>.<a href="../../serialization.cs.html#9c920943c97004d6" class="i method">Deserialize</a>();
+                <span class="r80 r">deserializer</span>.<a href="../../serialization.cs.html#6c4195591a1a2219" class="i method">Done</a>();
+            }
+ 
+            <b>if</b> (<span class="r78 r">result</span> == <b>null</b>)
+            {
+                <span class="c">// cannot be null.</span>
+                <b>throw</b> <b>new</b> <span class="t">PSRemotingDataStructureException</span>(<span class="i">RemotingErrorIdStrings</span>.<span class="i">DeserializedObjectIsNull</span>);
+            }
+ 
+            <b>return</b> <a href="../../MshObject.cs.html#a3c2513aa3da07fa" class="t t">PSObject</a>.<a href="../../MshObject.cs.html#e81a321a846beda7" class="i method">AsPSObject</a>(<span class="r78 r">result</span>);
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

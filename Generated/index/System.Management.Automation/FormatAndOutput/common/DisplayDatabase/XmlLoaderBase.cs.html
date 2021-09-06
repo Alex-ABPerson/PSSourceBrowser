@@ -1,0 +1,734 @@
+﻿<!DOCTYPE html>
+<html><head><title>XmlLoaderBase.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(725);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/FormatAndOutput/common/DisplayDatabase/XmlLoaderBase.cs" target="_top">FormatAndOutput\common\DisplayDatabase\XmlLoaderBase.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Xml</span>;
+ 
+<span class="c">/*
+ SUMMARY: this file contains a general purpose, reusable framework for
+    loading XML files, and do data validation.
+    It provides the capability of:
+    * logging errors, warnings and traces to a file or in memory
+    * managing the XML dom traversal using an add hoc stack frame management scheme
+    * validating common error conditions (e.g. missing node or unknown node)
+*/</span>
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>.<span class="i n">Internal</span>.<span class="i n">Format</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Base exception to be used for all the exceptions that this framework will generate.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal abstract class</b> <a id="6d6d98968c983a7f" href="../../../R/6d6d98968c983a7f.html" target="n" data-glyph="2,0" class="t t"><span id="f6742eb26c775bde">TypeInfoDataBaseLoaderException</span></a> : <span class="i">SystemException</span>
+    {
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Exception thrown by the loader when the maximum number of errors is exceeded.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="b7fd570092248af0" href="../../../R/b7fd570092248af0.html" target="n" data-glyph="2,0" class="t t"><span id="ee46ce6386bea34d">TooManyErrorsException</span></a> : <a href="#6d6d98968c983a7f" class="t t">TypeInfoDataBaseLoaderException</a>
+    {
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Error count that triggered the exception.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal int</b> <a id="1649ca94f48e8623" href="../../../R/1649ca94f48e8623.html" target="n" data-glyph="44,1" class="i field">errorCount</a>;
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Entry logged by the loader and made available to external consumers.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="151af4b4c347cb35" href="../../../R/151af4b4c347cb35.html" target="n" data-glyph="2,0" class="t t"><span id="f9c5db51a622c985">XmlLoaderLoggerEntry</span></a>
+    {
+        <b>internal enum</b> <a id="25cd0a7e885007c6" href="../../../R/25cd0a7e885007c6.html" target="n" data-glyph="20,1" class="t t"><span id="ceca97fa8951181d">EntryType</span></a> { <a id="eb8f7dac699c0dc4" href="../../../R/eb8f7dac699c0dc4.html" target="n" data-glyph="24,2" class="i field">Error</a>, <a id="d4708e601c07a6e8" href="../../../R/d4708e601c07a6e8.html" target="n" data-glyph="24,2" class="i field">Trace</a> }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Type of information being logged.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="#25cd0a7e885007c6" class="t t">EntryType</a> <a id="a698d581d1640212" href="../../../R/a698d581d1640212.html" target="n" data-glyph="44,1" class="i field">entryType</a>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Path of the file the info refers to.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="2494cdd9cd044bd5" href="../../../R/2494cdd9cd044bd5.html" target="n" data-glyph="44,1" class="i field">filePath</a> = <b>null</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> XPath location inside the file.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="af792bea14b48e80" href="../../../R/af792bea14b48e80.html" target="n" data-glyph="44,1" class="i field">xPath</a> = <b>null</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Message to be displayed to the user.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal string</b> <a id="aab62db094c5bdb9" href="../../../R/aab62db094c5bdb9.html" target="n" data-glyph="44,1" class="i field">message</a> = <b>null</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Indicate whether we fail to load the file due to the security reason.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="f4fb4247ba713623" href="../../../R/f4fb4247ba713623.html" target="n" data-glyph="44,1" class="i field">failToLoadFile</a> = <b>false</b>;
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Logger object used by the loader (class XmlLoaderBase) to write log entries.</span>
+    <span class="c">///</span><span class="c"> It logs to a memory buffer and (optionally) to a text file.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal class</b> <a id="61da410b8dd60cb4" href="../../../R/61da410b8dd60cb4.html" target="n" data-glyph="2,0" class="t t"><span id="bd483cbd78f16f5a">XmlLoaderLogger</span></a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> tracer
+        <span class="c">// PSS/end-user tracer</span>
+        [<span class="i">TraceSource</span>(<span class="s">&quot;FormatFileLoading&quot;</span>, <span class="s">&quot;Loading format files&quot;</span>)]
+        <b>private static readonly</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="89e275fd0521d77f" href="../../../R/89e275fd0521d77f.html" target="n" data-glyph="46,1" class="i field">s_formatFileLoadingtracer</a> = <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#24b0f68d5add3eb3" class="i method">GetTracer</a>(<span class="s">&quot;FormatFileLoading&quot;</span>, <span class="s">&quot;Loading format files&quot;</span>, <b>false</b>);
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> tracer
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Log an entry.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">entry</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Entry to log.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="993aaa14a64a5557" href="../../../R/993aaa14a64a5557.html" target="n" data-glyph="74,1" class="i method">LogEntry</a>(<a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r0 rd" class="r0 r">entry</span>)
+        {
+            <b>if</b> (<span class="r0 r">entry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> == <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>)
+                <a href="#379cbf41f177db25" class="i field">_hasErrors</a> = <b>true</b>;
+ 
+            <b>if</b> (<a href="#cd379898f43742a9" class="i field">_saveInMemory</a>)
+                <a href="#0a97343587094734" class="i field">_entries</a>.<span class="i">Add</span>(<span class="r0 r">entry</span>);
+ 
+            <b>if</b> ((<a href="#89e275fd0521d77f" class="i field">s_formatFileLoadingtracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#39a46fbab64bf75b" class="i property">Options</a> | <a href="../../../utils/StructuredTraceSource.cs.html#8dccd9e1e9512b25" class="t t">PSTraceSourceOptions</a>.<a href="../../../utils/StructuredTraceSource.cs.html#d9418c516f830881" class="i field">WriteLine</a>) != 0)
+                <a href="#abb920de015e7e56" class="i method">WriteToTracer</a>(<span class="r0 r">entry</span>);
+        }
+ 
+        <b>private static void</b> <a id="abb920de015e7e56" href="../../../R/abb920de015e7e56.html" target="n" data-glyph="76,1" class="i method">WriteToTracer</a>(<a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r1 rd" class="r1 r">entry</span>)
+        {
+            <b>if</b> (<span class="r1 r">entry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> == <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>)
+            {
+                <a href="#89e275fd0521d77f" class="i field">s_formatFileLoadingtracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#ea4adc43a7440f6a" class="i method">WriteLine</a>(<span class="s">&quot;ERROR:\r\n FilePath: {0}\r\n XPath: {1}\r\n Message = {2}&quot;</span>, <span class="r1 r">entry</span>.<a href="#2494cdd9cd044bd5" class="i field">filePath</a>, <span class="r1 r">entry</span>.<a href="#af792bea14b48e80" class="i field">xPath</a>, <span class="r1 r">entry</span>.<a href="#aab62db094c5bdb9" class="i field">message</a>);
+            }
+            <b>else</b> <b>if</b> (<span class="r1 r">entry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> == <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#d4708e601c07a6e8" class="i field">Trace</a>)
+            {
+                <a href="#89e275fd0521d77f" class="i field">s_formatFileLoadingtracer</a>.<a href="../../../utils/StructuredTraceSource.cs.html#ea4adc43a7440f6a" class="i method">WriteLine</a>(<span class="s">&quot;TRACE:\r\n FilePath: {0}\r\n XPath: {1}\r\n Message = {2}&quot;</span>, <span class="r1 r">entry</span>.<a href="#2494cdd9cd044bd5" class="i field">filePath</a>, <span class="r1 r">entry</span>.<a href="#af792bea14b48e80" class="i field">xPath</a>, <span class="r1 r">entry</span>.<a href="#aab62db094c5bdb9" class="i field">message</a>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> IDisposable implementation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">This method calls GC.SuppressFinalize</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="c892c6688d8c9b83" href="../../../R/c892c6688d8c9b83.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#61dd409269a82761" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#61da410b8dd60cb4" class="k">this</a>);
+        }
+ 
+        <b>protected virtual void</b> <a id="61dd409269a82761" href="../../../R/61dd409269a82761.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r2 rd" class="r2 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r2 r">disposing</span>)
+            {
+            }
+        }
+ 
+        <b>internal</b> <span class="i">List</span>&lt;<a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <a id="8340fe9bc229321b" href="../../../R/8340fe9bc229321b.html" target="n" data-glyph="104,1" class="i property">LogEntries</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#0a97343587094734" class="i field">_entries</a>;
+            }
+        }
+ 
+        <b>internal bool</b> <a id="83ad90cf69a0c7e1" href="../../../R/83ad90cf69a0c7e1.html" target="n" data-glyph="104,1" class="i property">HasErrors</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#379cbf41f177db25" class="i field">_hasErrors</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> If true, log entries to memory.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly bool</b> <a id="cd379898f43742a9" href="../../../R/cd379898f43742a9.html" target="n" data-glyph="46,1" class="i field">_saveInMemory</a> = <b>true</b>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> List of entries logged if saveInMemory is true.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private readonly</b> <span class="i">List</span>&lt;<a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <a id="0a97343587094734" href="../../../R/0a97343587094734.html" target="n" data-glyph="46,1" class="i field">_entries</a> = <b>new</b> <span class="i">List</span>&lt;<a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt;();
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if we ever logged an error.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="379cbf41f177db25" href="../../../R/379cbf41f177db25.html" target="n" data-glyph="46,1" class="i field">_hasErrors</a> = <b>false</b>;
+    }
+ 
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Base class providing XML loading basic functionality (stack management and logging facilities)</span>
+    <span class="c">///</span><span class="c"> NOTE: you need to implement to load an actual XML document and traverse it as see fit.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal abstract class</b> <a id="15fe3d47ab0f16d2" href="../../../R/15fe3d47ab0f16d2.html" target="n" data-glyph="2,0" class="t t"><span id="96ed4126863560dd">XmlLoaderBase</span></a> : <span class="i">IDisposable</span>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> tracer
+        [<span class="i">TraceSource</span>(<span class="s">&quot;XmlLoaderBase&quot;</span>, <span class="s">&quot;XmlLoaderBase&quot;</span>)]
+        <b>private static readonly</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a> <a id="f1e9029571e232f4" href="../../../R/../../0000000000.html" target="n" data-glyph="46,1" class="i field">s_tracer</a> = <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<a href="../../../utils/MshTraceSource.cs.html#697b06ec70e3c537" class="i method">GetTracer</a>(<span class="s">&quot;XmlLoaderBase&quot;</span>, <span class="s">&quot;XmlLoaderBase&quot;</span>);
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span> tracer
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Class representing a stack frame for the XML document tree traversal.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private sealed class</b> <a id="baa776489db97969" href="../../../R/baa776489db97969.html" target="n" data-glyph="4,1" class="t t">XmlLoaderStackFrame</a> : <span class="i">IDisposable</span>
+        {
+            <b>internal</b> <a id="b72fb489193687a2" href="../../../R/b72fb489193687a2.html" target="n" data-glyph="74,2" class="t constructor">XmlLoaderStackFrame</a>(<a href="#15fe3d47ab0f16d2" class="t t">XmlLoaderBase</a> <span id="r3 rd" class="r3 r">loader</span>, <span class="i">XmlNode</span> <span id="r4 rd" class="r4 r">n</span>, <b>int</b> <span id="r5 rd" class="r5 r">index</span>)
+            {
+                <a href="#0758794c4247773b" class="i field">_loader</a> = <span class="r3 r">loader</span>;
+                <a href="#baa776489db97969" class="k">this</a>.<a href="#3043d18a7ac571d5" class="i field">node</a> = <span class="r4 r">n</span>;
+                <a href="#baa776489db97969" class="k">this</a>.<a href="#d445788a8b69951c" class="i field">index</a> = <span class="r5 r">index</span>;
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> IDisposable implementation.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>public void</b> <a id="3a79b05472952fd1" href="../../../R/../../0000000000.html" target="n" data-glyph="72,2" class="i method">Dispose</a>()
+            {
+                <b>if</b> (<a href="#0758794c4247773b" class="i field">_loader</a> != <b>null</b>)
+                {
+                    <a href="#0758794c4247773b" class="i field">_loader</a>.<a href="#a98a7c6a26e0f1d8" class="i method">RemoveStackFrame</a>();
+                    <a href="#0758794c4247773b" class="i field">_loader</a> = <b>null</b>;
+                }
+            }
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Back pointer to the loader, used to pop a stack frame.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>private</b> <a href="#15fe3d47ab0f16d2" class="t t">XmlLoaderBase</a> <a id="0758794c4247773b" href="../../../R/0758794c4247773b.html" target="n" data-glyph="46,2" class="i field">_loader</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Node the stack frame refers to.</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>internal</b> <span class="i">XmlNode</span> <a id="3043d18a7ac571d5" href="../../../R/3043d18a7ac571d5.html" target="n" data-glyph="44,2" class="i field">node</a>;
+ 
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+            <span class="c">///</span><span class="c"> Node index for enumerations, valid only if != -1</span>
+            <span class="c">///</span><span class="c"> NOTE: this allows to express the XPath construct &quot;foo[0]&quot;</span>
+            <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+            <b>internal int</b> <a id="d445788a8b69951c" href="../../../R/d445788a8b69951c.html" target="n" data-glyph="44,2" class="i field">index</a> = -1;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> IDisposable implementation.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">remarks</span><span class="c">&gt;</span><span class="c">This method calls GC.SuppressFinalize</span><span class="c">&lt;/</span><span class="c">remarks</span><span class="c">&gt;</span>
+        <b>public void</b> <a id="a765b649ad46e24f" href="../../../R/../../0000000000.html" target="n" data-glyph="72,1" class="i method">Dispose</a>()
+        {
+            <a href="#c091c976ee934457" class="i method">Dispose</a>(<b>true</b>);
+ 
+            <span class="i">GC</span>.<span class="i">SuppressFinalize</span>(<a href="#15fe3d47ab0f16d2" class="k">this</a>);
+        }
+ 
+        <b>protected virtual void</b> <a id="c091c976ee934457" href="../../../R/c091c976ee934457.html" target="n" data-glyph="75,1" class="i method">Dispose</a>(<b>bool</b> <span id="r6 rd" class="r6 r">disposing</span>)
+        {
+            <b>if</b> (<span class="r6 r">disposing</span>)
+            {
+                <b>if</b> (<a href="#f1d28cd1aef8c322" class="i field">_logger</a> != <b>null</b>)
+                {
+                    <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#c892c6688d8c9b83" class="i method">Dispose</a>();
+                    <a href="#f1d28cd1aef8c322" class="i field">_logger</a> = <b>null</b>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get the list of log entries.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">list of entries logged during a load</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <b>internal</b> <span class="i">List</span>&lt;<a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <a id="ec47aedf3e4c5dac" href="../../../R/ec47aedf3e4c5dac.html" target="n" data-glyph="104,1" class="i property">LogEntries</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#8340fe9bc229321b" class="i property">LogEntries</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check if there were errors.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">value</span><span class="c">&gt;</span><span class="c">true of the log entry list has errors</span><span class="c">&lt;/</span><span class="c">value</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="e95c8edc036f44a1" href="../../../R/e95c8edc036f44a1.html" target="n" data-glyph="104,1" class="i property">HasErrors</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#83ad90cf69a0c7e1" class="i property">HasErrors</a>;
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> To be called when starting a stack frame.</span>
+        <span class="c">///</span><span class="c"> The returned IDisposable should be used in a using(){...} block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r7 r">n</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Node to push on the stack.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Object to dispose when exiting the frame.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected</b> <span class="i">IDisposable</span> <a id="7e1b21c2c0328cf1" href="../../../R/7e1b21c2c0328cf1.html" target="n" data-glyph="75,1" class="i method">StackFrame</a>(<span class="i">XmlNode</span> <span id="r7 rd" class="r7 r">n</span>)
+        {
+            <b>return</b> <span class="i">StackFrame</span>(<span class="r7 r">n</span>, -1);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> To be called when starting a stack frame.</span>
+        <span class="c">///</span><span class="c"> The returned IDisposable should be used in a using(){...} block.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r8 r">n</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Node to push on the stack.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r9 r">index</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Index of the node of the same name in a collection.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Object to dispose when exiting the frame.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>protected</b> <span class="i">IDisposable</span> <a id="b3899680a865af06" href="../../../R/b3899680a865af06.html" target="n" data-glyph="75,1" class="i method">StackFrame</a>(<span class="i">XmlNode</span> <span id="r8 rd" class="r8 r">n</span>, <b>int</b> <span id="r9 rd" class="r9 r">index</span>)
+        {
+            <a href="#baa776489db97969" class="t t">XmlLoaderStackFrame</a> <span id="r10 rd" class="r10 r">sf</span> = <b>new</b> <a href="#b72fb489193687a2" class="t constructor">XmlLoaderStackFrame</a>(<a href="#15fe3d47ab0f16d2" class="k">this</a>, <span class="r8 r">n</span>, <span class="r9 r">index</span>);
+ 
+            <a href="#4f3e8d060549f25b" class="i field">_executionStack</a>.<span class="i">Push</span>(<span class="r10 r">sf</span>);
+            <b>if</b> (<a href="#caa97e103e8b138e" class="i field">_logStackActivity</a>)
+                <a href="#185f0017966ffe8b" class="i method">WriteStackLocation</a>(<span class="s">&quot;Enter&quot;</span>);
+            <b>return</b> <span class="r10 r">sf</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Called by the Dispose code of the XmlLoaderStackFrame object</span>
+        <span class="c">///</span><span class="c"> to pop a frame off the stack.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>private void</b> <a id="a98a7c6a26e0f1d8" href="../../../R/a98a7c6a26e0f1d8.html" target="n" data-glyph="76,1" class="i method">RemoveStackFrame</a>()
+        {
+            <b>if</b> (<a href="#caa97e103e8b138e" class="i field">_logStackActivity</a>)
+                <a href="#185f0017966ffe8b" class="i method">WriteStackLocation</a>(<span class="s">&quot;Exit&quot;</span>);
+            <a href="#4f3e8d060549f25b" class="i field">_executionStack</a>.<span class="i">Pop</span>();
+        }
+ 
+        <b>protected void</b> <a id="749fc461c72a3868" href="../../../R/749fc461c72a3868.html" target="n" data-glyph="75,1" class="i method">ProcessUnknownNode</a>(<span class="i">XmlNode</span> <span id="r11 rd" class="r11 r">n</span>)
+        {
+            <b>if</b> (<a href="#a33ca5085fb3f481" class="i method">IsFilteredOutNode</a>(<span class="r11 r">n</span>))
+                <b>return</b>;
+ 
+            <a href="#42075a282d26facc" class="i method">ReportIllegalXmlNode</a>(<span class="r11 r">n</span>);
+        }
+ 
+        <b>protected void</b> <a id="aea610805313c8de" href="../../../R/aea610805313c8de.html" target="n" data-glyph="75,1" class="i method">ProcessUnknownAttribute</a>(<span class="i">XmlAttribute</span> <span id="r12 rd" class="r12 r">a</span>)
+        {
+            <a href="#5d1ae182fc0a2eec" class="i method">ReportIllegalXmlAttribute</a>(<span class="r12 r">a</span>);
+        }
+ 
+        <b>protected static bool</b> <a id="a33ca5085fb3f481" href="../../../R/a33ca5085fb3f481.html" target="n" data-glyph="75,1" class="i method">IsFilteredOutNode</a>(<span class="i">XmlNode</span> <span id="r13 rd" class="r13 r">n</span>)
+        {
+            <b>return</b> (<span class="r13 r">n</span> <b>is</b> <span class="i">XmlComment</span> || <span class="r13 r">n</span> <b>is</b> <span class="i">XmlWhitespace</span>);
+        }
+ 
+        <b>protected bool</b> <a id="cfe4c0bb9694d542" href="../../../R/cfe4c0bb9694d542.html" target="n" data-glyph="75,1" class="i method">VerifyNodeHasNoChildren</a>(<span class="i">XmlNode</span> <span id="r14 rd" class="r14 r">n</span>)
+        {
+            <b>if</b> (<span class="r14 r">n</span>.<span class="i">ChildNodes</span>.<span class="i">Count</span> == 0)
+                <b>return</b> <b>true</b>;
+ 
+            <b>if</b> (<span class="r14 r">n</span>.<span class="i">ChildNodes</span>.<span class="i">Count</span> == 1)
+            {
+                <b>if</b> (<span class="r14 r">n</span>.<span class="i">ChildNodes</span>[0] <b>is</b> <span class="i">XmlText</span>)
+                    <b>return</b> <b>true</b>;
+            }
+            <span class="c">// Error at XPath {0} in file {1}: Node {2} cannot have children.</span>
+            <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#db3c8d17c0ceaeb5" class="i method">ReportError</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">NoChildrenAllowed</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r14 r">n</span>.<span class="i">Name</span>));
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>internal string</b> <a id="f3f79d66c29b9a5d" href="../../../R/f3f79d66c29b9a5d.html" target="n" data-glyph="74,1" class="i method">GetMandatoryInnerText</a>(<span class="i">XmlNode</span> <span id="r15 rd" class="r15 r">n</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r15 r">n</span>.<span class="i">InnerText</span>))
+            {
+                <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#66082164ee2c52dd" class="i method">ReportEmptyNode</a>(<span class="r15 r">n</span>);
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>return</b> <span class="r15 r">n</span>.<span class="i">InnerText</span>;
+        }
+ 
+        <b>internal string</b> <a id="f3c7a861d03ac2f9" href="../../../R/f3c7a861d03ac2f9.html" target="n" data-glyph="74,1" class="i method">GetMandatoryAttributeValue</a>(<span class="i">XmlAttribute</span> <span id="r16 rd" class="r16 r">a</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r16 r">a</span>.<span class="i">Value</span>))
+            {
+                <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#52d91eaab4dbb663" class="i method">ReportEmptyAttribute</a>(<span class="r16 r">a</span>);
+                <b>return</b> <b>null</b>;
+            }
+ 
+            <b>return</b> <span class="r16 r">a</span>.<span class="i">Value</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper to compare node names, e.g. &quot;foo&quot; in </span><span class="c">&lt;</span><span class="c">foo</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> it uses case sensitive, culture invariant compare.</span>
+        <span class="c">///</span><span class="c"> This is because XML tags are case sensitive.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r17 r">n</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">XmlNode whose name is to compare.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r18 r">s</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">String to compare the node name to.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r19 r">allowAttributes</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, accept the presence of attributes on the node.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if there is a match.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private bool</b> <a id="7d471d66ae5c1bea" href="../../../R/7d471d66ae5c1bea.html" target="n" data-glyph="76,1" class="i method">MatchNodeNameHelper</a>(<span class="i">XmlNode</span> <span id="r17 rd" class="r17 r">n</span>, <b>string</b> <span id="r18 rd" class="r18 r">s</span>, <b>bool</b> <span id="r19 rd" class="r19 r">allowAttributes</span>)
+        {
+            <b>bool</b> <span id="r20 rd" class="r20 r">match</span> = <b>false</b>;
+            <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r17 r">n</span>.<span class="i">Name</span>, <span class="r18 r">s</span>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>))
+            {
+                <span class="c">// we have a case sensitive match</span>
+                <span class="r20 r">match</span> = <b>true</b>;
+            }
+            <b>else</b> <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r17 r">n</span>.<span class="i">Name</span>, <span class="r18 r">s</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <span class="c">// try a case insensitive match</span>
+                <span class="c">// we differ only in case: flag this as an ERROR for the time being</span>
+                <span class="c">// and accept the comparison</span>
+ 
+                <b>const string</b> <span id="r21 rd" class="r21 r">fmtString</span> = <span class="s">&quot;XML tag differ in case only {0} {1}&quot;</span>;
+                <span class="i">ReportTrace</span>(<b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="r21 r">fmtString</span>, <span class="r17 r">n</span>.<span class="i">Name</span>, <span class="r18 r">s</span>));
+ 
+                <span class="r20 r">match</span> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r20 r">match</span> &amp;&amp; !<span class="r19 r">allowAttributes</span>)
+            {
+                <span class="i">XmlElement</span> <span id="r22 rd" class="r22 r">e</span> = <span class="r17 r">n</span> <b>as</b> <span class="i">XmlElement</span>;
+                <b>if</b> (<span class="r22 r">e</span> != <b>null</b> &amp;&amp; <span class="r22 r">e</span>.<span class="i">Attributes</span>.<span class="i">Count</span> &gt; 0)
+                {
+                    <span class="c">// Error at XPath {0} in file {1}: The XML Element {2} does not allow attributes.</span>
+                    <a href="#db3c8d17c0ceaeb5" class="i method">ReportError</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">AttributesNotAllowed</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r17 r">n</span>.<span class="i">Name</span>));
+                }
+            }
+ 
+            <b>return</b> <span class="r20 r">match</span>;
+        }
+ 
+        <b>internal bool</b> <a id="74ff44abe97d3d8d" href="../../../R/74ff44abe97d3d8d.html" target="n" data-glyph="74,1" class="i method">MatchNodeNameWithAttributes</a>(<span class="i">XmlNode</span> <span id="r23 rd" class="r23 r">n</span>, <b>string</b> <span id="r24 rd" class="r24 r">s</span>)
+        {
+            <b>return</b> <a href="#7d471d66ae5c1bea" class="i method">MatchNodeNameHelper</a>(<span class="r23 r">n</span>, <span class="r24 r">s</span>, <b>true</b>);
+        }
+ 
+        <b>internal bool</b> <a id="8fbb2729ca6b999a" href="../../../R/8fbb2729ca6b999a.html" target="n" data-glyph="74,1" class="i method">MatchNodeName</a>(<span class="i">XmlNode</span> <span id="r25 rd" class="r25 r">n</span>, <b>string</b> <span id="r26 rd" class="r26 r">s</span>)
+        {
+            <b>return</b> <a href="#7d471d66ae5c1bea" class="i method">MatchNodeNameHelper</a>(<span class="r25 r">n</span>, <span class="r26 r">s</span>, <b>false</b>);
+        }
+ 
+        <b>internal bool</b> <a id="338a275b9407d200" href="../../../R/338a275b9407d200.html" target="n" data-glyph="74,1" class="i method">MatchAttributeName</a>(<span class="i">XmlAttribute</span> <span id="r27 rd" class="r27 r">a</span>, <b>string</b> <span id="r28 rd" class="r28 r">s</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r27 r">a</span>.<span class="i">Name</span>, <span class="r28 r">s</span>, <span class="i">StringComparison</span>.<span class="i">Ordinal</span>))
+            {
+                <span class="c">// we have a case sensitive match</span>
+                <b>return</b> <b>true</b>;
+            }
+            <b>else</b> <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r27 r">a</span>.<span class="i">Name</span>, <span class="r28 r">s</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <span class="c">// try a case insensitive match</span>
+                <span class="c">// we differ only in case: flag this as an ERROR for the time being</span>
+                <span class="c">// and accept the comparison</span>
+ 
+                <b>const string</b> <span id="r29 rd" class="r29 r">fmtString</span> = <span class="s">&quot;XML attribute differ in case only {0} {1}&quot;</span>;
+                <span class="i">ReportTrace</span>(<b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="r29 r">fmtString</span>, <span class="r27 r">a</span>.<span class="i">Name</span>, <span class="r28 r">s</span>));
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>internal void</b> <a id="92faf1fee4b3e75a" href="../../../R/92faf1fee4b3e75a.html" target="n" data-glyph="74,1" class="i method">ProcessDuplicateNode</a>(<span class="i">XmlNode</span> <span id="r30 rd" class="r30 r">n</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: Duplicated node.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">DuplicatedNode</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>internal void</b> <a id="4e3ad0bd2ae31329" href="../../../R/4e3ad0bd2ae31329.html" target="n" data-glyph="74,1" class="i method">ProcessDuplicateAlternateNode</a>(<b>string</b> <span id="r31 rd" class="r31 r">node1</span>, <b>string</b> <span id="r32 rd" class="r32 r">node2</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: {2} and {3} are mutually exclusive.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">MutuallyExclusiveNode</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r31 r">node1</span>, <span class="r32 r">node2</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>internal void</b> <a id="1459768dbd46ad88" href="../../../R/1459768dbd46ad88.html" target="n" data-glyph="74,1" class="i method">ProcessDuplicateAlternateNode</a>(<span class="i">XmlNode</span> <span id="r33 rd" class="r33 r">n</span>, <b>string</b> <span id="r34 rd" class="r34 r">node1</span>, <b>string</b> <span id="r35 rd" class="r35 r">node2</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: {2}, {3} and {4} are mutually exclusive.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">ThreeMutuallyExclusiveNode</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r33 r">n</span>.<span class="i">Name</span>, <span class="r34 r">node1</span>, <span class="r35 r">node2</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>private void</b> <a id="42075a282d26facc" href="../../../R/42075a282d26facc.html" target="n" data-glyph="76,1" class="i method">ReportIllegalXmlNode</a>(<span class="i">XmlNode</span> <span id="r36 rd" class="r36 r">n</span>)
+        {
+            <span class="c">// UnknownNode=Error at XPath {0} in file {1}: {2} is an unknown node.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">UnknownNode</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r36 r">n</span>.<span class="i">Name</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>private void</b> <a id="5d1ae182fc0a2eec" href="../../../R/5d1ae182fc0a2eec.html" target="n" data-glyph="76,1" class="i method">ReportIllegalXmlAttribute</a>(<span class="i">XmlAttribute</span> <span id="r37 rd" class="r37 r">a</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: {2} is an unknown attribute.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">UnknownAttribute</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r37 r">a</span>.<span class="i">Name</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>protected void</b> <a id="eaa34dc2457d41b9" href="../../../R/eaa34dc2457d41b9.html" target="n" data-glyph="75,1" class="i method">ReportMissingAttribute</a>(<b>string</b> <span id="r38 rd" class="r38 r">name</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: {2} is a missing attribute.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">MissingAttribute</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r38 r">name</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>protected void</b> <a id="6e07889eb3560d31" href="../../../R/6e07889eb3560d31.html" target="n" data-glyph="75,1" class="i method">ReportMissingNode</a>(<b>string</b> <span id="r39 rd" class="r39 r">name</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: Missing Node {2}.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">MissingNode</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r39 r">name</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>protected void</b> <a id="ee851d774f448639" href="../../../R/ee851d774f448639.html" target="n" data-glyph="75,1" class="i method">ReportMissingNodes</a>(<b>string</b>[] <span id="r40 rd" class="r40 r">names</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: Missing Node from {2}.</span>
+            <b>string</b> <span id="r41 rd" class="r41 r">namesString</span> = <b>string</b>.<span class="i">Join</span>(<span class="s">&quot;, &quot;</span>, <span class="r40 r">names</span>);
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">MissingNodeFromList</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r41 r">namesString</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>protected void</b> <a id="66082164ee2c52dd" href="../../../R/66082164ee2c52dd.html" target="n" data-glyph="75,1" class="i method">ReportEmptyNode</a>(<span class="i">XmlNode</span> <span id="r42 rd" class="r42 r">n</span>)
+        {
+            <span class="c">// Error at XPath {0} in file {1}: {2} is an empty node.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">EmptyNode</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r42 r">n</span>.<span class="i">Name</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>protected void</b> <a id="52d91eaab4dbb663" href="../../../R/52d91eaab4dbb663.html" target="n" data-glyph="75,1" class="i method">ReportEmptyAttribute</a>(<span class="i">XmlAttribute</span> <span id="r43 rd" class="r43 r">a</span>)
+        {
+            <span class="c">// EmptyAttribute=Error at XPath {0} in file {1}: {2} is an empty attribute.</span>
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">EmptyAttribute</span>, <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>(), <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r43 r">a</span>.<span class="i">Name</span>), <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> For tracing purposes only, don&#39;t add to log.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r44 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> trace message, non-localized string is OK.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="088223c5b2c4ade1" href="../../../R/088223c5b2c4ade1.html" target="n" data-glyph="75,1" class="i method">ReportTrace</a>(<b>string</b> <span id="r44 rd" class="r44 r">message</span>)
+        {
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<span class="r44 r">message</span>, <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#d4708e601c07a6e8" class="i field">Trace</a>);
+        }
+ 
+        <b>protected void</b> <a id="db3c8d17c0ceaeb5" href="../../../R/db3c8d17c0ceaeb5.html" target="n" data-glyph="75,1" class="i method">ReportError</a>(<b>string</b> <span id="r45 rd" class="r45 r">message</span>)
+        {
+            <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<span class="r45 r">message</span>, <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>);
+        }
+ 
+        <b>private void</b> <a id="44ef746062e2c5e4" href="../../../R/44ef746062e2c5e4.html" target="n" data-glyph="76,1" class="i method">ReportLogEntryHelper</a>(<b>string</b> <span id="r46 rd" class="r46 r">message</span>, <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a> <span id="r47 rd" class="r47 r">entryType</span>, <b>bool</b> <span id="r48 rd" class="r48 r">failToLoadFile</span> = <b>false</b>)
+        {
+            <b>string</b> <span id="r49 rd" class="r49 r">currentPath</span> = <a href="#1b9e969885176790" class="i method">ComputeCurrentXPath</a>();
+            <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r50 rd" class="r50 r">entry</span> = <b>new</b> <span class="t">XmlLoaderLoggerEntry</span>();
+ 
+            <span class="r50 r">entry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> = <span class="r47 r">entryType</span>;
+            <span class="r50 r">entry</span>.<a href="#2494cdd9cd044bd5" class="i field">filePath</a> = <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#6b0418522d2dfb04" class="i property">FilePath</a>;
+            <span class="r50 r">entry</span>.<a href="#af792bea14b48e80" class="i field">xPath</a> = <span class="r49 r">currentPath</span>;
+            <span class="r50 r">entry</span>.<a href="#aab62db094c5bdb9" class="i field">message</a> = <span class="r46 r">message</span>;
+ 
+            <b>if</b> (<span class="r48 r">failToLoadFile</span>)
+            {
+                <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<span class="r47 r">entryType</span> == <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>, <span class="s">&quot;the entry type should be &#39;error&#39; when a file cannot be loaded&quot;</span>);
+                <span class="r50 r">entry</span>.<a href="#f4fb4247ba713623" class="i field">failToLoadFile</a> = <b>true</b>;
+            }
+ 
+            <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#993aaa14a64a5557" class="i method">LogEntry</a>(<span class="r50 r">entry</span>);
+ 
+            <b>if</b> (<span class="r47 r">entryType</span> == <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>)
+            {
+                <a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a>++;
+                <b>if</b> (<a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a> &gt;= <a href="#d9c63460ac875125" class="i field">_maxNumberOfErrors</a>)
+                {
+                    <span class="c">// we have to log a last error and then bail</span>
+                    <b>if</b> (<a href="#d9c63460ac875125" class="i field">_maxNumberOfErrors</a> &gt; 1)
+                    {
+                        <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r51 rd" class="r51 r">lastEntry</span> = <b>new</b> <span class="t">XmlLoaderLoggerEntry</span>();
+ 
+                        <span class="r51 r">lastEntry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> = <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>;
+                        <span class="r51 r">lastEntry</span>.<a href="#2494cdd9cd044bd5" class="i field">filePath</a> = <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#6b0418522d2dfb04" class="i property">FilePath</a>;
+                        <span class="r51 r">lastEntry</span>.<a href="#af792bea14b48e80" class="i field">xPath</a> = <span class="r49 r">currentPath</span>;
+                        <span class="r51 r">lastEntry</span>.<a href="#aab62db094c5bdb9" class="i field">message</a> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">TooManyErrors</span>, <a href="#6b0418522d2dfb04" class="i property">FilePath</a>);
+                        <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#993aaa14a64a5557" class="i method">LogEntry</a>(<span class="r51 r">lastEntry</span>);
+                        <a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a>++;
+                    }
+ 
+                    <span class="c">// NOTE: this exception is an internal one, and it is caught</span>
+                    <span class="c">// internally by the calling code.</span>
+                    <a href="#b7fd570092248af0" class="t t">TooManyErrorsException</a> <span id="r52 rd" class="r52 r">e</span> = <b>new</b> <span class="t">TooManyErrorsException</span>();
+ 
+                    <span class="r52 r">e</span>.<a href="#1649ca94f48e8623" class="i field">errorCount</a> = <a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a>;
+                    <b>throw</b> <span class="r52 r">e</span>;
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Report error when loading formatting data from object model.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r53 r">message</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r54 r">typeName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>protected void</b> <a id="5109b6e3de4bb1b1" href="../../../R/5109b6e3de4bb1b1.html" target="n" data-glyph="75,1" class="i method">ReportErrorForLoadingFromObjectModel</a>(<b>string</b> <span id="r53 rd" class="r53 r">message</span>, <b>string</b> <span id="r54 rd" class="r54 r">typeName</span>)
+        {
+            <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r55 rd" class="r55 r">entry</span> = <b>new</b> <span class="t">XmlLoaderLoggerEntry</span>();
+ 
+            <span class="r55 r">entry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> = <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>;
+            <span class="r55 r">entry</span>.<a href="#aab62db094c5bdb9" class="i field">message</a> = <span class="r53 r">message</span>;
+            <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#993aaa14a64a5557" class="i method">LogEntry</a>(<span class="r55 r">entry</span>);
+ 
+            <a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a>++;
+            <b>if</b> (<a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a> &gt;= <a href="#d9c63460ac875125" class="i field">_maxNumberOfErrors</a>)
+            {
+                <span class="c">// we have to log a last error and then bail</span>
+                <b>if</b> (<a href="#d9c63460ac875125" class="i field">_maxNumberOfErrors</a> &gt; 1)
+                {
+                    <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r56 rd" class="r56 r">lastEntry</span> = <b>new</b> <span class="t">XmlLoaderLoggerEntry</span>();
+ 
+                    <span class="r56 r">lastEntry</span>.<a href="#a698d581d1640212" class="i field">entryType</a> = <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>;
+                    <span class="r56 r">lastEntry</span>.<a href="#aab62db094c5bdb9" class="i field">message</a> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">TooManyErrorsInFormattingData</span>, <span class="r54 r">typeName</span>);
+                    <a href="#f1d28cd1aef8c322" class="i field">_logger</a>.<a href="#993aaa14a64a5557" class="i method">LogEntry</a>(<span class="r56 r">lastEntry</span>);
+                    <a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a>++;
+                }
+ 
+                <span class="c">// NOTE: this exception is an internal one, and it is caught</span>
+                <span class="c">// internally by the calling code.</span>
+                <a href="#b7fd570092248af0" class="t t">TooManyErrorsException</a> <span id="r57 rd" class="r57 r">e</span> = <b>new</b> <span class="t">TooManyErrorsException</span>();
+ 
+                <span class="r57 r">e</span>.<a href="#1649ca94f48e8623" class="i field">errorCount</a> = <a href="#0489aee88f4507cb" class="i field">_currentErrorCount</a>;
+                <b>throw</b> <span class="r57 r">e</span>;
+            }
+        }
+ 
+        <b>private void</b> <a id="185f0017966ffe8b" href="../../../R/185f0017966ffe8b.html" target="n" data-glyph="76,1" class="i method">WriteStackLocation</a>(<b>string</b> <span id="r58 rd" class="r58 r">label</span>)
+        {
+            <a href="#088223c5b2c4ade1" class="i method">ReportTrace</a>(<span class="r58 r">label</span>);
+        }
+ 
+        <b>protected string</b> <a id="1b9e969885176790" href="../../../R/1b9e969885176790.html" target="n" data-glyph="75,1" class="i method">ComputeCurrentXPath</a>()
+        {
+            <span class="i">StringBuilder</span> <span id="r59 rd" class="r59 r">path</span> = <b>new</b> <span class="i">StringBuilder</span>();
+            <b>foreach</b> (<a href="#baa776489db97969" class="t t">XmlLoaderStackFrame</a> <span id="r60 rd" class="r60 r">sf</span> <b>in</b> <a href="#4f3e8d060549f25b" class="i field">_executionStack</a>)
+            {
+                <span class="r59 r">path</span>.<span class="i">Insert</span>(0, <span class="s">&quot;/&quot;</span>);
+                <b>if</b> (<span class="r60 r">sf</span>.<a href="#d445788a8b69951c" class="i field">index</a> != -1)
+                {
+                    <span class="r59 r">path</span>.<span class="i">Insert</span>(1, <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>,
+                        <span class="s">&quot;{0}[{1}]&quot;</span>, <span class="r60 r">sf</span>.<a href="#3043d18a7ac571d5" class="i field">node</a>.<span class="i">Name</span>, <span class="r60 r">sf</span>.<a href="#d445788a8b69951c" class="i field">index</a> + 1));
+                }
+                <b>else</b>
+                {
+                    <span class="r59 r">path</span>.<span class="i">Insert</span>(1, <span class="r60 r">sf</span>.<a href="#3043d18a7ac571d5" class="i field">node</a>.<span class="i">Name</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r59 r">path</span>.<span class="i">Length</span> &gt; 0 ? <span class="r59 r">path</span>.<span class="i">ToString</span>() : <b>null</b>;
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> helpers for loading XML documents
+ 
+        <b>protected</b> <span class="i">XmlDocument</span> <a id="d4c23811abb5e045" href="../../../R/d4c23811abb5e045.html" target="n" data-glyph="75,1" class="i method">LoadXmlDocumentFromFileLoadingInfo</a>(<a href="../../../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a> <span id="r61 rd" class="r61 r">authorizationManager</span>, <a href="../../../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r62 rd" class="r62 r">host</span>, <b>out bool</b> <span id="r63 rd" class="r63 r">isFullyTrusted</span>)
+        {
+            <span class="c">// get file contents</span>
+            <a href="../../../engine/ExternalScriptInfo.cs.html#7806ac40f903221c" class="t t">ExternalScriptInfo</a> <span id="r64 rd" class="r64 r">ps1xmlInfo</span> = <b>new</b> <a href="../../../engine/ExternalScriptInfo.cs.html#12b68b14765ad8b7" class="t constructor">ExternalScriptInfo</a>(<a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <a href="#6b0418522d2dfb04" class="i property">FilePath</a>);
+            <b>string</b> <span id="r65 rd" class="r65 r">fileContents</span> = <span class="r64 r">ps1xmlInfo</span>.<a href="../../../engine/ExternalScriptInfo.cs.html#9f9388511bd97894" class="i property">ScriptContents</a>;
+ 
+            <span class="r63 r">isFullyTrusted</span> = <b>false</b>;
+            <b>if</b> (<span class="r64 r">ps1xmlInfo</span>.<a href="../../../engine/CommandInfo.cs.html#8677495d43679110" class="i property">DefiningLanguageMode</a> == <a href="../../../engine/SessionStatePublic.cs.html#450052824aba2e3f" class="t t">PSLanguageMode</a>.<a href="../../../engine/SessionStatePublic.cs.html#eec721eb8c02f156" class="i field">FullLanguage</a>)
+            {
+                <span class="r63 r">isFullyTrusted</span> = <b>true</b>;
+            }
+ 
+            <b>if</b> (<span class="r61 r">authorizationManager</span> != <b>null</b>)
+            {
+                <b>try</b>
+                {
+                    <span class="r61 r">authorizationManager</span>.<a href="../../../engine/SecurityManagerBase.cs.html#c0db5055d86375e7" class="i method">ShouldRunInternal</a>(<span class="r64 r">ps1xmlInfo</span>, <a href="../../../engine/SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a>.<a href="../../../engine/SecurityManagerBase.cs.html#946d8e7ca02acec6" class="i field">Internal</a>, <span class="r62 r">host</span>);
+                }
+                <b>catch</b> (<a href="../../../engine/MshSecurityException.cs.html#4b73a09ff18e1e39" class="t t">PSSecurityException</a> <span id="r66 rd" class="r66 r">reason</span>)
+                {
+                    <b>string</b> <span id="r67 rd" class="r67 r">errorMessage</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">TypesXmlStrings</span>.<span class="i">ValidationException</span>,
+                        <b>string</b>.<span class="i">Empty</span> <span class="c">/* TODO/FIXME snapin */</span>,
+                        <a href="#6b0418522d2dfb04" class="i property">FilePath</a>,
+                        <span class="r66 r">reason</span>.<a href="../../../engine/MshSecurityException.cs.html#40ee33b95bfaf26d" class="i property">Message</a>);
+                    <a href="#44ef746062e2c5e4" class="i method">ReportLogEntryHelper</a>(<span class="r67 r">errorMessage</span>, <a href="#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="#eb8f7dac699c0dc4" class="i field">Error</a>, <span class="r48 r">failToLoadFile</span>: <b>true</b>);
+                    <b>return</b> <b>null</b>;
+                }
+            }
+ 
+            <span class="c">// load file into XML document</span>
+            <b>try</b>
+            {
+                <span class="i">XmlDocument</span> <span id="r68 rd" class="r68 r">doc</span> = <a href="../../../engine/serialization.cs.html#758c46d6a86d6840" class="t t">InternalDeserializer</a>.<a href="../../../engine/serialization.cs.html#42229722c8bba109" class="i method">LoadUnsafeXmlDocument</a>(
+                    <span class="r65 r">fileContents</span>,
+                    <b>true</b>, <span class="c">/* preserve whitespace, comments, etc. */</span>
+                    <b>null</b>); <span class="c">/* default maxCharacters */</span>
+                <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#088223c5b2c4ade1" class="i method">ReportTrace</a>(<span class="s">&quot;XmlDocument loaded OK&quot;</span>);
+                <b>return</b> <span class="r68 r">doc</span>;
+            }
+            <b>catch</b> (<span class="i">XmlException</span> <span id="r69 rd" class="r69 r">e</span>)
+            {
+                <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#db3c8d17c0ceaeb5" class="i method">ReportError</a>(<a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">ErrorInFile</span>, <a href="#6b0418522d2dfb04" class="i property">FilePath</a>, <span class="r69 r">e</span>.<span class="i">Message</span>));
+                <a href="#15fe3d47ab0f16d2" class="k">this</a>.<a href="#088223c5b2c4ade1" class="i method">ReportTrace</a>(<span class="s">&quot;XmlDocument discarded&quot;</span>);
+                <b>return</b> <b>null</b>;
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> File system path for the file we are loading from.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>protected string</b> <a id="6b0418522d2dfb04" href="../../../R/6b0418522d2dfb04.html" target="n" data-glyph="105,1" class="i property">FilePath</a>
+        {
+            <b>get</b>
+            {
+                <b>return</b> <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#0c5b2b3c5001a4a5" class="i field">filePath</a>;
+            }
+        }
+ 
+        <b>protected void</b> <a id="81474498314d3c54" href="../../../R/81474498314d3c54.html" target="n" data-glyph="75,1" class="i method">SetDatabaseLoadingInfo</a>(<a href="typeDataXmlLoader.cs.html#0bb68492e78001d6" class="t t">XmlFileLoadInfo</a> <span id="r70 rd" class="r70 r">info</span>)
+        {
+            <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#998257bccdf9cf32" class="i field">fileDirectory</a> = <span class="r70 r">info</span>.<a href="typeDataXmlLoader.cs.html#a3ef1f9983ac85b4" class="i field">fileDirectory</a>;
+            <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#0c5b2b3c5001a4a5" class="i field">filePath</a> = <span class="r70 r">info</span>.<a href="typeDataXmlLoader.cs.html#14723d5c0f2fecf3" class="i field">filePath</a>;
+        }
+ 
+        <b>protected void</b> <a id="5a2bd43d33ebdfec" href="../../../R/5a2bd43d33ebdfec.html" target="n" data-glyph="75,1" class="i method">SetLoadingInfoIsFullyTrusted</a>(<b>bool</b> <span id="r71 rd" class="r71 r">isFullyTrusted</span>)
+        {
+            <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#ce1a4be78365b0d0" class="i field">isFullyTrusted</a> = <span class="r71 r">isFullyTrusted</span>;
+        }
+ 
+        <b>protected void</b> <a id="4b0c909095960b9e" href="../../../R/4b0c909095960b9e.html" target="n" data-glyph="75,1" class="i method">SetLoadingInfoIsProductCode</a>(<b>bool</b> <span id="r72 rd" class="r72 r">isProductCode</span>)
+        {
+            <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#cf26a3869e271788" class="i field">isProductCode</a> = <span class="r72 r">isProductCode</span>;
+        }
+ 
+        <b>private readonly</b> <a href="displayDescriptionData.cs.html#6f18a6e62cd3034a" class="t t">DatabaseLoadingInfo</a> <a id="46d67da3adfb1fb6" href="../../../R/46d67da3adfb1fb6.html" target="n" data-glyph="46,1" class="i field">_loadingInfo</a> = <b>new</b> <span class="t">DatabaseLoadingInfo</span>();
+ 
+        <b>protected</b> <a href="displayDescriptionData.cs.html#6f18a6e62cd3034a" class="t t">DatabaseLoadingInfo</a> <a id="b5bb26d42e2bf240" href="../../../R/b5bb26d42e2bf240.html" target="n" data-glyph="105,1" class="i property">LoadingInfo</a>
+        {
+            <b>get</b>
+            {
+                <a href="displayDescriptionData.cs.html#6f18a6e62cd3034a" class="t t">DatabaseLoadingInfo</a> <span id="r73 rd" class="r73 r">info</span> = <b>new</b> <span class="t">DatabaseLoadingInfo</span>();
+                <span class="r73 r">info</span>.<a href="displayDescriptionData.cs.html#0c5b2b3c5001a4a5" class="i field">filePath</a> = <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#0c5b2b3c5001a4a5" class="i field">filePath</a>;
+                <span class="r73 r">info</span>.<a href="displayDescriptionData.cs.html#998257bccdf9cf32" class="i field">fileDirectory</a> = <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#998257bccdf9cf32" class="i field">fileDirectory</a>;
+                <span class="r73 r">info</span>.<a href="displayDescriptionData.cs.html#ce1a4be78365b0d0" class="i field">isFullyTrusted</a> = <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#ce1a4be78365b0d0" class="i field">isFullyTrusted</a>;
+                <span class="r73 r">info</span>.<a href="displayDescriptionData.cs.html#cf26a3869e271788" class="i field">isProductCode</a> = <a href="#46d67da3adfb1fb6" class="i field">_loadingInfo</a>.<a href="displayDescriptionData.cs.html#cf26a3869e271788" class="i field">isProductCode</a>;
+                <b>return</b> <span class="r73 r">info</span>;
+            }
+        }
+ 
+        <b>protected</b> <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <a id="34cbdfcab9d0f1ed" href="../../../R/34cbdfcab9d0f1ed.html" target="n" data-glyph="45,1" class="i field">expressionFactory</a>;
+ 
+        <b>protected</b> <a href="displayResourceManagerCache.cs.html#28d15af07e34614e" class="t t">DisplayResourceManagerCache</a> <a id="e9cf356a3e6732d9" href="../../../R/e9cf356a3e6732d9.html" target="n" data-glyph="45,1" class="i field">displayResourceManagerCache</a>;
+ 
+        <b>internal bool</b> <a id="823c52d4ac6a34e3" href="../../../R/823c52d4ac6a34e3.html" target="n" data-glyph="104,1" class="i property">VerifyStringResources</a> { <b>get</b>; } = <b>true</b>;
+ 
+        <b>private readonly int</b> <a id="d9c63460ac875125" href="../../../R/d9c63460ac875125.html" target="n" data-glyph="46,1" class="i field">_maxNumberOfErrors</a> = 30;
+ 
+        <b>private int</b> <a id="0489aee88f4507cb" href="../../../R/0489aee88f4507cb.html" target="n" data-glyph="46,1" class="i field">_currentErrorCount</a> = 0;
+ 
+        <b>private readonly bool</b> <a id="caa97e103e8b138e" href="../../../R/caa97e103e8b138e.html" target="n" data-glyph="46,1" class="i field">_logStackActivity</a> = <b>false</b>;
+ 
+        <b>private readonly</b> <span class="i">Stack</span>&lt;<a href="#baa776489db97969" class="t t">XmlLoaderStackFrame</a>&gt; <a id="4f3e8d060549f25b" href="../../../R/4f3e8d060549f25b.html" target="n" data-glyph="46,1" class="i field">_executionStack</a> = <b>new</b> <span class="i">Stack</span>&lt;<a href="#baa776489db97969" class="t t">XmlLoaderStackFrame</a>&gt;();
+ 
+        <b>private</b> <a href="#61da410b8dd60cb4" class="t t">XmlLoaderLogger</a> <a id="f1d28cd1aef8c322" href="../../../R/f1d28cd1aef8c322.html" target="n" data-glyph="46,1" class="i field">_logger</a> = <b>new</b> <span class="t">XmlLoaderLogger</span>();
+    }
+}
+</pre></td></tr></table></div></body></html>

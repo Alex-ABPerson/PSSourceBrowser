@@ -1,0 +1,571 @@
+﻿<!DOCTYPE html>
+<html><head><title>typeDataManager.cs</title><link rel="stylesheet" href="../../../../styles.css"><script src="../../../../scripts.js"></script></head>
+<body class="cB" onload="i(562);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/FormatAndOutput/common/DisplayDatabase/typeDataManager.cs" target="_top">FormatAndOutput\common\DisplayDatabase\typeDataManager.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Concurrent</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">ObjectModel</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Host</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Threading</span>;
+ 
+<b>namespace</b> <span class="i n">Microsoft</span>.<span class="i n">PowerShell</span>.<span class="i n">Commands</span>.<span class="i n">Internal</span>.<span class="i n">Format</span>
+{
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+    <span class="c">///</span><span class="c"> Class to manage the database instances, do the reloading, etc.</span>
+    <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+    <b>internal sealed class</b> <a id="1d3a66f3269ff8ee" href="../../../R/1d3a66f3269ff8ee.html" target="n" data-glyph="2,0" class="t t">TypeInfoDataBaseManager</a>
+    {
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Private Data
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Instance of the object holding the format.ps1xml in memory database.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal</b> <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <a id="881f8148885d5e8f" href="../../../R/881f8148885d5e8f.html" target="n" data-glyph="104,1" class="i property">Database</a> { <b>get</b>; <b>private set</b>; }
+ 
+        <span class="c">// for locking the F&amp;O database</span>
+        <b>internal object</b> <a id="989240fbe25262d1" href="../../../R/989240fbe25262d1.html" target="n" data-glyph="44,1" class="i field">databaseLock</a> = <b>new</b> <b>object</b>();
+ 
+        <span class="c">// for locking the update from XMLs</span>
+        <b>internal object</b> <a id="06859fde7d6bdab8" href="../../../R/06859fde7d6bdab8.html" target="n" data-glyph="44,1" class="i field">updateDatabaseLock</a> = <b>new</b> <b>object</b>();
+        <span class="c">// this is used to throw errors when updating a shared TypeTable.</span>
+        <b>internal bool</b> <a id="64cb024538567903" href="../../../R/64cb024538567903.html" target="n" data-glyph="44,1" class="i field">isShared</a>;
+        <b>private readonly</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="2e9abedbd8630bd1" href="../../../R/2e9abedbd8630bd1.html" target="n" data-glyph="46,1" class="i field">_formatFileList</a>;
+ 
+        <b>internal bool</b> <a id="2bbd80d5ac451320" href="../../../R/2bbd80d5ac451320.html" target="n" data-glyph="104,1" class="i property">DisableFormatTableUpdates</a> { <b>get</b>; <b>set</b>; }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">region</span> Constructors
+ 
+        <b>internal</b> <a id="97bf96e8de445170" href="../../../R/97bf96e8de445170.html" target="n" data-glyph="74,1" class="t constructor">TypeInfoDataBaseManager</a>()
+        {
+            <a href="#64cb024538567903" class="i field">isShared</a> = <b>false</b>;
+            <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">formatFiles</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r1 r">isShared</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">authorizationManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Authorization manager to perform signature checks before reading ps1xml files (or null of no checks are needed)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r3 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host passed to </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r2 r">authorizationManager</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.  Can be null if no interactive questions should be asked.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentNullException</span><span class="c">&quot;</span><span class="c">/&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><span class="i">ArgumentException</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> 1. FormatFile is not rooted.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">exception</span> <span class="c">cref</span><span class="c">=</span><span class="c">&quot;</span><a href="FormatTable.cs.html#efff09fd5e168a60" class="t t">FormatTableLoadException</a><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> 1. There were errors loading Formattable. Look in the Errors property to get</span>
+        <span class="c">///</span><span class="c"> detailed error messages.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">exception</span><span class="c">&gt;</span>
+        <b>internal</b> <a id="f51d970d14ff6073" href="../../../R/f51d970d14ff6073.html" target="n" data-glyph="74,1" class="t constructor">TypeInfoDataBaseManager</a>(
+            <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r0 rd" class="r0 r">formatFiles</span>,
+            <b>bool</b> <span id="r1 rd" class="r1 r">isShared</span>,
+            <a href="../../../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a> <span id="r2 rd" class="r2 r">authorizationManager</span>,
+            <a href="../../../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r3 rd" class="r3 r">host</span>)
+        {
+            <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+ 
+            <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt; <span id="r4 rd" class="r4 r">filesToLoad</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt;();
+            <span class="i">ConcurrentBag</span>&lt;<b>string</b>&gt; <span id="r5 rd" class="r5 r">errors</span> = <b>new</b> <span class="i">ConcurrentBag</span>&lt;<b>string</b>&gt;();
+            <b>foreach</b> (<b>string</b> <span id="r6 rd" class="r6 r">formatFile</span> <b>in</b> <span class="r0 r">formatFiles</span>)
+            {
+                <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r6 r">formatFile</span>) || (!<span class="i">Path</span>.<span class="i">IsPathRooted</span>(<span class="r6 r">formatFile</span>)))
+                {
+                    <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r0 r">formatFiles</span>), <span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">FormatFileNotRooted</span>, <span class="r6 r">formatFile</span>);
+                }
+ 
+                <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r7 rd" class="r7 r">fileToLoad</span> = <b>new</b> <span class="t">PSSnapInTypeAndFormatErrors</span>(<b>string</b>.<span class="i">Empty</span>, <span class="r6 r">formatFile</span>);
+                <span class="r7 r">fileToLoad</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#d82bf3db07160a39" class="i property">Errors</a> = <span class="r5 r">errors</span>;
+                <span class="r4 r">filesToLoad</span>.<span class="i">Add</span>(<span class="r7 r">fileToLoad</span>);
+                <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>.<span class="i">Add</span>(<span class="r6 r">formatFile</span>);
+            }
+ 
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r8 rd" class="r8 r">expressionFactory</span> = <b>new</b> <span class="t">PSPropertyExpressionFactory</span>();
+            <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r9 rd" class="r9 r">logEntries</span> = <b>null</b>;
+ 
+            <span class="c">// load the files</span>
+            <a href="#5e35b2103e8c999c" class="i method">LoadFromFile</a>(<span class="r4 r">filesToLoad</span>, <span class="r8 r">expressionFactory</span>, <b>true</b>, <span class="r2 r">authorizationManager</span>, <span class="r3 r">host</span>, <b>false</b>, <b>out</b> <span class="r9 r">logEntries</span>);
+            <a href="#1d3a66f3269ff8ee" class="k">this</a>.<a href="#64cb024538567903" class="i field">isShared</a> = <span class="r1 r">isShared</span>;
+ 
+            <span class="c">// check to see if there are any errors loading the format files</span>
+            <b>if</b> (!<span class="r5 r">errors</span>.<span class="i">IsEmpty</span>)
+            {
+                <b>throw</b> <b>new</b> <a href="FormatTable.cs.html#453269c938694a52" class="t constructor">FormatTableLoadException</a>(<span class="r5 r">errors</span>);
+            }
+        }
+ 
+        <span class="k preprocess">#</span><span class="k preprocess">endregion</span>
+ 
+        <b>internal</b> <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <a id="b98bbbe500c5a257" href="../../../R/b98bbbe500c5a257.html" target="n" data-glyph="74,1" class="i method">GetTypeInfoDataBase</a>()
+        {
+            <b>return</b> <a href="#881f8148885d5e8f" class="i property">Database</a>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Adds the </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">formatFile</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> to the current FormatTable&#39;s file list.</span>
+        <span class="c">///</span><span class="c"> The FormatTable will not reflect the change until Update is called.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">formatFile</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">shouldPrepend</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> if true, </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">formatFile</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> is prepended to the current FormatTable&#39;s file list.</span>
+        <span class="c">///</span><span class="c"> if false, it will be appended.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="2165d3c4536cdddf" href="../../../R/2165d3c4536cdddf.html" target="n" data-glyph="74,1" class="i method">Add</a>(<b>string</b> <span id="r10 rd" class="r10 r">formatFile</span>, <b>bool</b> <span id="r11 rd" class="r11 r">shouldPrepend</span>)
+        {
+            <b>if</b> (<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r10 r">formatFile</span>) || (!<span class="i">Path</span>.<span class="i">IsPathRooted</span>(<span class="r10 r">formatFile</span>)))
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewArgumentException</span>(<b>nameof</b>(<span class="r10 r">formatFile</span>), <span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">FormatFileNotRooted</span>, <span class="r10 r">formatFile</span>);
+            }
+ 
+            <b>lock</b> (<a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>)
+            {
+                <b>if</b> (<span class="r11 r">shouldPrepend</span>)
+                {
+                    <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>.<span class="i">Insert</span>(0, <span class="r10 r">formatFile</span>);
+                }
+                <b>else</b>
+                {
+                    <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>.<span class="i">Add</span>(<span class="r10 r">formatFile</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Removes the </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">formatFile</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c"> from the current FormatTable&#39;s file list.</span>
+        <span class="c">///</span><span class="c"> The FormatTable will not reflect the change until Update is called.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r12 r">formatFile</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="5e6a838a21b22a40" href="../../../R/5e6a838a21b22a40.html" target="n" data-glyph="74,1" class="i method">Remove</a>(<b>string</b> <span id="r12 rd" class="r12 r">formatFile</span>)
+        {
+            <b>lock</b> (<a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>)
+            {
+                <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>.<span class="i">Remove</span>(<span class="r12 r">formatFile</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Update a shared formatting database with formatData of &#39;ExtendedTypeDefinition&#39; type.</span>
+        <span class="c">///</span><span class="c"> This method should only be called from the FormatTable, where are shared formatting</span>
+        <span class="c">///</span><span class="c"> database is created.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r13 r">formatData</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> The format data to update the database</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r14 r">shouldPrepend</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Specify the order in which the format data will be loaded</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="20c2c36e7e182e74" href="../../../R/20c2c36e7e182e74.html" target="n" data-glyph="74,1" class="i method">AddFormatData</a>(<span class="i">IEnumerable</span>&lt;<a href="displayDescriptionData.cs.html#f507ec3cc270989a" class="t t">ExtendedTypeDefinition</a>&gt; <span id="r13 rd" class="r13 r">formatData</span>, <b>bool</b> <span id="r14 rd" class="r14 r">shouldPrepend</span>)
+        {
+            <a href="../../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>.<a href="../../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<a href="#64cb024538567903" class="i field">isShared</a>, <span class="s">&quot;this method should only be called from FormatTable to update a shared database&quot;</span>);
+ 
+            <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt; <span id="r15 rd" class="r15 r">filesToLoad</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt;();
+            <span class="i">ConcurrentBag</span>&lt;<b>string</b>&gt; <span id="r16 rd" class="r16 r">errors</span> = <b>new</b> <span class="i">ConcurrentBag</span>&lt;<b>string</b>&gt;();
+            <b>if</b> (<span class="r14 r">shouldPrepend</span>)
+            {
+                <b>foreach</b> (<a href="displayDescriptionData.cs.html#f507ec3cc270989a" class="t t">ExtendedTypeDefinition</a> <span id="r17 rd" class="r17 r">typeDefinition</span> <b>in</b> <span class="r13 r">formatData</span>)
+                {
+                    <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r18 rd" class="r18 r">entryToLoad</span> = <b>new</b> <span class="t">PSSnapInTypeAndFormatErrors</span>(<b>string</b>.<span class="i">Empty</span>, <span class="r17 r">typeDefinition</span>);
+                    <span class="r18 r">entryToLoad</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#d82bf3db07160a39" class="i property">Errors</a> = <span class="r16 r">errors</span>;
+                    <span class="r15 r">filesToLoad</span>.<span class="i">Add</span>(<span class="r18 r">entryToLoad</span>);
+                }
+                <span class="c">// check if the passed in formatData is empty</span>
+                <b>if</b> (<span class="r15 r">filesToLoad</span>.<span class="i">Count</span> == 0)
+                {
+                    <b>return</b>;
+                }
+            }
+ 
+            <b>lock</b> (<a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>)
+            {
+                <b>foreach</b> (<b>string</b> <span id="r19 rd" class="r19 r">formatFile</span> <b>in</b> <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>)
+                {
+                    <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r20 rd" class="r20 r">fileToLoad</span> = <b>new</b> <span class="t">PSSnapInTypeAndFormatErrors</span>(<b>string</b>.<span class="i">Empty</span>, <span class="r19 r">formatFile</span>);
+                    <span class="r20 r">fileToLoad</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#d82bf3db07160a39" class="i property">Errors</a> = <span class="r16 r">errors</span>;
+                    <span class="r15 r">filesToLoad</span>.<span class="i">Add</span>(<span class="r20 r">fileToLoad</span>);
+                }
+            }
+ 
+            <b>if</b> (!<span class="r14 r">shouldPrepend</span>)
+            {
+                <b>foreach</b> (<a href="displayDescriptionData.cs.html#f507ec3cc270989a" class="t t">ExtendedTypeDefinition</a> <span id="r21 rd" class="r21 r">typeDefinition</span> <b>in</b> <span class="r13 r">formatData</span>)
+                {
+                    <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r22 rd" class="r22 r">entryToLoad</span> = <b>new</b> <span class="t">PSSnapInTypeAndFormatErrors</span>(<b>string</b>.<span class="i">Empty</span>, <span class="r21 r">typeDefinition</span>);
+                    <span class="r22 r">entryToLoad</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#d82bf3db07160a39" class="i property">Errors</a> = <span class="r16 r">errors</span>;
+                    <span class="r15 r">filesToLoad</span>.<span class="i">Add</span>(<span class="r22 r">entryToLoad</span>);
+                }
+                <span class="c">// check if the passed in formatData is empty</span>
+                <b>if</b> (<span class="r15 r">filesToLoad</span>.<span class="i">Count</span> == <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>.<span class="i">Count</span>)
+                {
+                    <b>return</b>;
+                }
+            }
+ 
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r23 rd" class="r23 r">expressionFactory</span> = <b>new</b> <span class="t">PSPropertyExpressionFactory</span>();
+            <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r24 rd" class="r24 r">logEntries</span> = <b>null</b>;
+ 
+            <span class="c">// load the formatting data</span>
+            <a href="#5e35b2103e8c999c" class="i method">LoadFromFile</a>(<span class="r15 r">filesToLoad</span>, <span class="r23 r">expressionFactory</span>, <b>false</b>, <b>null</b>, <b>null</b>, <b>false</b>, <b>out</b> <span class="r24 r">logEntries</span>);
+ 
+            <span class="c">// check to see if there are any errors loading the format files</span>
+            <b>if</b> (!<span class="r16 r">errors</span>.<span class="i">IsEmpty</span>)
+            {
+                <b>throw</b> <b>new</b> <a href="FormatTable.cs.html#453269c938694a52" class="t constructor">FormatTableLoadException</a>(<span class="r16 r">errors</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Update the current formattable with the existing formatFileList.</span>
+        <span class="c">///</span><span class="c"> New files might have been added using Add() or Files might</span>
+        <span class="c">///</span><span class="c"> have been removed using Remove.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">authorizationManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Authorization manager to perform signature checks before reading ps1xml files (or null of no checks are needed)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r26 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host passed to </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r25 r">authorizationManager</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.  Can be null if no interactive questions should be asked.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="aa650e55d880f5f4" href="../../../R/aa650e55d880f5f4.html" target="n" data-glyph="74,1" class="i method">Update</a>(<a href="../../../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a> <span id="r25 rd" class="r25 r">authorizationManager</span>, <a href="../../../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r26 rd" class="r26 r">host</span>)
+        {
+            <b>if</b> (<a href="#2bbd80d5ac451320" class="i property">DisableFormatTableUpdates</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<a href="#64cb024538567903" class="i field">isShared</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">SharedFormatTableCannotBeUpdated</span>);
+            }
+ 
+            <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt; <span id="r27 rd" class="r27 r">filesToLoad</span> = <b>new</b> <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt;();
+            <b>lock</b> (<a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>)
+            {
+                <b>foreach</b> (<b>string</b> <span id="r28 rd" class="r28 r">formatFile</span> <b>in</b> <a href="#2e9abedbd8630bd1" class="i field">_formatFileList</a>)
+                {
+                    <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r29 rd" class="r29 r">fileToLoad</span> = <b>new</b> <span class="t">PSSnapInTypeAndFormatErrors</span>(<b>string</b>.<span class="i">Empty</span>, <span class="r28 r">formatFile</span>);
+                    <span class="r27 r">filesToLoad</span>.<span class="i">Add</span>(<span class="r29 r">fileToLoad</span>);
+                }
+            }
+ 
+            <a href="#23c44a65d4d48d25" class="i method">UpdateDataBase</a>(<span class="r27 r">filesToLoad</span>, <span class="r25 r">authorizationManager</span>, <span class="r26 r">host</span>, <b>false</b>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Update the format data database. If there is any error in loading the format xml files,</span>
+        <span class="c">///</span><span class="c"> the old database is unchanged.</span>
+        <span class="c">///</span><span class="c"> The reference returned should NOT be modified by any means by the caller.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r30 r">mshsnapins</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Files to be loaded and errors to be updated.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">authorizationManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Authorization manager to perform signature checks before reading ps1xml files (or null of no checks are needed)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r32 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host passed to </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r31 r">authorizationManager</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.  Can be null if no interactive questions should be asked.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r33 r">preValidated</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the format data has been pre-validated (build time, manual testing, etc) so that validation can be</span>
+        <span class="c">///</span><span class="c"> skipped at runtime.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Database instance.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal void</b> <a id="23c44a65d4d48d25" href="../../../R/23c44a65d4d48d25.html" target="n" data-glyph="74,1" class="i method">UpdateDataBase</a>(
+            <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt; <span id="r30 rd" class="r30 r">mshsnapins</span>,
+            <a href="../../../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a> <span id="r31 rd" class="r31 r">authorizationManager</span>,
+            <a href="../../../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r32 rd" class="r32 r">host</span>,
+            <b>bool</b> <span id="r33 rd" class="r33 r">preValidated</span>
+            )
+        {
+            <b>if</b> (<a href="#2bbd80d5ac451320" class="i property">DisableFormatTableUpdates</a>)
+            {
+                <b>return</b>;
+            }
+ 
+            <b>if</b> (<a href="#64cb024538567903" class="i field">isShared</a>)
+            {
+                <b>throw</b> <a href="../../../P/6de812d1f374e1ae.html#6de812d1f374e1ae" class="t t">PSTraceSource</a>.<span class="i">NewInvalidOperationException</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">SharedFormatTableCannotBeUpdated</span>);
+            }
+ 
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r34 rd" class="r34 r">expressionFactory</span> = <b>new</b> <span class="t">PSPropertyExpressionFactory</span>();
+            <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r35 rd" class="r35 r">logEntries</span> = <b>null</b>;
+            <a href="#5e35b2103e8c999c" class="i method">LoadFromFile</a>(<span class="r30 r">mshsnapins</span>, <span class="r34 r">expressionFactory</span>, <b>false</b>, <span class="r31 r">authorizationManager</span>, <span class="r32 r">host</span>, <span class="r33 r">preValidated</span>, <b>out</b> <span class="r35 r">logEntries</span>);
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Load the database</span>
+        <span class="c">///</span><span class="c"> NOTE: need to be protected by lock since not thread safe per se.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r36 r">files</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">*.formal.xml files to be loaded.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r37 r">expressionFactory</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Expression factory to validate script blocks.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r38 r">acceptLoadingErrors</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, load the database even if there are loading errors.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">authorizationManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Authorization manager to perform signature checks before reading ps1xml files (or null of no checks are needed)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r40 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host passed to </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r39 r">authorizationManager</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.  Can be null if no interactive questions should be asked.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r41 r">preValidated</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the format data has been pre-validated (build time, manual testing, etc) so that validation can be</span>
+        <span class="c">///</span><span class="c"> skipped at runtime.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r42 r">logEntries</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Trace and error logs from loading the format Xml files.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if we had a successful load.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal bool</b> <a id="5e35b2103e8c999c" href="../../../R/5e35b2103e8c999c.html" target="n" data-glyph="74,1" class="i method">LoadFromFile</a>(
+            <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt; <span id="r36 rd" class="r36 r">files</span>,
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r37 rd" class="r37 r">expressionFactory</span>,
+            <b>bool</b> <span id="r38 rd" class="r38 r">acceptLoadingErrors</span>,
+            <a href="../../../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a> <span id="r39 rd" class="r39 r">authorizationManager</span>,
+            <a href="../../../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r40 rd" class="r40 r">host</span>,
+            <b>bool</b> <span id="r41 rd" class="r41 r">preValidated</span>,
+            <b>out</b> <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r42 rd" class="r42 r">logEntries</span>)
+        {
+            <b>bool</b> <span id="r43 rd" class="r43 r">success</span>;
+            <b>try</b>
+            {
+                <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r44 rd" class="r44 r">newDataBase</span> = <b>null</b>;
+                <b>lock</b> (<a href="#06859fde7d6bdab8" class="i field">updateDatabaseLock</a>)
+                {
+                    <span class="r44 r">newDataBase</span> = <a href="#ae9f5506dba92263" class="i method">LoadFromFileHelper</a>(<span class="r36 r">files</span>, <span class="r37 r">expressionFactory</span>, <span class="r39 r">authorizationManager</span>, <span class="r40 r">host</span>, <span class="r41 r">preValidated</span>, <b>out</b> <span class="r42 r">logEntries</span>, <b>out</b> <span class="r43 r">success</span>);
+                }
+                <span class="c">// if we have a valid database, assign it to the</span>
+                <span class="c">// current database</span>
+                <b>lock</b> (<a href="#989240fbe25262d1" class="i field">databaseLock</a>)
+                {
+                    <b>if</b> (<span class="r38 r">acceptLoadingErrors</span> || <span class="r43 r">success</span>)
+                        <a href="#881f8148885d5e8f" class="i property">Database</a> = <span class="r44 r">newDataBase</span>;
+                }
+            }
+            <b>finally</b>
+            {
+                <span class="c">// if, for any reason, we failed the load, we initialize the</span>
+                <span class="c">// data base to an empty instance</span>
+                <b>lock</b> (<a href="#989240fbe25262d1" class="i field">databaseLock</a>)
+                {
+                    <b>if</b> (<a href="#881f8148885d5e8f" class="i property">Database</a> == <b>null</b>)
+                    {
+                        <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r45 rd" class="r45 r">tempDataBase</span> = <b>new</b> <span class="t">TypeInfoDataBase</span>();
+                        <a href="#56317ea860f69378" class="i method">AddPreLoadIntrinsics</a>(<span class="r45 r">tempDataBase</span>);
+                        <a href="#e6ea351df5b2f2d0" class="i method">AddPostLoadIntrinsics</a>(<span class="r45 r">tempDataBase</span>);
+                        <a href="#881f8148885d5e8f" class="i property">Database</a> = <span class="r45 r">tempDataBase</span>;
+                    }
+                }
+            }
+ 
+            <b>return</b> <span class="r43 r">success</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> It loads a database from file(s).</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r46 r">files</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">*.formal.xml files to be loaded.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r47 r">expressionFactory</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Expression factory to validate script blocks.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">authorizationManager</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Authorization manager to perform signature checks before reading ps1xml files (or null of no checks are needed)</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r49 r">host</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Host passed to </span><span class="c">&lt;</span><span class="c">paramref</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r48 r">authorizationManager</span><span class="c">&quot;</span><span class="c">/&gt;</span><span class="c">.  Can be null if no interactive questions should be asked.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r50 r">preValidated</span><span class="c">&quot;</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> True if the format data has been pre-validated (build time, manual testing, etc) so that validation can be</span>
+        <span class="c">///</span><span class="c"> skipped at runtime.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r51 r">logEntries</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">List of logger entries (errors, etc.) to return to the caller.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r52 r">success</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">True if no error occurred.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">A database instance loaded from file(s).</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>private static</b> <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <a id="ae9f5506dba92263" href="../../../R/ae9f5506dba92263.html" target="n" data-glyph="76,1" class="i method">LoadFromFileHelper</a>(
+            <span class="i">Collection</span>&lt;<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a>&gt; <span id="r46 rd" class="r46 r">files</span>,
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r47 rd" class="r47 r">expressionFactory</span>,
+            <a href="../../../engine/SecurityManagerBase.cs.html#971c00f0dacd0dc9" class="t t">AuthorizationManager</a> <span id="r48 rd" class="r48 r">authorizationManager</span>,
+            <a href="../../../engine/hostifaces/MshHost.cs.html#7b79cd90e035740e" class="t t">PSHost</a> <span id="r49 rd" class="r49 r">host</span>,
+            <b>bool</b> <span id="r50 rd" class="r50 r">preValidated</span>,
+            <b>out</b> <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r51 rd" class="r51 r">logEntries</span>,
+            <b>out bool</b> <span id="r52 rd" class="r52 r">success</span>)
+        {
+            <span class="r52 r">success</span> = <b>true</b>;
+            <span class="c">// Holds the aggregated log entries for all files...</span>
+            <span class="r51 r">logEntries</span> = <b>new</b> <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt;();
+ 
+            <span class="c">// fresh instance of the database</span>
+            <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r53 rd" class="r53 r">db</span> = <b>new</b> <span class="t">TypeInfoDataBase</span>();
+ 
+            <span class="c">// prepopulate the database with any necessary overriding data</span>
+            <a href="#56317ea860f69378" class="i method">AddPreLoadIntrinsics</a>(<span class="r53 r">db</span>);
+ 
+            <b>var</b> <span id="r54 rd" class="r54 r">etwEnabled</span> = <a href="../../../engine/InitialSessionState.cs.html#81385ea1ee2efc81" class="t t">RunspaceEventSource</a>.<a href="../../../engine/InitialSessionState.cs.html#d10c972f303cf36c" class="i field">Log</a>.<span class="i">IsEnabled</span>();
+ 
+            <span class="c">// load the XML document into a copy of the</span>
+            <span class="c">// in memory database</span>
+            <b>foreach</b> (<a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r55 rd" class="r55 r">file</span> <b>in</b> <span class="r46 r">files</span>)
+            {
+                <span class="c">// Loads formatting data from ExtendedTypeDefinition instance</span>
+                <b>if</b> (<span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#0084e54bbe73068b" class="i property">FormatData</a> != <b>null</b>)
+                {
+                    <a href="#9b4790ee6ae93dd0" class="i method">LoadFormatDataHelper</a>(<span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#0084e54bbe73068b" class="i property">FormatData</a>, <span class="r47 r">expressionFactory</span>, <span class="r51 r">logEntries</span>, <b>ref</b> <span class="r52 r">success</span>, <span class="r55 r">file</span>, <span class="r53 r">db</span>, <span class="r56 r">isBuiltInFormatData</span>: <b>false</b>, <span class="r57 r">isForHelp</span>: <b>false</b>);
+                    <b>continue</b>;
+                }
+ 
+                <b>if</b> (<span class="r54 r">etwEnabled</span>) <a href="../../../engine/InitialSessionState.cs.html#81385ea1ee2efc81" class="t t">RunspaceEventSource</a>.<a href="../../../engine/InitialSessionState.cs.html#d10c972f303cf36c" class="i field">Log</a>.<a href="../../../engine/InitialSessionState.cs.html#ddc299e896353954" class="i method">ProcessFormatFileStart</a>(<span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#00c51a2f7a49e2a2" class="i property">FullPath</a>);
+ 
+                <b>if</b> (!<a href="#cba5e2fe207a2944" class="i method">ProcessBuiltin</a>(<span class="r55 r">file</span>, <span class="r53 r">db</span>, <span class="r47 r">expressionFactory</span>, <span class="r51 r">logEntries</span>, <b>ref</b> <span class="r52 r">success</span>))
+                {
+                    <span class="c">// Loads formatting data from formatting data XML file</span>
+                    <a href="typeDataXmlLoader.cs.html#0bb68492e78001d6" class="t t">XmlFileLoadInfo</a> <span id="r58 rd" class="r58 r">info</span> =
+                        <b>new</b> <span class="t">XmlFileLoadInfo</span>(<span class="i">Path</span>.<span class="i">GetPathRoot</span>(<span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#00c51a2f7a49e2a2" class="i property">FullPath</a>), <span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#00c51a2f7a49e2a2" class="i property">FullPath</a>, <span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#d82bf3db07160a39" class="i property">Errors</a>, <span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#a8258c5d10b7247b" class="i property">PSSnapinName</a>);
+                    <b>using</b> (<a href="../../../P/f7750b48b6924c50.html#f7750b48b6924c50" class="t t">TypeInfoDataBaseLoader</a> <span id="r59 rd" class="r59 r">loader</span> = <b>new</b> <span class="t">TypeInfoDataBaseLoader</span>())
+                    {
+                        <b>if</b> (!<span class="r59 r">loader</span>.<a href="typeDataXmlLoader.cs.html#cd24475f96b06f9e" class="i method">LoadXmlFile</a>(<span class="r58 r">info</span>, <span class="r53 r">db</span>, <span class="r47 r">expressionFactory</span>, <span class="r48 r">authorizationManager</span>, <span class="r49 r">host</span>, <span class="r50 r">preValidated</span>))
+                            <span class="r52 r">success</span> = <b>false</b>;
+ 
+                        <b>foreach</b> (<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r60 rd" class="r60 r">entry</span> <b>in</b> <span class="r59 r">loader</span>.<a href="XmlLoaderBase.cs.html#ec47aedf3e4c5dac" class="i property">LogEntries</a>)
+                        {
+                            <span class="c">// filter in only errors from the current file...</span>
+                            <b>if</b> (<span class="r60 r">entry</span>.<a href="XmlLoaderBase.cs.html#a698d581d1640212" class="i field">entryType</a> == <a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="XmlLoaderBase.cs.html#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="XmlLoaderBase.cs.html#eb8f7dac699c0dc4" class="i field">Error</a>)
+                            {
+                                <b>string</b> <span id="r61 rd" class="r61 r">mshsnapinMessage</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">MshSnapinQualifiedError</span>, <span class="r58 r">info</span>.<a href="typeDataXmlLoader.cs.html#88bd8dcc97f71ef7" class="i field">psSnapinName</a>, <span class="r60 r">entry</span>.<a href="XmlLoaderBase.cs.html#aab62db094c5bdb9" class="i field">message</a>);
+                                <span class="r58 r">info</span>.<a href="typeDataXmlLoader.cs.html#8ba29eb99d8c40da" class="i field">errors</a>.<span class="i">Add</span>(<span class="r61 r">mshsnapinMessage</span>);
+                                <b>if</b> (<span class="r60 r">entry</span>.<a href="XmlLoaderBase.cs.html#f4fb4247ba713623" class="i field">failToLoadFile</a>) { <span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#4142733dc17545c1" class="i field">FailToLoadFile</a> = <b>true</b>; }
+                            }
+                        }
+                        <span class="c">// now aggregate the entries...</span>
+                        <span class="r51 r">logEntries</span>.<span class="i">AddRange</span>(<span class="r59 r">loader</span>.<a href="XmlLoaderBase.cs.html#ec47aedf3e4c5dac" class="i property">LogEntries</a>);
+                    }
+                }
+ 
+                <b>if</b> (<span class="r54 r">etwEnabled</span>) <a href="../../../engine/InitialSessionState.cs.html#81385ea1ee2efc81" class="t t">RunspaceEventSource</a>.<a href="../../../engine/InitialSessionState.cs.html#d10c972f303cf36c" class="i field">Log</a>.<a href="../../../engine/InitialSessionState.cs.html#1341ee6f0d9e42eb" class="i method">ProcessFormatFileStop</a>(<span class="r55 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#00c51a2f7a49e2a2" class="i property">FullPath</a>);
+            }
+ 
+            <span class="c">// add any sensible defaults to the database</span>
+            <a href="#e6ea351df5b2f2d0" class="i method">AddPostLoadIntrinsics</a>(<span class="r53 r">db</span>);
+ 
+            <b>return</b> <span class="r53 r">db</span>;
+        }
+ 
+        <b>private static void</b> <a id="9b4790ee6ae93dd0" href="../../../R/9b4790ee6ae93dd0.html" target="n" data-glyph="76,1" class="i method">LoadFormatDataHelper</a>(
+            <a href="displayDescriptionData.cs.html#f507ec3cc270989a" class="t t">ExtendedTypeDefinition</a> <span id="r62 rd" class="r62 r">formatData</span>,
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r63 rd" class="r63 r">expressionFactory</span>, <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r64 rd" class="r64 r">logEntries</span>, <b>ref bool</b> <span id="r65 rd" class="r65 r">success</span>,
+            <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r66 rd" class="r66 r">file</span>, <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r67 rd" class="r67 r">db</span>,
+            <b>bool</b> <span id="r56 rd" class="r56 r">isBuiltInFormatData</span>,
+            <b>bool</b> <span id="r57 rd" class="r57 r">isForHelp</span>)
+        {
+            <b>using</b> (<a href="../../../P/f7750b48b6924c50.html#f7750b48b6924c50" class="t t">TypeInfoDataBaseLoader</a> <span id="r68 rd" class="r68 r">loader</span> = <b>new</b> <span class="t">TypeInfoDataBaseLoader</span>())
+            {
+                <b>if</b> (!<span class="r68 r">loader</span>.<a href="typeDataXmlLoader.cs.html#16db4737db1a1a7b" class="i method">LoadFormattingData</a>(<span class="r62 r">formatData</span>, <span class="r67 r">db</span>, <span class="r63 r">expressionFactory</span>, <span class="r56 r">isBuiltInFormatData</span>, <span class="r57 r">isForHelp</span>))
+                    <span class="r65 r">success</span> = <b>false</b>;
+ 
+                <b>foreach</b> (<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a> <span id="r69 rd" class="r69 r">entry</span> <b>in</b> <span class="r68 r">loader</span>.<a href="XmlLoaderBase.cs.html#ec47aedf3e4c5dac" class="i property">LogEntries</a>)
+                {
+                    <span class="c">// filter in only errors from the current file...</span>
+                    <b>if</b> (<span class="r69 r">entry</span>.<a href="XmlLoaderBase.cs.html#a698d581d1640212" class="i field">entryType</a> == <a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>.<a href="XmlLoaderBase.cs.html#25cd0a7e885007c6" class="t t">EntryType</a>.<a href="XmlLoaderBase.cs.html#eb8f7dac699c0dc4" class="i field">Error</a>)
+                    {
+                        <b>string</b> <span id="r70 rd" class="r70 r">mshsnapinMessage</span> = <a href="../../../utils/StringUtil.cs.html#9499fba345e707ac" class="t t">StringUtil</a>.<span class="i">Format</span>(<span class="i">FormatAndOutXmlLoadingStrings</span>.<span class="i">MshSnapinQualifiedError</span>,
+                            <span class="r66 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#a8258c5d10b7247b" class="i property">PSSnapinName</a>, <span class="r69 r">entry</span>.<a href="XmlLoaderBase.cs.html#aab62db094c5bdb9" class="i field">message</a>);
+                        <span class="r66 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#d82bf3db07160a39" class="i property">Errors</a>.<span class="i">Add</span>(<span class="r70 r">mshsnapinMessage</span>);
+                    }
+                }
+                <span class="c">// now aggregate the entries...</span>
+                <span class="r64 r">logEntries</span>.<span class="i">AddRange</span>(<span class="r68 r">loader</span>.<a href="XmlLoaderBase.cs.html#ec47aedf3e4c5dac" class="i property">LogEntries</a>);
+            }
+        }
+ 
+        <b>private delegate</b> <span class="i">IEnumerable</span>&lt;<a href="displayDescriptionData.cs.html#f507ec3cc270989a" class="t t">ExtendedTypeDefinition</a>&gt; <a id="405eb97b76477c72" href="../../../R/405eb97b76477c72.html" target="n" data-glyph="16,1" class="t t"><span id="a95921f494112f3b">TypeGenerator</span></a>();
+ 
+        <b>private static</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Tuple</span>&lt;<b>bool</b>, <a href="#405eb97b76477c72" class="t t">TypeGenerator</a>&gt;&gt; <a id="5d8d6a2bd14c689a" href="../../../R/5d8d6a2bd14c689a.html" target="n" data-glyph="46,1" class="i field">s_builtinGenerators</a>;
+ 
+        <b>private static</b> <span class="i">Tuple</span>&lt;<b>bool</b>, <a href="#405eb97b76477c72" class="t t">TypeGenerator</a>&gt; <a id="1a3a632f66459292" href="../../../R/1a3a632f66459292.html" target="n" data-glyph="76,1" class="i method">GetBuiltin</a>(<b>bool</b> <span id="r71 rd" class="r71 r">isForHelp</span>, <a href="#405eb97b76477c72" class="t t">TypeGenerator</a> <span id="r72 rd" class="r72 r">generator</span>)
+        {
+            <b>return</b> <b>new</b> <span class="i">Tuple</span>&lt;<b>bool</b>, <a href="#405eb97b76477c72" class="t t">TypeGenerator</a>&gt;(<span class="r71 r">isForHelp</span>, <span class="r72 r">generator</span>);
+        }
+ 
+        <b>private static bool</b> <a id="cba5e2fe207a2944" href="../../../R/cba5e2fe207a2944.html" target="n" data-glyph="76,1" class="i method">ProcessBuiltin</a>(
+            <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r73 rd" class="r73 r">file</span>,
+            <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r74 rd" class="r74 r">db</span>,
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r75 rd" class="r75 r">expressionFactory</span>,
+            <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r76 rd" class="r76 r">logEntries</span>,
+            <b>ref bool</b> <span id="r77 rd" class="r77 r">success</span>)
+        {
+            <b>if</b> (<a href="#5d8d6a2bd14c689a" class="i field">s_builtinGenerators</a> == <b>null</b>)
+            {
+                <b>var</b> <span id="r78 rd" class="r78 r">builtInGenerators</span> = <b>new</b> <span class="i">Dictionary</span>&lt;<b>string</b>, <span class="i">Tuple</span>&lt;<b>bool</b>, <a href="#405eb97b76477c72" class="t t">TypeGenerator</a>&gt;&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+                <b>var</b> <span id="r79 rd" class="r79 r">psHome</span> = <a href="../../../engine/Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../../../engine/Utils.cs.html#c677cc800603f8f5" class="i property">DefaultPowerShellAppBase</a>;
+ 
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;Certificate.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/Certificate_format_ps1xml.cs.html#77850d8e9e93a701" class="t t">Certificate_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/Certificate_format_ps1xml.cs.html#9ea88f1876f76977" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;Diagnostics.Format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/Diagnostics_Format_ps1xml.cs.html#829e238dc3292cdd" class="t t">Diagnostics_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/Diagnostics_Format_ps1xml.cs.html#af3e276c94116faa" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;DotNetTypes.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/DotNetTypes_format_ps1xml.cs.html#b8acf674e3e590ad" class="t t">DotNetTypes_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/DotNetTypes_format_ps1xml.cs.html#1883daace235da1d" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;Event.Format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/Event_Format_ps1xml.cs.html#b71b91658b5be8da" class="t t">Event_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/Event_Format_ps1xml.cs.html#c3faf05f4ab10226" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;FileSystem.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/FileSystem_format_ps1xml.cs.html#a058d7a43a9134e5" class="t t">FileSystem_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/FileSystem_format_ps1xml.cs.html#aaf8a7f9ac7a4f7d" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;Help.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>true</b>, <a href="../../DefaultFormatters/Help_format_ps1xml.cs.html#445d83be3ff09761" class="t t">Help_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/Help_format_ps1xml.cs.html#cf39a7fb11ec89bc" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;HelpV3.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>true</b>, <a href="../../DefaultFormatters/HelpV3_format_ps1xml.cs.html#6f312525cd82e661" class="t t">HelpV3_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/HelpV3_format_ps1xml.cs.html#fd47e3aa5a9bf5f3" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;PowerShellCore.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/PowerShellCore_format_ps1xml.cs.html#d7397ed1fbaec9de" class="t t">PowerShellCore_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/PowerShellCore_format_ps1xml.cs.html#27bbf2e2362f1609" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;PowerShellTrace.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/PowerShellTrace_format_ps1xml.cs.html#5ec27198a2dd69e3" class="t t">PowerShellTrace_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/PowerShellTrace_format_ps1xml.cs.html#f6b871febdc4f3ef" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;Registry.format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/Registry_format_ps1xml.cs.html#def793b6999a9405" class="t t">Registry_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/Registry_format_ps1xml.cs.html#1c839092845c8b1c" class="i method">GetFormatData</a>));
+                <span class="r78 r">builtInGenerators</span>.<span class="i">Add</span>(<span class="i">Path</span>.<span class="i">Combine</span>(<span class="r79 r">psHome</span>, <span class="s">&quot;WSMan.Format.ps1xml&quot;</span>), <a href="#1a3a632f66459292" class="i method">GetBuiltin</a>(<b>false</b>, <a href="../../DefaultFormatters/WSMan_Format_ps1xml.cs.html#3097178de98551f2" class="t t">WSMan_Format_Ps1Xml</a>.<a href="../../DefaultFormatters/WSMan_Format_ps1xml.cs.html#57f10a7d315e273c" class="i method">GetFormatData</a>));
+ 
+                <span class="i">Interlocked</span>.<span class="i">CompareExchange</span>(<b>ref</b> <a href="#5d8d6a2bd14c689a" class="i field">s_builtinGenerators</a>, <span class="r78 r">builtInGenerators</span>, <b>null</b>);
+            }
+ 
+            <span class="i">Tuple</span>&lt;<b>bool</b>, <a href="#405eb97b76477c72" class="t t">TypeGenerator</a>&gt; <span id="r80 rd" class="r80 r">generator</span>;
+            <b>if</b> (!<a href="#5d8d6a2bd14c689a" class="i field">s_builtinGenerators</a>.<span class="i">TryGetValue</span>(<span class="r73 r">file</span>.<a href="../../../utils/FormatAndTypeDataHelper.cs.html#00c51a2f7a49e2a2" class="i property">FullPath</a>, <b>out</b> <span class="r80 r">generator</span>))
+                <b>return</b> <b>false</b>;
+ 
+            <span class="i">ProcessBuiltinFormatViewDefinitions</span>(<span class="r80 r">generator</span>.<span class="i">Item2</span>(), <span class="r74 r">db</span>, <span class="r75 r">expressionFactory</span>, <span class="r73 r">file</span>, <span class="r76 r">logEntries</span>, <span class="r80 r">generator</span>.<span class="i">Item1</span>, <b>ref</b> <span class="r77 r">success</span>);
+            <b>return</b> <b>true</b>;
+        }
+ 
+        <b>private static void</b> <a id="adb7700bea14502d" href="../../../R/../../0000000000.html" target="n" data-glyph="76,1" class="i method">ProcessBuiltinFormatViewDefinitions</a>(
+            <span class="i">IEnumerable</span>&lt;<a href="displayDescriptionData.cs.html#f507ec3cc270989a" class="t t">ExtendedTypeDefinition</a>&gt; <span id="r81 rd" class="r81 r">views</span>,
+            <a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r82 rd" class="r82 r">db</span>,
+            <a href="../Utilities/MshObjectUtil.cs.html#ac8b562fd83d9f0f" class="t t">PSPropertyExpressionFactory</a> <span id="r83 rd" class="r83 r">expressionFactory</span>,
+            <a href="../../../utils/FormatAndTypeDataHelper.cs.html#9a5294f32203c826" class="t t">PSSnapInTypeAndFormatErrors</a> <span id="r84 rd" class="r84 r">file</span>,
+            <span class="i">List</span>&lt;<a href="XmlLoaderBase.cs.html#151af4b4c347cb35" class="t t">XmlLoaderLoggerEntry</a>&gt; <span id="r85 rd" class="r85 r">logEntries</span>,
+            <b>bool</b> <span id="r86 rd" class="r86 r">isForHelp</span>,
+            <b>ref bool</b> <span id="r87 rd" class="r87 r">success</span>)
+        {
+            <b>foreach</b> (<b>var</b> <span id="r88 rd" class="r88 r">v</span> <b>in</b> <span class="r81 r">views</span>)
+            {
+                <span class="i">LoadFormatDataHelper</span>(<span class="r88 r">v</span>, <span class="r83 r">expressionFactory</span>, <span class="r85 r">logEntries</span>, <b>ref</b> <span class="r87 r">success</span>, <span class="r84 r">file</span>, <span class="r82 r">db</span>, <span class="i">isBuiltInFormatData</span>: <b>true</b>, <span class="i">isForHelp</span>: <span class="r86 r">isForHelp</span>);
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper to add any pre-load intrinsics to the db.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r89 r">db</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Db being initialized.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="56317ea860f69378" href="../../../R/56317ea860f69378.html" target="n" data-glyph="76,1" class="i method">AddPreLoadIntrinsics</a>(<a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r89 rd" class="r89 r">db</span>)
+        {
+            <span class="c">// NOTE: nothing to add for the time being. Add here if needed.</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Helper to add any post-load intrinsics to the db.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r90 r">db</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Db being initialized.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <b>private static void</b> <a id="e6ea351df5b2f2d0" href="../../../R/e6ea351df5b2f2d0.html" target="n" data-glyph="76,1" class="i method">AddPostLoadIntrinsics</a>(<a href="../../../P/e64c182db20ea05c.html#e64c182db20ea05c" class="t t">TypeInfoDataBase</a> <span id="r90 rd" class="r90 r">db</span>)
+        {
+            <span class="c">// add entry for the output of update-formatdata</span>
+            <span class="c">// we want to be able to display this as a list, unless overridden</span>
+            <span class="c">// by an entry loaded from file</span>
+            <a href="displayDescriptionData.cs.html#cbbf0b9c534183ac" class="t t">FormatShapeSelectionOnType</a> <span id="r91 rd" class="r91 r">sel</span> = <b>new</b> <span class="t">FormatShapeSelectionOnType</span>();
+            <span class="r91 r">sel</span>.<a href="displayDescriptionData.cs.html#d344111832eb2048" class="i field">appliesTo</a> = <b>new</b> <span class="t">AppliesTo</span>();
+            <span class="r91 r">sel</span>.<a href="displayDescriptionData.cs.html#d344111832eb2048" class="i field">appliesTo</a>.<a href="displayDescriptionDataMethods.cs.html#9493056a8bb47035" class="i method">AddAppliesToType</a>(<span class="s">&quot;Microsoft.PowerShell.Commands.FormatDataLoadingInfo&quot;</span>);
+            <span class="r91 r">sel</span>.<a href="displayDescriptionData.cs.html#4f9aebf3ad93ce78" class="i field">formatShape</a> = <a href="displayDescriptionData.cs.html#04ea493f07f17b0e" class="t t">FormatShape</a>.<a href="displayDescriptionData.cs.html#2b03b9d9f0f6e343" class="i field">List</a>;
+ 
+            <span class="r90 r">db</span>.<a href="displayDescriptionData.cs.html#5d5797f04122ce29" class="i field">defaultSettingsSection</a>.<a href="displayDescriptionData.cs.html#ca1c6165e6b3b47a" class="i field">shapeSelectionDirectives</a>.<a href="displayDescriptionData.cs.html#93c2b3d6334f6ddc" class="i field">formatShapeSelectionOnTypeList</a>.<span class="i">Add</span>(<span class="r91 r">sel</span>);
+        }
+    }
+}
+</pre></td></tr></table></div></body></html>

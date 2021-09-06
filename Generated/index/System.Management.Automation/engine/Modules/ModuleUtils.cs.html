@@ -1,0 +1,625 @@
+﻿<!DOCTYPE html>
+<html><head><title>ModuleUtils.cs</title><link rel="stylesheet" href="../../../styles.css"><script src="../../../scripts.js"></script></head>
+<body class="cB" onload="i(616);"><div class="dH">
+<table style="width: 100%">
+<tr><td>File: <a id="filePath" class="blueLink" href="/#System.Management.Automation/engine/Modules/ModuleUtils.cs" target="_top">engine\Modules\ModuleUtils.cs</a><br/></td><td></td></tr>
+<tr><td>Project: <a id="projectPath" class="blueLink" href="/#System.Management.Automation" target="_top">src\System.Management.Automation\System.Management.Automation.csproj</a> (System.Management.Automation)</td></tr>
+</table>
+</div>
+<div class="cz"><table class="tb" cellpadding="0" cellspacing="0"><tr><td valign="top" align="right"><pre id="ln"></pre></td><td valign="top" align="left"><pre id="code">
+<span class="c">// Copyright (c) Microsoft Corporation.</span>
+<span class="c">// Licensed under the MIT License.</span>
+ 
+<b>using</b> <span class="i n">System</span>.<span class="i">Collections</span>.<span class="i">Generic</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Globalization</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">IO</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Runspaces</span>;
+<b>using</b> <span class="i n">System</span>.<span class="i">Text</span>;
+ 
+<b>using</b> <span class="t">Dbg</span> = <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Diagnostics</a>;
+ 
+<b>namespace</b> <span class="i n">System</span>.<span class="i n">Management</span>.<span class="i n">Automation</span>.<span class="i n">Internal</span>
+{
+    <b>internal static class</b> <a id="623e3612c4173093" href="../../R/623e3612c4173093.html" target="n" data-glyph="2,0" class="t t">ModuleUtils</a>
+    {
+        <span class="c">// Default option for local file system enumeration:</span>
+        <span class="c">//  - Ignore files/directories when access is denied;</span>
+        <span class="c">//  - Search top directory only.</span>
+        <b>private static readonly</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">EnumerationOptions</span> <a id="3c1726fb5f301f26" href="../../R/3c1726fb5f301f26.html" target="n" data-glyph="46,1" class="i field">s_defaultEnumerationOptions</a> =
+                                        <b>new</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">EnumerationOptions</span>() { <span class="i">AttributesToSkip</span> = <span class="i">FileAttributes</span>.<span class="i">Hidden</span> };
+ 
+        <span class="c">// Default option for UNC path enumeration. Same as above plus a large buffer size.</span>
+        <span class="c">// For network shares, a large buffer may result in better performance as more results can be batched over the wire.</span>
+        <span class="c">// The buffer size 16K is recommended in the comment of the &#39;BufferSize&#39; property:</span>
+        <span class="c">//    &quot;A &quot;large&quot; buffer, for example, would be 16K. Typical is 4K.&quot;</span>
+        <b>private static readonly</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">EnumerationOptions</span> <a id="acc2d0443629547c" href="../../R/acc2d0443629547c.html" target="n" data-glyph="46,1" class="i field">s_uncPathEnumerationOptions</a> =
+                                        <b>new</b> <span class="i n">System</span>.<span class="i">IO</span>.<span class="i">EnumerationOptions</span>() { <span class="i">AttributesToSkip</span> = <span class="i">FileAttributes</span>.<span class="i">Hidden</span>, <span class="i">BufferSize</span> = 16384 };
+ 
+        <b>private static readonly string</b> <a id="a7f5e9c34898a625" href="../../R/a7f5e9c34898a625.html" target="n" data-glyph="46,1" class="i field">EnCulturePath</a> = <span class="i">Path</span>.<span class="i">DirectorySeparatorChar</span> + <span class="s">&quot;en&quot;</span>;
+        <b>private static readonly string</b> <a id="906f5dc9264935f9" href="../../R/906f5dc9264935f9.html" target="n" data-glyph="46,1" class="i field">EnUsCulturePath</a> = <span class="i">Path</span>.<span class="i">DirectorySeparatorChar</span> + <span class="s">&quot;en-us&quot;</span>;
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check if a directory is likely a localized resources folder.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r0 r">dir</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Directory to check if it is a possible resource folder.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if the directory name matches a culture.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="5f4895f67ae80b61" href="../../R/5f4895f67ae80b61.html" target="n" data-glyph="74,1" class="i method">IsPossibleResourceDirectory</a>(<b>string</b> <span id="r0 rd" class="r0 r">dir</span>)
+        {
+            <span class="c">// Assume locale directories do not contain modules.</span>
+            <b>if</b> (<span class="r0 r">dir</span>.<span class="i">EndsWith</span>(<a href="#a7f5e9c34898a625" class="i field">EnCulturePath</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                <span class="r0 r">dir</span>.<span class="i">EndsWith</span>(<a href="#906f5dc9264935f9" class="i field">EnUsCulturePath</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <span class="r0 r">dir</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r0 r">dir</span>);
+ 
+            <span class="c">// Use some simple pattern matching to avoid the call into GetCultureInfo when we know it will fail (and throw).</span>
+            <b>if</b> ((<span class="r0 r">dir</span>.<span class="i">Length</span> == 2 &amp;&amp; <b>char</b>.<span class="i">IsLetter</span>(<span class="r0 r">dir</span>[0]) &amp;&amp; <b>char</b>.<span class="i">IsLetter</span>(<span class="r0 r">dir</span>[1]))
+                ||
+                (<span class="r0 r">dir</span>.<span class="i">Length</span> == 5 &amp;&amp; <b>char</b>.<span class="i">IsLetter</span>(<span class="r0 r">dir</span>[0]) &amp;&amp; <b>char</b>.<span class="i">IsLetter</span>(<span class="r0 r">dir</span>[1]) &amp;&amp; (<span class="r0 r">dir</span>[2] == <span class="s">&#39;-&#39;</span>) &amp;&amp; <b>char</b>.<span class="i">IsLetter</span>(<span class="r0 r">dir</span>[3]) &amp;&amp; <b>char</b>.<span class="i">IsLetter</span>(<span class="r0 r">dir</span>[4])))
+            {
+                <b>try</b>
+                {
+                    <span class="c">// This might not throw on invalid culture still</span>
+                    <span class="c">// 4096 is considered the unknown locale - so assume that could be a module</span>
+                    <b>var</b> <span id="r1 rd" class="r1 r">cultureInfo</span> = <b>new</b> <span class="i">CultureInfo</span>(<span class="r0 r">dir</span>);
+                    <b>return</b> <span class="r1 r">cultureInfo</span>.<span class="i">LCID</span> != 4096;
+                }
+                <b>catch</b> { }
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get all module files by searching the given directory recursively.</span>
+        <span class="c">///</span><span class="c"> All sub-directories that could be a module folder will be searched.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="a6d87fc7b9a33572" href="../../R/a6d87fc7b9a33572.html" target="n" data-glyph="74,1" class="i method">GetAllAvailableModuleFiles</a>(<b>string</b> <span id="r2 rd" class="r2 r">topDirectoryToCheck</span>)
+        {
+            <b>if</b> (!<span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r2 r">topDirectoryToCheck</span>)) { <b>yield</b> <b>break</b>; }
+ 
+            <b>var</b> <span id="r3 rd" class="r3 r">options</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#035be1ae91f35c16" class="i method">PathIsUnc</a>(<span class="r2 r">topDirectoryToCheck</span>) ? <a href="#acc2d0443629547c" class="i field">s_uncPathEnumerationOptions</a> : <a href="#3c1726fb5f301f26" class="i field">s_defaultEnumerationOptions</a>;
+            <span class="i">Queue</span>&lt;<b>string</b>&gt; <span id="r4 rd" class="r4 r">directoriesToCheck</span> = <b>new</b> <span class="i">Queue</span>&lt;<b>string</b>&gt;();
+            <span class="r4 r">directoriesToCheck</span>.<span class="i">Enqueue</span>(<span class="r2 r">topDirectoryToCheck</span>);
+ 
+            <b>bool</b> <span id="r5 rd" class="r5 r">firstSubDirs</span> = <b>true</b>;
+            <b>while</b> (<span class="r4 r">directoriesToCheck</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <b>string</b> <span id="r6 rd" class="r6 r">directoryToCheck</span> = <span class="r4 r">directoriesToCheck</span>.<span class="i">Dequeue</span>();
+                <b>try</b>
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r7 rd" class="r7 r">toAdd</span> <b>in</b> <span class="i">Directory</span>.<span class="i">EnumerateDirectories</span>(<span class="r6 r">directoryToCheck</span>, <span class="s">&quot;*&quot;</span>, <span class="r3 r">options</span>))
+                    {
+                        <b>if</b> (<span class="r5 r">firstSubDirs</span> || !<a href="#5f4895f67ae80b61" class="i method">IsPossibleResourceDirectory</a>(<span class="r7 r">toAdd</span>))
+                        {
+                            <span class="r4 r">directoriesToCheck</span>.<span class="i">Enqueue</span>(<span class="r7 r">toAdd</span>);
+                        }
+                    }
+                }
+                <b>catch</b> (<span class="i">IOException</span>) { }
+                <b>catch</b> (<span class="i">UnauthorizedAccessException</span>) { }
+ 
+                <span class="r5 r">firstSubDirs</span> = <b>false</b>;
+                <b>foreach</b> (<b>string</b> <span id="r8 rd" class="r8 r">moduleFile</span> <b>in</b> <span class="i">Directory</span>.<span class="i">EnumerateFiles</span>(<span class="r6 r">directoryToCheck</span>, <span class="s">&quot;*&quot;</span>, <span class="r3 r">options</span>))
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r9 rd" class="r9 r">ext</span> <b>in</b> <a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#2f61be99d14256e7" class="i field">PSModuleExtensions</a>)
+                    {
+                        <b>if</b> (<span class="r8 r">moduleFile</span>.<span class="i">EndsWith</span>(<span class="r9 r">ext</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                        {
+                            <b>yield</b> <b>return</b> <span class="r8 r">moduleFile</span>;
+                            <b>break</b>; <span class="c">// one file can have only one extension</span>
+                        }
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Check if the CompatiblePSEditions field of a given module</span>
+        <span class="c">///</span><span class="c"> declares compatibility with the running PowerShell edition.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r10 r">moduleManifestPath</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The path to the module manifest being checked.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r11 r">compatiblePSEditions</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">The value of the CompatiblePSEditions field of the module manifest.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">True if the module is compatible with the running PowerShell edition, false otherwise.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static bool</b> <a id="7fd62a209e00d8b7" href="../../R/7fd62a209e00d8b7.html" target="n" data-glyph="74,1" class="i method">IsPSEditionCompatible</a>(
+            <b>string</b> <span id="r10 rd" class="r10 r">moduleManifestPath</span>,
+            <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r11 rd" class="r11 r">compatiblePSEditions</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            return true;
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+            <b>if</b> (!<a href="#623e3612c4173093" class="t t">ModuleUtils</a>.<a href="#aad3b46d193f5889" class="i method">IsOnSystem32ModulePath</a>(<span class="r10 r">moduleManifestPath</span>))
+            {
+                <b>return</b> <b>true</b>;
+            }
+ 
+            <b>return</b> <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#3e3c3de5e69bfa72" class="i method">IsPSEditionSupported</a>(<span class="r11 r">compatiblePSEditions</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <b>internal static</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="2c015e257649873c" href="../../R/2c015e257649873c.html" target="n" data-glyph="74,1" class="i method">GetDefaultAvailableModuleFiles</a>(<b>bool</b> <span id="r12 rd" class="r12 r">isForAutoDiscovery</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r13 rd" class="r13 r">context</span>)
+        {
+            <span class="i">HashSet</span>&lt;<b>string</b>&gt; <span id="r14 rd" class="r14 r">uniqueModuleFiles</span> = <b>new</b> <span class="i">HashSet</span>&lt;<b>string</b>&gt;(<span class="i">StringComparer</span>.<span class="i">OrdinalIgnoreCase</span>);
+ 
+            <b>foreach</b> (<b>string</b> <span id="r15 rd" class="r15 r">directory</span> <b>in</b> <a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#0f8fb60019d75e2c" class="i method">GetModulePath</a>(<span class="r12 r">isForAutoDiscovery</span>, <span class="r13 r">context</span>))
+            {
+                <b>var</b> <span id="r16 rd" class="r16 r">needWriteProgressCompleted</span> = <b>false</b>;
+                <a href="../ProgressRecord.cs.html#d79b27687c6ed8c8" class="t t">ProgressRecord</a> <span id="r17 rd" class="r17 r">analysisProgress</span> = <b>null</b>;
+ 
+                <span class="c">// Write a progress message for UNC paths, so that users know what is happening</span>
+                <b>try</b>
+                {
+                    <b>if</b> ((<span class="r13 r">context</span>.<a href="../ExecutionContext.cs.html#1146573afe2845c8" class="i property">CurrentCommandProcessor</a> != <b>null</b>) &amp;&amp; <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#035be1ae91f35c16" class="i method">PathIsUnc</a>(<span class="r15 r">directory</span>))
+                    {
+                        <span class="r17 r">analysisProgress</span> = <b>new</b> <span class="t">ProgressRecord</span>(0,
+                            <span class="i">Modules</span>.<span class="i">DeterminingAvailableModules</span>,
+                            <b>string</b>.<span class="i">Format</span>(<span class="i">CultureInfo</span>.<span class="i">InvariantCulture</span>, <span class="i">Modules</span>.<span class="i">SearchingUncShare</span>, <span class="r15 r">directory</span>))
+                        {
+                            <a href="../ProgressRecord.cs.html#b83bd20609cddaf5" class="i property">RecordType</a> = <a href="../ProgressRecord.cs.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="../ProgressRecord.cs.html#b02a1a2b864a452c" class="i field">Processing</a>
+                        };
+ 
+                        <span class="r13 r">context</span>.<a href="../ExecutionContext.cs.html#1146573afe2845c8" class="i property">CurrentCommandProcessor</a>.<a href="../CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="../MshCommandRuntime.cs.html#db4330254366f22c" class="i method">WriteProgress</a>(<span class="r17 r">analysisProgress</span>);
+                        <span class="r16 r">needWriteProgressCompleted</span> = <b>true</b>;
+                    }
+                }
+                <b>catch</b> (<span class="i">InvalidOperationException</span>)
+                {
+                    <span class="c">// This may be called when we are not allowed to write progress,</span>
+                    <span class="c">// So eat the invalid operation</span>
+                }
+ 
+                <b>try</b>
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r18 rd" class="r18 r">moduleFile</span> <b>in</b> <a href="#623e3612c4173093" class="t t">ModuleUtils</a>.<a href="#22019dd71502c60e" class="i method">GetDefaultAvailableModuleFiles</a>(<span class="r15 r">directory</span>))
+                    {
+                        <b>if</b> (<span class="r14 r">uniqueModuleFiles</span>.<span class="i">Add</span>(<span class="r18 r">moduleFile</span>))
+                        {
+                            <b>yield</b> <b>return</b> <span class="r18 r">moduleFile</span>;
+                        }
+                    }
+                }
+                <b>finally</b>
+                {
+                    <b>if</b> (<span class="r16 r">needWriteProgressCompleted</span>)
+                    {
+                        <span class="r17 r">analysisProgress</span>.<a href="../ProgressRecord.cs.html#b83bd20609cddaf5" class="i property">RecordType</a> = <a href="../ProgressRecord.cs.html#1f168993cf0b800f" class="t t">ProgressRecordType</a>.<a href="../ProgressRecord.cs.html#be29e101fe03f5d0" class="i field">Completed</a>;
+                        <span class="r13 r">context</span>.<a href="../ExecutionContext.cs.html#1146573afe2845c8" class="i property">CurrentCommandProcessor</a>.<a href="../CommandProcessorBase.cs.html#d539d84981be114a" class="i property">CommandRuntime</a>.<a href="../MshCommandRuntime.cs.html#db4330254366f22c" class="i method">WriteProgress</a>(<span class="r17 r">analysisProgress</span>);
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get a list of module files from the given directory without recursively searching all sub-directories.</span>
+        <span class="c">///</span><span class="c"> This method assumes the given directory is a module folder or a version sub-directory of a module folder.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">List</span>&lt;<b>string</b>&gt; <a id="1d1ec716033276ac" href="../../R/1d1ec716033276ac.html" target="n" data-glyph="74,1" class="i method">GetModuleFilesFromAbsolutePath</a>(<b>string</b> <span id="r19 rd" class="r19 r">directory</span>)
+        {
+            <span class="i">List</span>&lt;<b>string</b>&gt; <span id="r20 rd" class="r20 r">result</span> = <b>new</b> <span class="i">List</span>&lt;<b>string</b>&gt;();
+            <b>string</b> <span id="r21 rd" class="r21 r">fileName</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r19 r">directory</span>);
+ 
+            <span class="c">// If the given directory doesn&#39;t exist or it&#39;s the root folder, then return an empty list.</span>
+            <b>if</b> (!<span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r19 r">directory</span>) || <b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r21 r">fileName</span>)) { <b>return</b> <span class="r20 r">result</span>; }
+ 
+            <span class="c">// If the user give the module path including version, the module name could be the parent folder name.</span>
+            <b>if</b> (<span class="i">Version</span>.<span class="i">TryParse</span>(<span class="r21 r">fileName</span>, <b>out</b> <span class="i">Version</span> <span id="r22 rd" class="r22 r">ver</span>))
+            {
+                <b>string</b> <span id="r23 rd" class="r23 r">parentDirPath</span> = <span class="i">Path</span>.<span class="i">GetDirectoryName</span>(<span class="r19 r">directory</span>);
+                <b>string</b> <span id="r24 rd" class="r24 r">parentDirName</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r23 r">parentDirPath</span>);
+ 
+                <span class="c">// If the parent directory is NOT a root folder, then it could be the module folder.</span>
+                <b>if</b> (!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r24 r">parentDirName</span>))
+                {
+                    <b>string</b> <span id="r25 rd" class="r25 r">manifestPath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r19 r">directory</span>, <span class="r24 r">parentDirName</span>);
+                    <span class="r25 r">manifestPath</span> += <a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#35afed2e7cb8ba9d" class="i field">PowerShellDataFileExtension</a>;
+                    <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r25 r">manifestPath</span>) &amp;&amp; <span class="r22 r">ver</span>.<span class="i">Equals</span>(<a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#038de7273b66a98e" class="i method">GetManifestModuleVersion</a>(<span class="r25 r">manifestPath</span>)))
+                    {
+                        <span class="r20 r">result</span>.<span class="i">Add</span>(<span class="r25 r">manifestPath</span>);
+                        <b>return</b> <span class="r20 r">result</span>;
+                    }
+                }
+            }
+ 
+            <span class="c">// If we reach here, then use the given directory as the module folder.</span>
+            <b>foreach</b> (<span class="i">Version</span> <span id="r26 rd" class="r26 r">version</span> <b>in</b> <a href="#e87b073165121f32" class="i method">GetModuleVersionSubfolders</a>(<span class="r19 r">directory</span>))
+            {
+                <b>string</b> <span id="r27 rd" class="r27 r">manifestPath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r19 r">directory</span>, <span class="r26 r">version</span>.<span class="i">ToString</span>(), <span class="r21 r">fileName</span>);
+                <span class="r27 r">manifestPath</span> += <a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#35afed2e7cb8ba9d" class="i field">PowerShellDataFileExtension</a>;
+                <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r27 r">manifestPath</span>) &amp;&amp; <span class="r26 r">version</span>.<span class="i">Equals</span>(<a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#038de7273b66a98e" class="i method">GetManifestModuleVersion</a>(<span class="r27 r">manifestPath</span>)))
+                {
+                    <span class="r20 r">result</span>.<span class="i">Add</span>(<span class="r27 r">manifestPath</span>);
+                }
+            }
+ 
+            <b>foreach</b> (<b>string</b> <span id="r28 rd" class="r28 r">ext</span> <b>in</b> <a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#2f61be99d14256e7" class="i field">PSModuleExtensions</a>)
+            {
+                <b>string</b> <span id="r29 rd" class="r29 r">moduleFile</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r19 r">directory</span>, <span class="r21 r">fileName</span>) + <span class="r28 r">ext</span>;
+                <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r29 r">moduleFile</span>))
+                {
+                    <span class="r20 r">result</span>.<span class="i">Add</span>(<span class="r29 r">moduleFile</span>);
+ 
+                    <span class="c">// when finding the default modules we stop when the first</span>
+                    <span class="c">// match is hit - searching in order .psd1, .psm1, .dll,</span>
+                    <span class="c">// if a file is found but is not readable then it is an error.</span>
+                    <b>break</b>;
+                }
+            }
+ 
+            <b>return</b> <span class="r20 r">result</span>;
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Get a list of the available module files from the given directory.</span>
+        <span class="c">///</span><span class="c"> Search all module folders under the specified directory, but do not search sub-directories under a module folder.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <a id="22019dd71502c60e" href="../../R/22019dd71502c60e.html" target="n" data-glyph="74,1" class="i method">GetDefaultAvailableModuleFiles</a>(<b>string</b> <span id="r30 rd" class="r30 r">topDirectoryToCheck</span>)
+        {
+            <b>if</b> (!<span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r30 r">topDirectoryToCheck</span>)) { <b>yield</b> <b>break</b>; }
+ 
+            <b>var</b> <span id="r31 rd" class="r31 r">options</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#035be1ae91f35c16" class="i method">PathIsUnc</a>(<span class="r30 r">topDirectoryToCheck</span>) ? <a href="#acc2d0443629547c" class="i field">s_uncPathEnumerationOptions</a> : <a href="#3c1726fb5f301f26" class="i field">s_defaultEnumerationOptions</a>;
+            <span class="i">List</span>&lt;<span class="i">Version</span>&gt; <span id="r32 rd" class="r32 r">versionDirectories</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Version</span>&gt;();
+            <span class="i">LinkedList</span>&lt;<b>string</b>&gt; <span id="r33 rd" class="r33 r">directoriesToCheck</span> = <b>new</b> <span class="i">LinkedList</span>&lt;<b>string</b>&gt;();
+            <span class="r33 r">directoriesToCheck</span>.<span class="i">AddLast</span>(<span class="r30 r">topDirectoryToCheck</span>);
+ 
+            <b>while</b> (<span class="r33 r">directoriesToCheck</span>.<span class="i">Count</span> &gt; 0)
+            {
+                <span class="r32 r">versionDirectories</span>.<span class="i">Clear</span>();
+                <b>string</b>[] <span id="r34 rd" class="r34 r">subdirectories</span>;
+                <b>string</b> <span id="r35 rd" class="r35 r">directoryToCheck</span> = <span class="r33 r">directoriesToCheck</span>.<span class="i">First</span>.<span class="i">Value</span>;
+                <span class="r33 r">directoriesToCheck</span>.<span class="i">RemoveFirst</span>();
+                <b>try</b>
+                {
+                    <span class="r34 r">subdirectories</span> = <span class="i">Directory</span>.<span class="i">GetDirectories</span>(<span class="r35 r">directoryToCheck</span>, <span class="s">&quot;*&quot;</span>, <span class="r31 r">options</span>);
+                    <span class="i">ProcessPossibleVersionSubdirectories</span>(<span class="r34 r">subdirectories</span>, <span class="r32 r">versionDirectories</span>);
+                }
+                <b>catch</b> (<span class="i">IOException</span>) { <span class="r34 r">subdirectories</span> = <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>string</b>&gt;(); }
+                <b>catch</b> (<span class="i">UnauthorizedAccessException</span>) { <span class="r34 r">subdirectories</span> = <span class="i">Array</span>.<span class="i">Empty</span>&lt;<b>string</b>&gt;(); }
+ 
+                <b>bool</b> <span id="r36 rd" class="r36 r">isModuleDirectory</span> = <b>false</b>;
+                <b>string</b> <span id="r37 rd" class="r37 r">proposedModuleName</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r35 r">directoryToCheck</span>);
+                <b>foreach</b> (<span class="i">Version</span> <span id="r38 rd" class="r38 r">version</span> <b>in</b> <span class="r32 r">versionDirectories</span>)
+                {
+                    <b>string</b> <span id="r39 rd" class="r39 r">manifestPath</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r35 r">directoryToCheck</span>, <span class="r38 r">version</span>.<span class="i">ToString</span>(), <span class="r37 r">proposedModuleName</span>);
+                    <span class="r39 r">manifestPath</span> += <a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#35afed2e7cb8ba9d" class="i field">PowerShellDataFileExtension</a>;
+                    <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r39 r">manifestPath</span>))
+                    {
+                        <span class="r36 r">isModuleDirectory</span> = <b>true</b>;
+                        <b>yield</b> <b>return</b> <span class="r39 r">manifestPath</span>;
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r36 r">isModuleDirectory</span>)
+                {
+                    <b>foreach</b> (<b>string</b> <span id="r40 rd" class="r40 r">ext</span> <b>in</b> <a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#2f61be99d14256e7" class="i field">PSModuleExtensions</a>)
+                    {
+                        <b>string</b> <span id="r41 rd" class="r41 r">moduleFile</span> = <span class="i">Path</span>.<span class="i">Combine</span>(<span class="r35 r">directoryToCheck</span>, <span class="r37 r">proposedModuleName</span>) + <span class="r40 r">ext</span>;
+                        <b>if</b> (<span class="i">File</span>.<span class="i">Exists</span>(<span class="r41 r">moduleFile</span>))
+                        {
+                            <span class="r36 r">isModuleDirectory</span> = <b>true</b>;
+                            <b>yield</b> <b>return</b> <span class="r41 r">moduleFile</span>;
+ 
+                            <span class="c">// when finding the default modules we stop when the first</span>
+                            <span class="c">// match is hit - searching in order .psd1, .psm1, .dll, .exe</span>
+                            <span class="c">// if a file is found but is not readable then it is an</span>
+                            <span class="c">// error</span>
+                            <b>break</b>;
+                        }
+                    }
+                }
+ 
+                <b>if</b> (!<span class="r36 r">isModuleDirectory</span>)
+                {
+                    <b>foreach</b> (<b>var</b> <span id="r42 rd" class="r42 r">subdirectory</span> <b>in</b> <span class="r34 r">subdirectories</span>)
+                    {
+                        <b>if</b> (<span class="r42 r">subdirectory</span>.<span class="i">EndsWith</span>(<span class="s">&quot;Microsoft.PowerShell.Management&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>) ||
+                            <span class="r42 r">subdirectory</span>.<span class="i">EndsWith</span>(<span class="s">&quot;Microsoft.PowerShell.Utility&quot;</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                        {
+                            <span class="r33 r">directoriesToCheck</span>.<span class="i">AddFirst</span>(<span class="r42 r">subdirectory</span>);
+                        }
+                        <b>else</b>
+                        {
+                            <span class="r33 r">directoriesToCheck</span>.<span class="i">AddLast</span>(<span class="r42 r">subdirectory</span>);
+                        }
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets the list of versions under the specified module base path in descending sorted order.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r43 r">moduleBase</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Module base path.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Sorted list of versions.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">List</span>&lt;<span class="i">Version</span>&gt; <a id="e87b073165121f32" href="../../R/e87b073165121f32.html" target="n" data-glyph="74,1" class="i method">GetModuleVersionSubfolders</a>(<b>string</b> <span id="r43 rd" class="r43 r">moduleBase</span>)
+        {
+            <b>var</b> <span id="r44 rd" class="r44 r">versionFolders</span> = <b>new</b> <span class="i">List</span>&lt;<span class="i">Version</span>&gt;();
+ 
+            <b>if</b> (!<b>string</b>.<span class="i">IsNullOrWhiteSpace</span>(<span class="r43 r">moduleBase</span>) &amp;&amp; <span class="i">Directory</span>.<span class="i">Exists</span>(<span class="r43 r">moduleBase</span>))
+            {
+                <b>var</b> <span id="r45 rd" class="r45 r">options</span> = <a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#035be1ae91f35c16" class="i method">PathIsUnc</a>(<span class="r43 r">moduleBase</span>) ? <a href="#acc2d0443629547c" class="i field">s_uncPathEnumerationOptions</a> : <a href="#3c1726fb5f301f26" class="i field">s_defaultEnumerationOptions</a>;
+                <span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r46 rd" class="r46 r">subdirectories</span> = <span class="i">Directory</span>.<span class="i">EnumerateDirectories</span>(<span class="r43 r">moduleBase</span>, <span class="s">&quot;*&quot;</span>, <span class="r45 r">options</span>);
+                <a href="#dfe541ee0b097939" class="i method">ProcessPossibleVersionSubdirectories</a>(<span class="r46 r">subdirectories</span>, <span class="r44 r">versionFolders</span>);
+            }
+ 
+            <b>return</b> <span class="r44 r">versionFolders</span>;
+        }
+ 
+        <b>private static void</b> <a id="dfe541ee0b097939" href="../../R/dfe541ee0b097939.html" target="n" data-glyph="76,1" class="i method">ProcessPossibleVersionSubdirectories</a>(<span class="i">IEnumerable</span>&lt;<b>string</b>&gt; <span id="r47 rd" class="r47 r">subdirectories</span>, <span class="i">List</span>&lt;<span class="i">Version</span>&gt; <span id="r48 rd" class="r48 r">versionFolders</span>)
+        {
+            <b>foreach</b> (<b>string</b> <span id="r49 rd" class="r49 r">subdir</span> <b>in</b> <span class="r47 r">subdirectories</span>)
+            {
+                <b>string</b> <span id="r50 rd" class="r50 r">subdirName</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r49 r">subdir</span>);
+                <b>if</b> (<span class="i">Version</span>.<span class="i">TryParse</span>(<span class="r50 r">subdirName</span>, <b>out</b> <span class="i">Version</span> <span id="r51 rd" class="r51 r">version</span>))
+                {
+                    <span class="r48 r">versionFolders</span>.<span class="i">Add</span>(<span class="r51 r">version</span>);
+                }
+            }
+ 
+            <b>if</b> (<span class="r48 r">versionFolders</span>.<span class="i">Count</span> &gt; 1)
+            {
+                <span class="r48 r">versionFolders</span>.<span class="i">Sort</span>(<b>static</b> (<span id="r52 rd" class="r52 r">x</span>, <span id="r53 rd" class="r53 r">y</span>) =&gt; <span class="r53 r">y</span>.<span class="i">CompareTo</span>(<span class="r52 r">x</span>));
+            }
+        }
+ 
+        <b>internal static bool</b> <a id="9a5aff6363569dd5" href="../../R/9a5aff6363569dd5.html" target="n" data-glyph="74,1" class="i method">IsModuleInVersionSubdirectory</a>(<b>string</b> <span id="r54 rd" class="r54 r">modulePath</span>, <b>out</b> <span class="i">Version</span> <span id="r55 rd" class="r55 r">version</span>)
+        {
+            <span class="r55 r">version</span> = <b>null</b>;
+            <b>string</b> <span id="r56 rd" class="r56 r">folderName</span> = <span class="i">Path</span>.<span class="i">GetDirectoryName</span>(<span class="r54 r">modulePath</span>);
+            <b>if</b> (<span class="r56 r">folderName</span> != <b>null</b>)
+            {
+                <span class="r56 r">folderName</span> = <span class="i">Path</span>.<span class="i">GetFileName</span>(<span class="r56 r">folderName</span>);
+                <b>return</b> <span class="i">Version</span>.<span class="i">TryParse</span>(<span class="r56 r">folderName</span>, <b>out</b> <span class="r55 r">version</span>);
+            }
+ 
+            <b>return</b> <b>false</b>;
+        }
+ 
+        <b>internal static bool</b> <a id="aad3b46d193f5889" href="../../R/aad3b46d193f5889.html" target="n" data-glyph="74,1" class="i method">IsOnSystem32ModulePath</a>(<b>string</b> <span id="r57 rd" class="r57 r">path</span>)
+        {
+<span class="k preprocess">#</span><span class="k preprocess">if</span> <span class="i">UNIX</span>
+<span class="e">            return false;
+</span><span class="k preprocess">#</span><span class="k preprocess">else</span>
+            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<span class="i">Assert</span>(!<b>string</b>.<span class="i">IsNullOrEmpty</span>(<span class="r57 r">path</span>), <span class="s">$&quot;</span><span class="s">Caller to verify that </span>{<b>nameof</b>(<span class="r57 r">path</span>)}<span class="s"> is not null or empty</span><span class="s">&quot;</span>);
+ 
+            <b>string</b> <span id="r58 rd" class="r58 r">windowsPowerShellPSHomePath</span> = <a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#9e6ec7a131c8fddd" class="i method">GetWindowsPowerShellPSHomeModulePath</a>();
+            <b>return</b> <span class="r57 r">path</span>.<span class="i">StartsWith</span>(<span class="r58 r">windowsPowerShellPSHomePath</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>);
+<span class="k preprocess">#</span><span class="k preprocess">endif</span>
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets a list of fuzzy matching commands and their scores.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r59 r">pattern</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command pattern.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r60 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r61 r">commandOrigin</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command origin.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r62 r">rediscoverImportedModules</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, rediscovers imported modules.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r63 r">moduleVersionRequired</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Specific module version to be required.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">IEnumerable tuple containing the CommandInfo and the match score.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">IEnumerable</span>&lt;<a href="#2d3d17df16503499" class="t t">CommandScore</a>&gt; <a id="45d34ba735d2c3e1" href="../../R/45d34ba735d2c3e1.html" target="n" data-glyph="74,1" class="i method">GetFuzzyMatchingCommands</a>(<b>string</b> <span id="r59 rd" class="r59 r">pattern</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r60 rd" class="r60 r">context</span>, <a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a> <span id="r61 rd" class="r61 r">commandOrigin</span>, <b>bool</b> <span id="r62 rd" class="r62 r">rediscoverImportedModules</span> = <b>false</b>, <b>bool</b> <span id="r63 rd" class="r63 r">moduleVersionRequired</span> = <b>false</b>)
+        {
+            <b>foreach</b> (<a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a> <span id="r64 rd" class="r64 r">command</span> <b>in</b> <a href="#c52a8882c52c5570" class="i method">GetMatchingCommands</a>(<span class="r59 r">pattern</span>, <span class="r60 r">context</span>, <span class="r61 r">commandOrigin</span>, <span class="r62 r">rediscoverImportedModules</span>, <span class="r63 r">moduleVersionRequired</span>, <span class="r65 r">useFuzzyMatching</span>: <b>true</b>))
+            {
+                <b>int</b> <span id="r66 rd" class="r66 r">score</span> = <a href="../../utils/FuzzyMatch.cs.html#39ac23db4a63eca2" class="t t">FuzzyMatcher</a>.<a href="../../utils/FuzzyMatch.cs.html#3b9fdb5fd4e93bce" class="i method">GetDamerauLevenshteinDistance</a>(<span class="r64 r">command</span>.<a href="../CommandInfo.cs.html#02e11b521c500195" class="i property">Name</a>, <span class="r59 r">pattern</span>);
+                <b>if</b> (<span class="r66 r">score</span> &lt;= <a href="../../utils/FuzzyMatch.cs.html#39ac23db4a63eca2" class="t t">FuzzyMatcher</a>.<a href="../../utils/FuzzyMatch.cs.html#919225406a75ed49" class="i field">MinimumDistance</a>)
+                {
+                    <b>yield</b> <b>return</b> <b>new</b> <a href="#f44da3895ffbf494" class="t constructor">CommandScore</a>(<span class="r64 r">command</span>, <span class="r66 r">score</span>);
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Gets a list of matching commands.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r67 r">pattern</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command pattern.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r68 r">context</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Execution context.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r69 r">commandOrigin</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Command origin.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r70 r">rediscoverImportedModules</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">If true, rediscovers imported modules.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r71 r">moduleVersionRequired</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Specific module version to be required.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r65 r">useFuzzyMatching</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Use fuzzy matching.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r72 r">useAbbreviationExpansion</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Use abbreviation expansion for matching.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Returns matching CommandInfo IEnumerable.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static</b> <span class="i">IEnumerable</span>&lt;<a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a>&gt; <a id="c52a8882c52c5570" href="../../R/c52a8882c52c5570.html" target="n" data-glyph="74,1" class="i method">GetMatchingCommands</a>(<b>string</b> <span id="r67 rd" class="r67 r">pattern</span>, <a href="../ExecutionContext.cs.html#130bda5418e8559c" class="t t">ExecutionContext</a> <span id="r68 rd" class="r68 r">context</span>, <a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a> <span id="r69 rd" class="r69 r">commandOrigin</span>, <b>bool</b> <span id="r70 rd" class="r70 r">rediscoverImportedModules</span> = <b>false</b>, <b>bool</b> <span id="r71 rd" class="r71 r">moduleVersionRequired</span> = <b>false</b>, <b>bool</b> <span id="r65 rd" class="r65 r">useFuzzyMatching</span> = <b>false</b>, <b>bool</b> <span id="r72 rd" class="r72 r">useAbbreviationExpansion</span> = <b>false</b>)
+        {
+            <span class="c">// Otherwise, if it had wildcards, just return the &quot;AvailableCommand&quot;</span>
+            <span class="c">// type of command info.</span>
+            <a href="../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a> <span id="r73 rd" class="r73 r">commandPattern</span> = <a href="../regex.cs.html#d450e739ff28e660" class="t t">WildcardPattern</a>.<a href="../regex.cs.html#03cc3ceece086129" class="i method">Get</a>(<span class="r67 r">pattern</span>, <a href="../regex.cs.html#4e788ab2470b3632" class="t t">WildcardOptions</a>.<a href="../regex.cs.html#2d0521a6986208d3" class="i field">IgnoreCase</a>);
+ 
+            <a href="../CmdletInfo.cs.html#9492ffc9968f644d" class="t t">CmdletInfo</a> <span id="r74 rd" class="r74 r">cmdletInfo</span> = <span class="r68 r">context</span>.<a href="../ExecutionContext.cs.html#4502619a6e4808ee" class="i property">SessionState</a>.<a href="../SessionStatePublic.cs.html#236f6ceba41f8f3e" class="i property">InvokeCommand</a>.<a href="../MshCmdlet.cs.html#f14de699060a0394" class="i method">GetCmdlet</a>(<span class="s">&quot;Microsoft.PowerShell.Core\\Get-Module&quot;</span>);
+            <a href="../CommandDiscovery.cs.html#c476355d983131b8" class="t t">PSModuleAutoLoadingPreference</a> <span id="r75 rd" class="r75 r">moduleAutoLoadingPreference</span> = <a href="../CommandDiscovery.cs.html#04905efdf0510fc2" class="t t">CommandDiscovery</a>.<a href="../CommandDiscovery.cs.html#6495e4b39d68b6a7" class="i method">GetCommandDiscoveryPreference</a>(<span class="r68 r">context</span>, <a href="../SpecialVariables.cs.html#07948374b47849e8" class="t t">SpecialVariables</a>.<a href="../SpecialVariables.cs.html#e908f6da9e7bb762" class="i field">PSModuleAutoLoadingPreferenceVarPath</a>, <span class="s">&quot;PSModuleAutoLoadingPreference&quot;</span>);
+ 
+            <b>if</b> ((<span class="r75 r">moduleAutoLoadingPreference</span> != <a href="../CommandDiscovery.cs.html#c476355d983131b8" class="t t">PSModuleAutoLoadingPreference</a>.<a href="../CommandDiscovery.cs.html#8d4577abcb2c6b36" class="i field">None</a>) &amp;&amp;
+                ((<span class="r69 r">commandOrigin</span> == <a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a>.<a href="../SecurityManagerBase.cs.html#946d8e7ca02acec6" class="i field">Internal</a>) || ((<span class="r74 r">cmdletInfo</span> != <b>null</b>) &amp;&amp; (<span class="r74 r">cmdletInfo</span>.<a href="../CommandInfo.cs.html#cb0c02415aeca7d5" class="i property">Visibility</a> == <a href="../SessionStatePublic.cs.html#3acdda74c688180a" class="t t">SessionStateEntryVisibility</a>.<a href="../SessionStatePublic.cs.html#74d8ba664c504563" class="i field">Public</a>))))
+            {
+                <b>foreach</b> (<b>string</b> <span id="r76 rd" class="r76 r">modulePath</span> <b>in</b> <a href="#2c015e257649873c" class="i method">GetDefaultAvailableModuleFiles</a>(<span class="r12 r">isForAutoDiscovery</span>: <b>false</b>, <span class="r68 r">context</span>))
+                {
+                    <span class="c">// Skip modules that have already been loaded so that we don&#39;t expose private commands.</span>
+                    <b>string</b> <span id="r77 rd" class="r77 r">moduleName</span> = <span class="i">Path</span>.<span class="i">GetFileNameWithoutExtension</span>(<span class="r76 r">modulePath</span>);
+                    <span class="i">List</span>&lt;<a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a>&gt; <span id="r78 rd" class="r78 r">modules</span> = <span class="r68 r">context</span>.<a href="../ExecutionContext.cs.html#2d3edf63c7afa4b2" class="i property">Modules</a>.<a href="ModuleIntrinsics.cs.html#e8fff0ab8e8777cc" class="i method">GetExactMatchModules</a>(<span class="r77 r">moduleName</span>, <span class="r79 r">all</span>: <b>false</b>, <span class="r80 r">exactMatch</span>: <b>true</b>);
+                    <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r81 rd" class="r81 r">tempModuleInfo</span> = <b>null</b>;
+ 
+                    <b>if</b> (<span class="r78 r">modules</span>.<span class="i">Count</span> != 0)
+                    {
+                        <span class="c">// 1. We continue to the next module path if we don&#39;t want to re-discover those imported modules</span>
+                        <span class="c">// 2. If we want to re-discover the imported modules, but one or more commands from the module were made private,</span>
+                        <span class="c">//    then we don&#39;t do re-discovery</span>
+                        <b>if</b> (!<span class="r70 r">rediscoverImportedModules</span> || <span class="r78 r">modules</span>.<span class="i">Exists</span>(<b>static</b> <span id="r82 rd" class="r82 r">module</span> =&gt; <span class="r82 r">module</span>.<span class="i">ModuleHasPrivateMembers</span>))
+                        {
+                            <b>continue</b>;
+                        }
+ 
+                        <b>if</b> (<span class="r78 r">modules</span>.<span class="i">Count</span> == 1)
+                        {
+                            <a href="PSModuleInfo.cs.html#4885a82159eebf7b" class="t t">PSModuleInfo</a> <span id="r83 rd" class="r83 r">psModule</span> = <span class="r78 r">modules</span>[0];
+                            <span class="r81 r">tempModuleInfo</span> = <b>new</b> <a href="PSModuleInfo.cs.html#82c685f79205f6f4" class="t constructor">PSModuleInfo</a>(<span class="r83 r">psModule</span>.<a href="PSModuleInfo.cs.html#19beded88c944eb9" class="i property">Name</a>, <span class="r83 r">psModule</span>.<a href="PSModuleInfo.cs.html#82fc7c994af5e4ca" class="i property">Path</a>, <span class="r84 r">context</span>: <b>null</b>, <span class="r85 r">sessionState</span>: <b>null</b>);
+                            <span class="r81 r">tempModuleInfo</span>.<a href="PSModuleInfo.cs.html#9533dfb5c77bd95f" class="i method">SetModuleBase</a>(<span class="r83 r">psModule</span>.<a href="PSModuleInfo.cs.html#3c412fbb7362d7c7" class="i property">ModuleBase</a>);
+ 
+                            <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a>&gt; <span id="r86 rd" class="r86 r">entry</span> <b>in</b> <span class="r83 r">psModule</span>.<a href="PSModuleInfo.cs.html#032fe7ae84c51dab" class="i property">ExportedCommands</a>)
+                            {
+                                <b>if</b> (<span class="r73 r">commandPattern</span>.<span class="i">IsMatch</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>) ||
+                                    (<span class="r65 r">useFuzzyMatching</span> &amp;&amp; <a href="../../utils/FuzzyMatch.cs.html#39ac23db4a63eca2" class="t t">FuzzyMatcher</a>.<span class="i">IsFuzzyMatch</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>, <span class="r67 r">pattern</span>)) ||
+                                    (<span class="r72 r">useAbbreviationExpansion</span> &amp;&amp; <b>string</b>.<span class="i">Equals</span>(<span class="r67 r">pattern</span>, <span class="i">AbbreviateName</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>), <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>)))
+                                {
+                                    <a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a> <span id="r87 rd" class="r87 r">current</span> = <b>null</b>;
+                                    <b>switch</b> (<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">CommandType</span>)
+                                    {
+                                        <b>case</b> <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#83aa5e1f88cb9bf5" class="i field">Alias</a>:
+                                            <span class="r87 r">current</span> = <b>new</b> <span class="t">AliasInfo</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>, <span class="i">definition</span>: <b>null</b>, <span class="r68 r">context</span>);
+                                            <b>break</b>;
+                                        <b>case</b> <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#8a4bdbbd93f182bf" class="i field">Function</a>:
+                                            <span class="r87 r">current</span> = <b>new</b> <span class="t">FunctionInfo</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <span class="r68 r">context</span>);
+                                            <b>break</b>;
+                                        <b>case</b> <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#7837d2f5f0343c5e" class="i field">Filter</a>:
+                                            <span class="r87 r">current</span> = <b>new</b> <span class="t">FilterInfo</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <span class="r68 r">context</span>);
+                                            <b>break</b>;
+                                        <b>case</b> <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#2a673544a3a7e93f" class="i field">Configuration</a>:
+                                            <span class="r87 r">current</span> = <b>new</b> <span class="t">ConfigurationInfo</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <span class="r68 r">context</span>);
+                                            <b>break</b>;
+                                        <b>case</b> <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#e95f2e5deaaf9b93" class="i field">Cmdlet</a>:
+                                            <span class="r87 r">current</span> = <b>new</b> <span class="t">CmdletInfo</span>(<span class="r86 r">entry</span>.<span class="i">Value</span>.<span class="i">Name</span>, <span class="i">implementingType</span>: <b>null</b>, <span class="i">helpFile</span>: <b>null</b>, <span class="i">PSSnapin</span>: <b>null</b>, <span class="r68 r">context</span>);
+                                            <b>break</b>;
+                                        <b>default</b>:
+                                            <a href="../../utils/assert.cs.html#c04955255430d32f" class="t t">Dbg</a>.<a href="../../utils/assert.cs.html#703dade50a6809cd" class="i method">Assert</a>(<b>false</b>, <span class="s">&quot;cannot be hit&quot;</span>);
+                                            <b>break</b>;
+                                    }
+ 
+                                    <span class="r87 r">current</span>.<a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <span class="r81 r">tempModuleInfo</span>;
+                                    <b>yield</b> <b>return</b> <span class="r87 r">current</span>;
+                                }
+                            }
+ 
+                            <b>continue</b>;
+                        }
+                    }
+ 
+                    <b>string</b> <span id="r88 rd" class="r88 r">moduleShortName</span> = <span class="i">Path</span>.<span class="i">GetFileNameWithoutExtension</span>(<span class="r76 r">modulePath</span>);
+ 
+                    <span class="i">IDictionary</span>&lt;<b>string</b>, <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>&gt; <span id="r89 rd" class="r89 r">exportedCommands</span> = <a href="AnalysisCache.cs.html#e469d7c6575d3464" class="t t">AnalysisCache</a>.<a href="AnalysisCache.cs.html#c5534fd9817cef4e" class="i method">GetExportedCommands</a>(<span class="r76 r">modulePath</span>, <span class="r90 r">testOnly</span>: <b>false</b>, <span class="r68 r">context</span>);
+ 
+                    <b>if</b> (<span class="r89 r">exportedCommands</span> == <b>null</b>) { <b>continue</b>; }
+ 
+                    <span class="r81 r">tempModuleInfo</span> = <b>new</b> <a href="PSModuleInfo.cs.html#82c685f79205f6f4" class="t constructor">PSModuleInfo</a>(<span class="r88 r">moduleShortName</span>, <span class="r76 r">modulePath</span>, <span class="r85 r">sessionState</span>: <b>null</b>, <span class="r84 r">context</span>: <b>null</b>);
+                    <b>if</b> (<a href="../InitialSessionState.cs.html#b17f88d4755d5fd7" class="t t">InitialSessionState</a>.<a href="../InitialSessionState.cs.html#7c1caf70ca3d20ee" class="i method">IsEngineModule</a>(<span class="r88 r">moduleShortName</span>))
+                    {
+                        <span class="r81 r">tempModuleInfo</span>.<a href="PSModuleInfo.cs.html#9533dfb5c77bd95f" class="i method">SetModuleBase</a>(<a href="../Utils.cs.html#9185d6ecbaebbec0" class="t t">Utils</a>.<a href="../Utils.cs.html#c677cc800603f8f5" class="i property">DefaultPowerShellAppBase</a>);
+                    }
+ 
+                    <span class="c">// moduleVersionRequired is bypassed by FullyQualifiedModule from calling method. This is the only place where guid will be involved.</span>
+                    <b>if</b> (<span class="r71 r">moduleVersionRequired</span> &amp;&amp; <span class="r76 r">modulePath</span>.<span class="i">EndsWith</span>(<a href="../SessionStateStrings.cs.html#55ee11e42c7cf459" class="t t">StringLiterals</a>.<a href="../SessionStateStrings.cs.html#35afed2e7cb8ba9d" class="i field">PowerShellDataFileExtension</a>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                    {
+                        <span class="r81 r">tempModuleInfo</span>.<a href="PSModuleInfo.cs.html#86de19074268f803" class="i method">SetVersion</a>(<a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#038de7273b66a98e" class="i method">GetManifestModuleVersion</a>(<span class="r76 r">modulePath</span>));
+                        <span class="r81 r">tempModuleInfo</span>.<a href="PSModuleInfo.cs.html#4b6e2a1b9b5b92c2" class="i method">SetGuid</a>(<a href="ModuleIntrinsics.cs.html#1693bdfaeab6548d" class="t t">ModuleIntrinsics</a>.<a href="ModuleIntrinsics.cs.html#f342a9737d67f863" class="i method">GetManifestGuid</a>(<span class="r76 r">modulePath</span>));
+                    }
+ 
+                    <b>foreach</b> (<span class="i">KeyValuePair</span>&lt;<b>string</b>, <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>&gt; <span id="r91 rd" class="r91 r">pair</span> <b>in</b> <span class="r89 r">exportedCommands</span>)
+                    {
+                        <b>string</b> <span id="r92 rd" class="r92 r">commandName</span> = <span class="r91 r">pair</span>.<span class="i">Key</span>;
+                        <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a> <span id="r93 rd" class="r93 r">commandTypes</span> = <span class="r91 r">pair</span>.<span class="i">Value</span>;
+ 
+                        <b>if</b> (<span class="r73 r">commandPattern</span>.<a href="../regex.cs.html#02e7d1c913f3c256" class="i method">IsMatch</a>(<span class="r92 r">commandName</span>) ||
+                            (<span class="r65 r">useFuzzyMatching</span> &amp;&amp; <a href="../../utils/FuzzyMatch.cs.html#39ac23db4a63eca2" class="t t">FuzzyMatcher</a>.<a href="../../utils/FuzzyMatch.cs.html#338755097bb7a248" class="i method">IsFuzzyMatch</a>(<span class="r92 r">commandName</span>, <span class="r67 r">pattern</span>)) ||
+                            (<span class="r72 r">useAbbreviationExpansion</span> &amp;&amp; <b>string</b>.<span class="i">Equals</span>(<span class="r67 r">pattern</span>, <a href="#78b6ed6030b3942a" class="i method">AbbreviateName</a>(<span class="r92 r">commandName</span>), <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>)))
+                        {
+                            <b>bool</b> <span id="r94 rd" class="r94 r">shouldExportCommand</span> = <b>true</b>;
+ 
+                            <span class="c">// Verify that we don&#39;t already have it represented in the initial session state.</span>
+                            <b>if</b> ((<span class="r68 r">context</span>.<a href="../ExecutionContext.cs.html#2a82be710f3773ae" class="i property">InitialSessionState</a> != <b>null</b>) &amp;&amp; (<span class="r69 r">commandOrigin</span> == <a href="../SecurityManagerBase.cs.html#a1d5a2ba5cd1b3aa" class="t t">CommandOrigin</a>.<a href="../SecurityManagerBase.cs.html#66a89eb31c003ba5" class="i field">Runspace</a>))
+                            {
+                                <b>foreach</b> (<a href="../InitialSessionState.cs.html#480a10ec8ac9df7b" class="t t">SessionStateCommandEntry</a> <span id="r95 rd" class="r95 r">commandEntry</span> <b>in</b> <span class="r68 r">context</span>.<a href="../ExecutionContext.cs.html#2a82be710f3773ae" class="i property">InitialSessionState</a>.<a href="../InitialSessionState.cs.html#2d45d0b0db0079ba" class="i property">Commands</a><a href="../InitialSessionState.cs.html#8a6a2b8d34f0d716">[</a><span class="r92 r">commandName</span>])
+                                {
+                                    <b>string</b> <span id="r96 rd" class="r96 r">moduleCompareName</span> = <b>null</b>;
+ 
+                                    <b>if</b> (<span class="r95 r">commandEntry</span>.<a href="../InitialSessionState.cs.html#a3328f1f3a3a9605" class="i property">Module</a> != <b>null</b>)
+                                    {
+                                        <span class="r96 r">moduleCompareName</span> = <span class="r95 r">commandEntry</span>.<a href="../InitialSessionState.cs.html#a3328f1f3a3a9605" class="i property">Module</a>.<a href="PSModuleInfo.cs.html#19beded88c944eb9" class="i property">Name</a>;
+                                    }
+                                    <b>else</b> <b>if</b> (<span class="r95 r">commandEntry</span>.<a href="../InitialSessionState.cs.html#a63d54bd9a0897a7" class="i property">PSSnapIn</a> != <b>null</b>)
+                                    {
+                                        <span class="r96 r">moduleCompareName</span> = <span class="r95 r">commandEntry</span>.<a href="../InitialSessionState.cs.html#a63d54bd9a0897a7" class="i property">PSSnapIn</a>.<a href="../../singleshell/config/MshSnapinInfo.cs.html#ebdb1944f8049e83" class="i property">Name</a>;
+                                    }
+ 
+                                    <b>if</b> (<b>string</b>.<span class="i">Equals</span>(<span class="r88 r">moduleShortName</span>, <span class="r96 r">moduleCompareName</span>, <span class="i">StringComparison</span>.<span class="i">OrdinalIgnoreCase</span>))
+                                    {
+                                        <b>if</b> (<span class="r95 r">commandEntry</span>.<a href="../InitialSessionState.cs.html#190a59133ab9a4ce" class="i property">Visibility</a> == <a href="../SessionStatePublic.cs.html#3acdda74c688180a" class="t t">SessionStateEntryVisibility</a>.<a href="../SessionStatePublic.cs.html#9412d519f56b8001" class="i field">Private</a>)
+                                        {
+                                            <span class="r94 r">shouldExportCommand</span> = <b>false</b>;
+                                        }
+                                    }
+                                }
+                            }
+ 
+                            <b>if</b> (<span class="r94 r">shouldExportCommand</span>)
+                            {
+                                <b>if</b> ((<span class="r93 r">commandTypes</span> &amp; <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#83aa5e1f88cb9bf5" class="i field">Alias</a>) == <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#83aa5e1f88cb9bf5" class="i field">Alias</a>)
+                                {
+                                    <b>yield</b> <b>return</b> <b>new</b> <a href="../AliasInfo.cs.html#81b0ee0063948411" class="t constructor">AliasInfo</a>(<span class="r92 r">commandName</span>, <b>null</b>, <span class="r68 r">context</span>)
+                                    {
+                                        <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <span class="r81 r">tempModuleInfo</span>
+                                    };
+                                }
+ 
+                                <b>if</b> ((<span class="r93 r">commandTypes</span> &amp; <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#e95f2e5deaaf9b93" class="i field">Cmdlet</a>) == <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#e95f2e5deaaf9b93" class="i field">Cmdlet</a>)
+                                {
+                                    <b>yield</b> <b>return</b> <b>new</b> <a href="../CmdletInfo.cs.html#cdd24b9416013a7d" class="t constructor">CmdletInfo</a>(<span class="r92 r">commandName</span>, <span class="r97 r">implementingType</span>: <b>null</b>, <span class="r98 r">helpFile</span>: <b>null</b>, <span class="r99 r">PSSnapin</span>: <b>null</b>, <span class="r100 r">context</span>: <span class="r68 r">context</span>)
+                                    {
+                                        <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <span class="r81 r">tempModuleInfo</span>
+                                    };
+                                }
+ 
+                                <b>if</b> ((<span class="r93 r">commandTypes</span> &amp; <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#8a4bdbbd93f182bf" class="i field">Function</a>) == <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#8a4bdbbd93f182bf" class="i field">Function</a>)
+                                {
+                                    <b>yield</b> <b>return</b> <b>new</b> <a href="../FunctionInfo.cs.html#daf907e5a42ad149" class="t constructor">FunctionInfo</a>(<span class="r92 r">commandName</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <span class="r68 r">context</span>)
+                                    {
+                                        <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <span class="r81 r">tempModuleInfo</span>
+                                    };
+                                }
+ 
+                                <b>if</b> ((<span class="r93 r">commandTypes</span> &amp; <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#2a673544a3a7e93f" class="i field">Configuration</a>) == <a href="../CommandInfo.cs.html#3699fe79fa6969b5" class="t t">CommandTypes</a>.<a href="../CommandInfo.cs.html#2a673544a3a7e93f" class="i field">Configuration</a>)
+                                {
+                                    <b>yield</b> <b>return</b> <b>new</b> <a href="../ConfigurationInfo.cs.html#a06678c8f23cc1f6" class="t constructor">ConfigurationInfo</a>(<span class="r92 r">commandName</span>, <a href="../../P/eea83b421baeaca4.html#eea83b421baeaca4" class="t t">ScriptBlock</a>.<a href="../runtime/CompiledScriptBlock.cs.html#dc12e2c318ee7aef" class="i field">EmptyScriptBlock</a>, <span class="r68 r">context</span>)
+                                    {
+                                        <a href="../CommandInfo.cs.html#600591313a158d6c" class="i property">Module</a> = <span class="r81 r">tempModuleInfo</span>
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+ 
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> Returns abbreviated version of a command name.</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;/</span><span class="c">summary</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">param</span> <span class="c">name</span><span class="c">=</span><span class="c">&quot;</span><span class="r101 r">commandName</span><span class="c">&quot;</span><span class="c">&gt;</span><span class="c">Name of the command to transform.</span><span class="c">&lt;/</span><span class="c">param</span><span class="c">&gt;</span>
+        <span class="c">///</span><span class="c"> </span><span class="c">&lt;</span><span class="c">returns</span><span class="c">&gt;</span><span class="c">Abbreviated version of the command name.</span><span class="c">&lt;/</span><span class="c">returns</span><span class="c">&gt;</span>
+        <b>internal static string</b> <a id="78b6ed6030b3942a" href="../../R/78b6ed6030b3942a.html" target="n" data-glyph="74,1" class="i method">AbbreviateName</a>(<b>string</b> <span id="r101 rd" class="r101 r">commandName</span>)
+        {
+            <span class="c">// Use default size of 6 which represents expected average abbreviation length</span>
+            <span class="i">StringBuilder</span> <span id="r102 rd" class="r102 r">abbreviation</span> = <b>new</b> <span class="i">StringBuilder</span>(6);
+            <b>foreach</b> (<b>char</b> <span id="r103 rd" class="r103 r">c</span> <b>in</b> <span class="r101 r">commandName</span>)
+            {
+                <b>if</b> (<b>char</b>.<span class="i">IsUpper</span>(<span class="r103 r">c</span>) || <span class="r103 r">c</span> == <span class="s">&#39;-&#39;</span>)
+                {
+                    <span class="r102 r">abbreviation</span>.<span class="i">Append</span>(<span class="r103 r">c</span>);
+                }
+            }
+ 
+            <b>return</b> <span class="r102 r">abbreviation</span>.<span class="i">ToString</span>();
+        }
+    }
+ 
+    <b>internal struct</b> <a id="2d3d17df16503499" href="../../R/2d3d17df16503499.html" target="n" data-glyph="110,0" class="t t"><span id="bdc59af6c05a9a6b">CommandScore</span></a>
+    {
+        <b>public</b> <a id="f44da3895ffbf494" href="../../R/f44da3895ffbf494.html" target="n" data-glyph="72,1" class="t constructor">CommandScore</a>(<a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a> <span id="r104 rd" class="r104 r">command</span>, <b>int</b> <span id="r105 rd" class="r105 r">score</span>)
+        {
+            <a href="#e31e59d07fdb87ab" class="i field">Command</a> = <span class="r104 r">command</span>;
+            <a href="#a69ed2a7ec519855" class="i field">Score</a> = <span class="r105 r">score</span>;
+        }
+ 
+        <b>public</b> <a href="../CommandInfo.cs.html#71babe57a99ca852" class="t t">CommandInfo</a> <a id="e31e59d07fdb87ab" href="../../R/e31e59d07fdb87ab.html" target="n" data-glyph="42,1" class="i field">Command</a>;
+        <b>public int</b> <a id="a69ed2a7ec519855" href="../../R/a69ed2a7ec519855.html" target="n" data-glyph="42,1" class="i field">Score</a>;
+    }
+}
+</pre></td></tr></table></div></body></html>
